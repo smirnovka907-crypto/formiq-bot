@@ -13,7 +13,6 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 DATABASE_URL = os.environ["DATABASE_URL"]
-
 URL = os.environ.get(
     "RENDER_EXTERNAL_URL",
     "https://formiq-bot.onrender.com"
@@ -25,73 +24,45 @@ bot = telebot.TeleBot(TOKEN, threaded=False)
 app = Flask(__name__)
 
 QUESTIONS = [
-    (
-        "goal",
-        "Какая у тебя цель?",
-        [
-            ("Похудеть", "loss"),
-            ("Набрать мышцы", "muscle"),
-            ("Стать выносливее", "endurance"),
-            ("Поддерживать форму", "general")
-        ]
-    ),
-    (
-        "level",
-        "Какой у тебя опыт?",
-        [
-            ("Новичок", "beginner"),
-            ("Иногда тренируюсь", "some"),
-            ("Регулярно тренируюсь", "experienced")
-        ]
-    ),
-    (
-        "days",
-        "Сколько тренировок в неделю?",
-        [
-            ("2 дня", "2"),
-            ("3 дня", "3"),
-            ("4 дня", "4"),
-            ("5 дней", "5")
-        ]
-    ),
-    (
-        "equipment",
-        "Где тренируешься?",
-        [
-            ("Дома без инвентаря", "home"),
-            ("Дома с инвентарём", "homegear"),
-            ("В спортзале", "gym")
-        ]
-    ),
-    (
-        "age_group",
-        "Тебе уже есть 18 лет?",
-        [
-            ("Да, мне 18+", "adult"),
-            ("Нет", "minor")
-        ]
-    ),
-    (
-        "minutes",
-        "Сколько минут есть на тренировку?",
-        [
-            ("20 минут", "20"),
-            ("30 минут", "30"),
-            ("45 минут", "45"),
-            ("60 минут", "60")
-        ]
-    ),
-    (
-        "clearance",
-        "Есть ли боль, травма или ограничение, "
-        "из-за которого нагрузка может быть "
-        "небезопасной?",
-        [
-            ("Нет, ограничений не знаю", "none"),
-            ("Да, есть ограничения", "yes"),
-            ("Не уверен(а)", "unsure")
-        ]
-    )
+    ("goal", "Какая у тебя цель?", [
+        ("Похудеть", "loss"),
+        ("Набрать мышцы", "muscle"),
+        ("Стать выносливее", "endurance"),
+        ("Поддерживать форму", "general")
+    ]),
+    ("level", "Какой у тебя опыт?", [
+        ("Новичок", "beginner"),
+        ("Иногда тренируюсь", "some"),
+        ("Регулярно тренируюсь", "experienced")
+    ]),
+    ("days", "Сколько тренировок в неделю?", [
+        ("2 дня", "2"),
+        ("3 дня", "3"),
+        ("4 дня", "4"),
+        ("5 дней", "5")
+    ]),
+    ("equipment", "Где тренируешься?", [
+        ("Дома без инвентаря", "home"),
+        ("Дома с инвентарём", "homegear"),
+        ("В спортзале", "gym")
+    ]),
+    ("age_group", "Тебе уже есть 18 лет?", [
+        ("Да, мне 18+", "adult"),
+        ("Нет", "minor")
+    ]),
+    ("minutes", "Сколько минут есть на тренировку?", [
+        ("20 минут", "20"),
+        ("30 минут", "30"),
+        ("45 минут", "45"),
+        ("60 минут", "60")
+    ]),
+    ("clearance",
+     "Есть ли боль, травма или ограничение, "
+     "из-за которого нагрузка может быть небезопасной?", [
+        ("Нет, ограничений не знаю", "none"),
+        ("Да, есть ограничения", "yes"),
+        ("Не уверен(а)", "unsure")
+    ])
 ]
 
 FIELDS = [item[0] for item in QUESTIONS]
@@ -133,11 +104,7 @@ def init_db():
             )
         """)
 
-        for field in (
-            "age_group",
-            "minutes",
-            "clearance"
-        ):
+        for field in ("age_group", "minutes", "clearance"):
             conn.execute(
                 f"ALTER TABLE profiles "
                 f"ADD COLUMN IF NOT EXISTS {field} TEXT"
@@ -170,22 +137,32 @@ def init_db():
         """)
 
         conn.execute("""
+            ALTER TABLE workout_items
+            ADD COLUMN IF NOT EXISTS skipped
+            BOOLEAN NOT NULL DEFAULT FALSE
+        """)
+
+        conn.execute("""
             CREATE INDEX IF NOT EXISTS workouts_chat_idx
             ON workouts(chat_id, started_at DESC)
+        """)
+
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            one_active_workout_per_user
+            ON workouts(chat_id)
+            WHERE status='active'
         """)
 
 
 def profile_for(chat_id):
     with connect() as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT goal, level, days, equipment,
                    age_group, minutes, clearance
             FROM profiles
             WHERE chat_id=%s
-            """,
-            (chat_id,)
-        ).fetchone()
+        """, (chat_id,)).fetchone()
 
     return dict(zip(FIELDS, row)) if row else {}
 
@@ -195,14 +172,11 @@ def save_answer(chat_id, field, value):
         return
 
     with connect() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO profiles(chat_id)
             VALUES (%s)
             ON CONFLICT DO NOTHING
-            """,
-            (chat_id,)
-        )
+        """, (chat_id,))
 
         conn.execute(
             f"UPDATE profiles SET {field}=%s, "
@@ -213,8 +187,7 @@ def save_answer(chat_id, field, value):
 
 def reset_profile(chat_id):
     with connect() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             INSERT INTO profiles(chat_id)
             VALUES (%s)
             ON CONFLICT(chat_id)
@@ -227,9 +200,7 @@ def reset_profile(chat_id):
                 minutes=NULL,
                 clearance=NULL,
                 updated_at=NOW()
-            """,
-            (chat_id,)
-        )
+        """, (chat_id,))
 
 
 def kb(*buttons):
@@ -260,8 +231,8 @@ def ask(chat_id, index):
 
     bot.send_message(
         chat_id,
-        f"Вопрос {index + 1} из {len(QUESTIONS)}"
-        f"\n\n{prompt}",
+        f"Вопрос {index + 1} из "
+        f"{len(QUESTIONS)}\n\n{prompt}",
         reply_markup=kb(*buttons)
     )
 
@@ -334,7 +305,6 @@ def plan_data(p):
             "Жим гантелей с лёгким весом",
             "Птица-собака"
         ]
-
     else:
         a = [
             "Приседания к стулу",
@@ -365,10 +335,58 @@ def plan_data(p):
 
         return result
 
-    return {
-        "A": make(a),
-        "B": make(b)
-    }, None
+    return {"A": make(a), "B": make(b)}, None
+
+
+def next_day(chat_id):
+    with connect() as conn:
+        row = conn.execute("""
+            SELECT plan_day
+            FROM workouts
+            WHERE chat_id=%s AND status='finished'
+            ORDER BY finished_at DESC, id DESC
+            LIMIT 1
+        """, (chat_id,)).fetchone()
+
+    return "B" if row and row[0] == "A" else "A"
+
+
+def advice(chat_id):
+    with connect() as conn:
+        rows = conn.execute("""
+            SELECT difficulty
+            FROM workouts
+            WHERE chat_id=%s
+              AND status='finished'
+              AND difficulty IS NOT NULL
+            ORDER BY finished_at DESC, id DESC
+            LIMIT 2
+        """, (chat_id,)).fetchall()
+
+    if not rows:
+        return (
+            "Начинай спокойно, без увеличения нагрузки."
+        )
+
+    if rows[0][0] == "hard":
+        return (
+            "Последний раз было тяжело: уменьши "
+            "число подходов до 1–2 или увеличь отдых."
+        )
+
+    if len(rows) >= 2 and all(
+        row[0] == "easy" for row in rows
+    ):
+        return (
+            "Два занятия были лёгкими: если техника "
+            "уверенная, можно добавить 1–2 повторения, "
+            "не увеличивая всё сразу."
+        )
+
+    return (
+        "Сохраняй комфортную нагрузку "
+        "и правильную технику."
+    )
 
 
 def show_plan(chat_id):
@@ -386,18 +404,19 @@ def show_plan(chat_id):
         3 if p["level"] == "beginner" else 4
     )
 
+    next_name = next_day(chat_id)
+
     lines = [
         f"🏋️ Пример плана: {days} занятий "
         f"в неделю, по {minutes} мин.",
+        f"Следующая тренировка: {next_name}.",
+        advice(chat_id),
         "Разминка 3–5 мин, заминка 2–3 мин. "
-        "Отдых 45–75 сек.",
-        "Делай движения спокойно, без боли, "
-        "оставляя запас сил."
+        "Отдых 45–75 сек."
     ]
 
     for name, items in plans.items():
         lines.append(f"\nДень {name}:")
-
         lines.extend(
             f"• {ex}: {amount}"
             for ex, amount in items
@@ -405,39 +424,33 @@ def show_plan(chat_id):
 
     lines.append(
         "\nЧередуй A/Б с днём восстановления "
-        "между силовыми. Для 20 минут оставлены "
-        "3 упражнения; при нехватке времени "
-        "сокращай подходы, а не разминку."
-    )
-
-    lines.append(
-        "При боли, головокружении или необычной "
-        "одышке остановись. Это стартовый шаблон, "
-        "не медицинское назначение."
+        "между силовыми. При боли или необычных "
+        "симптомах прекрати занятие."
     )
 
     bot.send_message(
         chat_id,
         "\n".join(lines),
         reply_markup=kb(
-            ("▶️ Начать день A", "begin:A"),
-            ("▶️ Начать день Б", "begin:B"),
-            ("📊 Дневник", "history")
+            (
+                f"▶️ Начать следующую ({next_name})",
+                "begin:next"
+            ),
+            ("📊 Статистика", "stats"),
+            ("📖 История", "history")
         )
     )
 
 
 def active_workout(chat_id):
     with connect() as conn:
-        return conn.execute(
-            """
-            SELECT id FROM workouts
+        return conn.execute("""
+            SELECT id
+            FROM workouts
             WHERE chat_id=%s AND status='active'
             ORDER BY id DESC
             LIMIT 1
-            """,
-            (chat_id,)
-        ).fetchone()
+        """, (chat_id,)).fetchone()
 
 
 def start_workout(chat_id, day):
@@ -456,43 +469,48 @@ def start_workout(chat_id, day):
         )
         return
 
-    with connect() as conn:
-        workout_id = conn.execute(
-            """
-            INSERT INTO workouts(chat_id, plan_day)
-            VALUES (%s, %s)
-            RETURNING id
-            """,
-            (chat_id, day)
-        ).fetchone()[0]
+    try:
+        with connect() as conn:
+            workout_id = conn.execute("""
+                INSERT INTO workouts(chat_id, plan_day)
+                VALUES (%s, %s)
+                RETURNING id
+            """, (chat_id, day)).fetchone()[0]
 
-        for index, (exercise, amount) in enumerate(
-            plans[day]
-        ):
-            conn.execute(
-                """
-                INSERT INTO workout_items(
-                    workout_id, position,
-                    exercise, target
-                )
-                VALUES (%s, %s, %s, %s)
-                """,
-                (workout_id, index, exercise, amount)
-            )
+            for index, (exercise, amount) in enumerate(
+                plans[day]
+            ):
+                conn.execute("""
+                    INSERT INTO workout_items(
+                        workout_id, position,
+                        exercise, target
+                    )
+                    VALUES (%s, %s, %s, %s)
+                """, (
+                    workout_id,
+                    index,
+                    exercise,
+                    amount
+                ))
+
+    except psycopg.errors.UniqueViolation:
+        bot.send_message(
+            chat_id,
+            "Активная тренировка уже есть. "
+            "Открой /workout."
+        )
+        return
 
     show_workout(chat_id, workout_id)
 
 
 def show_workout(chat_id, workout_id):
     with connect() as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             SELECT plan_day, status
             FROM workouts
             WHERE id=%s AND chat_id=%s
-            """,
-            (workout_id, chat_id)
-        ).fetchone()
+        """, (workout_id, chat_id)).fetchone()
 
         if not row:
             bot.send_message(
@@ -501,15 +519,13 @@ def show_workout(chat_id, workout_id):
             )
             return
 
-        items = conn.execute(
-            """
-            SELECT position, exercise, target, done
+        items = conn.execute("""
+            SELECT position, exercise, target,
+                   done, skipped
             FROM workout_items
             WHERE workout_id=%s
             ORDER BY position
-            """,
-            (workout_id,)
-        ).fetchall()
+        """, (workout_id,)).fetchall()
 
     day, status = row
 
@@ -524,28 +540,38 @@ def show_workout(chat_id, workout_id):
 
     buttons = []
 
-    for pos, exercise, target, done in items:
-        mark = "✅" if done else "⬜"
+    for pos, exercise, target, done, skipped in items:
+        mark = (
+            "✅" if done
+            else "⏭" if skipped
+            else "⬜"
+        )
 
         lines.append(
             f"{mark} {exercise}: {target}"
         )
 
-        if status == "active" and not done:
-            buttons.append(
-                (
-                    f"✅ Выполнил: {exercise[:35]}",
-                    f"done:{workout_id}:{pos}"
-                )
-            )
+        if status == "active" and not done and not skipped:
+            buttons.append((
+                f"✅ Выполнил: {exercise[:30]}",
+                f"done:{workout_id}:{pos}"
+            ))
+
+            buttons.append((
+                f"⏭ Пропустить: {exercise[:30]}",
+                f"skip:{workout_id}:{pos}"
+            ))
 
     if status == "active":
-        buttons.append(
-            (
-                "🏁 Завершить тренировку",
-                f"finish:{workout_id}"
-            )
-        )
+        buttons.append((
+            "🏁 Завершить тренировку",
+            f"finish:{workout_id}"
+        ))
+
+        buttons.append((
+            "❌ Отменить тренировку",
+            f"cancel:{workout_id}"
+        ))
 
     bot.send_message(
         chat_id,
@@ -556,35 +582,79 @@ def show_workout(chat_id, workout_id):
 
 def mark_done(chat_id, workout_id, position):
     with connect() as conn:
-        conn.execute(
-            """
-            UPDATE workout_items SET done=TRUE
+        conn.execute("""
+            UPDATE workout_items
+            SET done=TRUE, skipped=FALSE
             WHERE workout_id=%s AND position=%s
             AND EXISTS (
                 SELECT 1 FROM workouts
                 WHERE id=%s AND chat_id=%s
                 AND status='active'
             )
-            """,
-            (workout_id, position, workout_id, chat_id)
-        )
+        """, (
+            workout_id,
+            position,
+            workout_id,
+            chat_id
+        ))
 
     show_workout(chat_id, workout_id)
 
 
+def skip_item(chat_id, workout_id, position):
+    with connect() as conn:
+        conn.execute("""
+            UPDATE workout_items
+            SET skipped=TRUE, done=FALSE
+            WHERE workout_id=%s AND position=%s
+            AND EXISTS (
+                SELECT 1 FROM workouts
+                WHERE id=%s AND chat_id=%s
+                AND status='active'
+            )
+        """, (
+            workout_id,
+            position,
+            workout_id,
+            chat_id
+        ))
+
+    show_workout(chat_id, workout_id)
+
+
+def cancel_workout(chat_id, workout_id):
+    with connect() as conn:
+        row = conn.execute("""
+            DELETE FROM workouts
+            WHERE id=%s AND chat_id=%s
+              AND status='active'
+            RETURNING id
+        """, (workout_id, chat_id)).fetchone()
+
+    if row:
+        text = (
+            "Тренировка отменена, "
+            "в статистику не попадёт."
+        )
+    else:
+        text = (
+            "Тренировка уже завершена "
+            "или не найдена."
+        )
+
+    bot.send_message(chat_id, text)
+
+
 def finish_workout(chat_id, workout_id):
     with connect() as conn:
-        row = conn.execute(
-            """
+        row = conn.execute("""
             UPDATE workouts
             SET status='finished',
                 finished_at=NOW()
             WHERE id=%s AND chat_id=%s
-            AND status='active'
+              AND status='active'
             RETURNING id
-            """,
-            (workout_id, chat_id)
-        ).fetchone()
+        """, (workout_id, chat_id)).fetchone()
 
     if not row:
         bot.send_message(
@@ -611,15 +681,17 @@ def rate_workout(chat_id, workout_id, rating):
         return
 
     with connect() as conn:
-        row = conn.execute(
-            """
-            UPDATE workouts SET difficulty=%s
+        row = conn.execute("""
+            UPDATE workouts
+            SET difficulty=%s
             WHERE id=%s AND chat_id=%s
-            AND status='finished'
+              AND status='finished'
             RETURNING id
-            """,
-            (rating, workout_id, chat_id)
-        ).fetchone()
+        """, (
+            rating,
+            workout_id,
+            chat_id
+        )).fetchone()
 
     if row:
         bot.send_message(
@@ -636,26 +708,24 @@ def rate_workout(chat_id, workout_id, rating):
 
 def history(chat_id):
     with connect() as conn:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT
                 w.plan_day,
                 w.started_at,
                 w.finished_at,
                 w.difficulty,
                 count(i.position),
-                count(i.position) FILTER (WHERE i.done)
+                count(i.position)
+                    FILTER (WHERE i.done)
             FROM workouts w
             LEFT JOIN workout_items i
                 ON i.workout_id=w.id
             WHERE w.chat_id=%s
-            AND w.status='finished'
+              AND w.status='finished'
             GROUP BY w.id
             ORDER BY w.started_at DESC
             LIMIT 10
-            """,
-            (chat_id,)
-        ).fetchall()
+        """, (chat_id,)).fetchall()
 
     if not rows:
         bot.send_message(
@@ -686,18 +756,59 @@ def history(chat_id):
     )
 
 
+def statistics(chat_id):
+    with connect() as conn:
+        counts = conn.execute("""
+            SELECT
+                count(*) FILTER (
+                    WHERE finished_at >=
+                    NOW() - INTERVAL '7 days'
+                ),
+                count(*) FILTER (
+                    WHERE finished_at >=
+                    NOW() - INTERVAL '30 days'
+                ),
+                count(*)
+            FROM workouts
+            WHERE chat_id=%s
+              AND status='finished'
+        """, (chat_id,)).fetchone()
+
+        totals = conn.execute("""
+            SELECT
+                count(*) FILTER (WHERE i.done),
+                count(*) FILTER (WHERE i.skipped)
+            FROM workout_items i
+            JOIN workouts w
+                ON w.id=i.workout_id
+            WHERE w.chat_id=%s
+              AND w.status='finished'
+        """, (chat_id,)).fetchone()
+
+    bot.send_message(
+        chat_id,
+        "📊 Статистика FORMIQ\n"
+        f"За 7 дней: {counts[0]}\n"
+        f"За 30 дней: {counts[1]}\n"
+        f"Всего занятий: {counts[2]}\n"
+        f"Упражнений выполнено: {totals[0]}\n"
+        f"Пропущено: {totals[1]}\n\n"
+        + advice(chat_id)
+    )
+
+
 @bot.message_handler(commands=["start", "help"])
 def start(message):
     bot.send_message(
         message.chat.id,
         "💪 FORMIQ — тестовый тренировочный "
-        "помощник. Заполни анкету, получи план "
-        "и веди дневник.",
+        "помощник. Заполни анкету, "
+        "получи план и веди дневник.",
         reply_markup=kb(
             ("👤 Профиль", "profile"),
             ("🚀 Анкета", "restart"),
             ("🏋️ План", "plan"),
-            ("📊 Прогресс", "history")
+            ("📊 Прогресс", "stats")
         )
     )
 
@@ -715,6 +826,11 @@ def plan_command(message):
 @bot.message_handler(commands=["progress", "history"])
 def progress_command(message):
     history(message.chat.id)
+
+
+@bot.message_handler(commands=["stats"])
+def stats_command(message):
+    statistics(message.chat.id)
 
 
 @bot.message_handler(commands=["workout"])
@@ -735,8 +851,8 @@ def workout_command(message):
 def delete_me(message):
     bot.send_message(
         message.chat.id,
-        "Удалить профиль и историю тренировок "
-        "FORMIQ?",
+        "Удалить профиль и историю "
+        "тренировок FORMIQ?",
         reply_markup=kb(
             ("Да, удалить", "delete_confirm"),
             ("Отмена", "delete_cancel")
@@ -749,8 +865,8 @@ def coming_soon(message):
     bot.send_message(
         message.chat.id,
         "Эту функцию добавим позже. "
-        "Сейчас доступны /plan, /workout "
-        "и /progress."
+        "Сейчас доступны /plan, "
+        "/workout и /progress."
     )
 
 
@@ -774,6 +890,9 @@ def callback(call):
     elif data == "history":
         history(chat_id)
 
+    elif data == "stats":
+        statistics(chat_id)
+
     elif data == "delete_cancel":
         bot.send_message(
             chat_id,
@@ -782,32 +901,23 @@ def callback(call):
 
     elif data == "delete_confirm":
         with connect() as conn:
-            conn.execute(
-                """
+            conn.execute("""
                 DELETE FROM workout_items
                 WHERE workout_id IN (
                     SELECT id FROM workouts
                     WHERE chat_id=%s
                 )
-                """,
-                (chat_id,)
-            )
+            """, (chat_id,))
 
-            conn.execute(
-                """
+            conn.execute("""
                 DELETE FROM workouts
                 WHERE chat_id=%s
-                """,
-                (chat_id,)
-            )
+            """, (chat_id,))
 
-            conn.execute(
-                """
+            conn.execute("""
                 DELETE FROM profiles
                 WHERE chat_id=%s
-                """,
-                (chat_id,)
-            )
+            """, (chat_id,))
 
         bot.send_message(
             chat_id,
@@ -848,6 +958,9 @@ def callback(call):
     elif data.startswith("begin:"):
         day = data.split(":", 1)[1]
 
+        if day == "next":
+            day = next_day(chat_id)
+
         if day in ("A", "B"):
             start_workout(chat_id, day)
 
@@ -859,6 +972,24 @@ def callback(call):
                 int(wid),
                 int(pos)
             )
+        except ValueError:
+            return
+
+    elif data.startswith("skip:"):
+        try:
+            _, wid, pos = data.split(":")
+            skip_item(
+                chat_id,
+                int(wid),
+                int(pos)
+            )
+        except ValueError:
+            return
+
+    elif data.startswith("cancel:"):
+        try:
+            workout_id = int(data.split(":")[1])
+            cancel_workout(chat_id, workout_id)
         except ValueError:
             return
 
