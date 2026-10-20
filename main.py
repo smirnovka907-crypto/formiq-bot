@@ -1,15 +1,23 @@
 
 import os
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
+import hashlib
 import telebot
+from flask import Flask, request, abort
 from telebot import types
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-bot = telebot.TeleBot(TOKEN)
+URL = os.environ.get(
+    "RENDER_EXTERNAL_URL",
+    "https://formiq-bot.onrender.com"
+).rstrip("/")
 
-# Временные данные пользователей
+SECRET = hashlib.sha256(
+    TOKEN.encode("utf-8")
+).hexdigest()
+
+bot = telebot.TeleBot(TOKEN, threaded=False)
+app = Flask(__name__)
+
 profiles = {}
 
 QUESTIONS = [
@@ -20,8 +28,8 @@ QUESTIONS = [
             ("Похудеть", "loss"),
             ("Набрать мышцы", "muscle"),
             ("Стать выносливее", "endurance"),
-            ("Поддерживать форму", "general")
-        ]
+            ("Поддерживать форму", "general"),
+        ],
     ),
     (
         "level",
@@ -29,8 +37,8 @@ QUESTIONS = [
         [
             ("Новичок", "beginner"),
             ("Иногда тренируюсь", "some"),
-            ("Тренируюсь регулярно", "experienced")
-        ]
+            ("Тренируюсь регулярно", "experienced"),
+        ],
     ),
     (
         "days",
@@ -39,8 +47,8 @@ QUESTIONS = [
             ("2 дня", "2"),
             ("3 дня", "3"),
             ("4 дня", "4"),
-            ("5 дней", "5")
-        ]
+            ("5 дней", "5"),
+        ],
     ),
     (
         "equipment",
@@ -48,85 +56,61 @@ QUESTIONS = [
         [
             ("Дома без инвентаря", "home"),
             ("Дома с инвентарём", "homegear"),
-            ("В тренажёрном зале", "gym")
-        ]
-    )
+            ("В тренажёрном зале", "gym"),
+        ],
+    ),
 ]
 
 LABELS = {
-    value: title
-    for _, _, options in QUESTIONS
+    (field, value): title
+    for field, _, options in QUESTIONS
     for title, value in options
 }
 
 
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header(
-            "Content-Type",
-            "text/plain; charset=utf-8"
-        )
-        self.end_headers()
-        self.wfile.write(b"FORMIQ prototype running")
-
-    def log_message(self, fmt, *args):
-        pass
-
-
-def serve_healthcheck():
-    port = int(os.environ.get("PORT", "10000"))
-    server = ThreadingHTTPServer(
-        ("0.0.0.0", port),
-        HealthHandler
-    )
-    server.serve_forever()
-
-
 def ask_question(chat_id, index):
-    if index == len(QUESTIONS):
+    if index >= len(QUESTIONS):
         profile = profiles.get(chat_id, {})
 
-        summary = "\n".join(
-            f"• {key}: "
-            f"{LABELS.get(profile.get(field, ''), '—')}"
-            for field, key in [
-                ("goal", "Цель"),
-                ("level", "Уровень"),
-                ("days", "Дней в неделю"),
-                ("equipment", "Формат")
-            ]
-        )
+        fields = [
+            ("goal", "Цель"),
+            ("level", "Уровень"),
+            ("days", "Дней в неделю"),
+            ("equipment", "Формат"),
+        ]
+
+        lines = []
+        for field, title in fields:
+            value = profile.get(field, "")
+            answer = LABELS.get((field, value), "—")
+            lines.append(f"• {title}: {answer}")
 
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(
             types.InlineKeyboardButton(
                 "🔄 Пройти анкету заново",
-                callback_data="restart"
+                callback_data="restart",
             )
         )
 
         bot.send_message(
             chat_id,
-            f"✅ Анкета готова!\n\n{summary}\n\n"
-            "Это тестовая версия FORMIQ. "
-            "Персональные планы и подписка "
-            "пока не подключены.\n\n"
-            "Если есть ограничения по здоровью, "
-            "обсуди нагрузки со специалистом.",
-            reply_markup=keyboard
+            "✅ Анкета готова!\n\n"
+            + "\n".join(lines)
+            + "\n\nЭто тестовая версия FORMIQ."
+            "\nПерсональные планы появятся позже.",
+            reply_markup=keyboard,
         )
         return
 
     field, question, options = QUESTIONS[index]
 
     keyboard = types.InlineKeyboardMarkup(row_width=1)
-
     for title, value in options:
         keyboard.add(
             types.InlineKeyboardButton(
                 title,
-                callback_data=f"answer:{index}:{value}"
+                callback_data=f"answer:{index}:{value}",
             )
         )
 
@@ -134,7 +118,7 @@ def ask_question(chat_id, index):
         chat_id,
         f"Вопрос {index + 1} из {len(QUESTIONS)}"
         f"\n\n{question}",
-        reply_markup=keyboard
+        reply_markup=keyboard,
     )
 
 
@@ -144,27 +128,25 @@ def start(message):
     keyboard.add(
         types.InlineKeyboardButton(
             "🚀 Начать анкету",
-            callback_data="restart"
+            callback_data="restart",
         )
     )
 
     bot.send_message(
         message.chat.id,
-        "💪 Привет! Я FORMIQ — "
-        "твой будущий умный тренер.\n\n"
-        "Помогу определить цель и собрать "
-        "основу программы тренировок.\n\n"
-        "Сейчас идёт тестирование: "
-        "ИИ-рекомендации и оплата "
-        "пока не работают.\n\n"
-        "Нажми кнопку, чтобы пройти "
-        "короткую анкету.",
-        reply_markup=keyboard
+        "💪 Привет! Я FORMIQ — твой ИИ-тренер!\n\n"
+        "🏋️ Индивидуальные тренировки\n"
+        "🥗 Рекомендации по питанию\n"
+        "📊 Контроль прогресса\n\n"
+        "🎁 Планируем 14 дней бесплатно.\n\n"
+        "Пока работает тестовая анкета. "
+        "Начнём знакомство?",
+        reply_markup=keyboard,
     )
 
 
 @bot.callback_query_handler(func=lambda call: True)
-def on_click(call):
+def handle_callback(call):
     chat_id = call.message.chat.id
     data = call.data or ""
 
@@ -179,39 +161,76 @@ def on_click(call):
         return
 
     try:
-        _, raw_index, value = data.split(":", 2)
-        index = int(raw_index)
+        _, index_text, value = data.split(":", 2)
+        index = int(index_text)
         field, _, options = QUESTIONS[index]
     except (ValueError, IndexError):
         return
 
-    if value not in {
-        option_value for _, option_value in options
-    }:
+    valid = {item[1] for item in options}
+    if value not in valid:
         return
 
     profile = profiles.setdefault(chat_id, {})
     profile[field] = value
+
     ask_question(chat_id, index + 1)
 
 
 @bot.message_handler(
-    commands=["help", "plan", "progress", "nutrition", "coach"]
+    commands=[
+        "plan", "progress", "nutrition",
+        "coach", "help",
+    ]
 )
-def upcoming(message):
+def other_commands(message):
     bot.send_message(
         message.chat.id,
-        "Эта функция появится в следующей "
-        "версии FORMIQ. "
-        "Для анкеты нажми /start."
+        "💪 FORMIQ развивается!\n\n"
+        "Эта функция появится позже.\n"
+        "Для начала анкеты нажми /start.",
     )
 
 
-if __name__ == "__main__":
-    threading.Thread(
-        target=serve_healthcheck,
-        daemon=True
-    ).start()
+@app.route("/", methods=["GET"])
+def home():
+    return "FORMIQ is running", 200
 
-    print("FORMIQ prototype started")
-    bot.infinity_polling(skip_pending=True)
+
+@app.route("/telegram-webhook", methods=["POST"])
+def webhook():
+    received_secret = request.headers.get(
+        "X-Telegram-Bot-Api-Secret-Token", ""
+    )
+
+    if received_secret != SECRET:
+        abort(403)
+
+    if not request.is_json:
+        abort(415)
+
+    update = types.Update.de_json(
+        request.get_data(as_text=True)
+    )
+    bot.process_new_updates([update])
+
+    return "OK", 200
+
+
+if __name__ == "__main__":
+    webhook_url = URL + "/telegram-webhook"
+
+    bot.set_webhook(
+        url=webhook_url,
+        secret_token=SECRET,
+        drop_pending_updates=True,
+    )
+
+    print("FORMIQ webhook configured")
+
+    port = int(os.environ.get("PORT", 10000))
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+    )
