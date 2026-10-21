@@ -12,15 +12,17 @@ import urllib.error
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import parse_qsl
+import gzip
 
 import psycopg
 import telebot
 from telebot import types
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '31.0'
+VERSION = '36.6'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -991,16 +993,78 @@ def send(chat, text, options=(), mid=None):
     BOT.send_message(chat, text[:4000], reply_markup=markup)
 
 
+def mini_button():
+    """Open the Mini App from a private chat; HTTPS is provided by Render."""
+    return types.InlineKeyboardButton(
+        '🏋️ ОТКРЫТЬ ТРЕНИРОВКУ',
+        web_app=types.WebAppInfo(url=BASE_URL + '/mini')
+    )
+
+
+def mini_entry(chat, mid=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(mini_button())
+    markup.add(types.InlineKeyboardButton('▶️ Занятие в чате', callback_data='readiness'))
+    markup.add(types.InlineKeyboardButton('🏠 Главное меню', callback_data='menu'))
+    text = ('🏋️ FORMIQ 36.6 — большой экран тренировки\n\n'
+            'Нажми верхнюю кнопку: Mini App откроется прямо внутри Telegram. '
+            'Там можно записывать подходы, выбирать вес и смотреть картинки. '
+            'Твой прежний дневник останется на месте.')
+    if mid:
+        try:
+            BOT.edit_message_text(text, chat, mid, reply_markup=markup)
+            return
+        except Exception:
+            pass
+    BOT.send_message(chat, text, reply_markup=markup)
+
+
 def home(chat, mid=None):
-    send(chat, '💪 FORMIQ 31.0\n\n🏋️ Удобные карточки, 8 наглядных схем и тестовый Premium на 5 дней.', [
-        ('🏋️ Моя программа', 'plan'), ('▶️ Тренировка', 'current'),
-        ('🖼 Иллюстрации упражнений', 'gallery_menu'),
-        ('📅 Неделя и восстановление', 'week'), ('⭐ 5 дней Premium', 'premium'),
-        ('🏆 Личные рекорды', 'records'), ('📈 Прогресс упражнений', 'exercise_progress'),
-        ('⚖️ Рабочие веса', 'weights'), ('📊 Статистика', 'stats'),
-        ('📖 История', 'history'), ('🤖 ИИ-тренер', 'coach'),
-        ('👤 Профиль', 'profile'), ('📝 Анкета', 'restart'),
-        ('🔒 Настройки ИИ', 'ai_settings')], mid)
+    mark = types.InlineKeyboardMarkup(row_width=2)
+    mark.add(mini_button())
+    mark.row(
+        types.InlineKeyboardButton('📋 План', callback_data='plan'),
+        types.InlineKeyboardButton('📈 Прогресс', callback_data='hub_progress')
+    )
+    mark.row(
+        types.InlineKeyboardButton('🤖 ИИ-тренер', callback_data='coach'),
+        types.InlineKeyboardButton('👤 Профиль', callback_data='hub_profile')
+    )
+    mark.add(types.InlineKeyboardButton('⭐ Premium · 5 дней', callback_data='premium'))
+    text = ('💪 FORMIQ 36.6\n\n'
+            '🏋️ Тренировка — крупный экран внутри Telegram.\n'
+            '📈 Аналитика, рекорды и дневник — в разделе «Прогресс».\n'
+            '🖼 Иллюстрации и настройки — в «Профиле».')
+    if mid:
+        try:
+            BOT.edit_message_text(text, chat, mid, reply_markup=mark)
+            return
+        except Exception:
+            pass
+    BOT.send_message(chat, text, reply_markup=mark)
+
+
+def progress_hub(chat, mid=None):
+    send(chat, '📈 ПРОГРЕСС\n\nВсё о твоих тренировках в одном разделе:', [
+        ('📊 Статистика', 'stats'),
+        ('🏆 Рекорды', 'records'),
+        ('📈 По упражнениям', 'exercise_progress'),
+        ('📖 История занятий', 'history'),
+        ('⚖️ Рабочие веса', 'weights'),
+        ('📅 Неделя и восстановление', 'week'),
+        ('🏠 Меню', 'menu')
+    ], mid)
+
+
+def profile_hub(chat, mid=None):
+    send(chat, '👤 ПРОФИЛЬ И НАСТРОЙКИ', [
+        ('👤 Моя анкета', 'profile'),
+        ('📝 Заполнить заново', 'restart'),
+        ('🖼 Галерея упражнений', 'gallery_menu'),
+        ('🔒 Настройки ИИ', 'ai_settings'),
+        ('⭐ Premium', 'premium'),
+        ('🏠 Меню', 'menu')
+    ], mid)
 
 
 def profile(chat):
@@ -1218,7 +1282,7 @@ def readiness(chat, mid=None):
         ('⚠️ Боль или недомогание', 'start:unwell'), ('🏠 Меню', 'menu')], mid)
 
 
-def begin(chat, mood, mid=None):
+def begin(chat, mood, mid=None, silent=False):
     if mood not in ('normal', 'tired'):
         return readiness(chat, mid)
     p = profile(chat)
@@ -1247,7 +1311,9 @@ def begin(chat, mood, mid=None):
                     c.execute('''INSERT INTO workout_sets(workout_id,position,set_no,target_min,target_max,unit)
                                  VALUES(%s,%s,%s,%s,%s,%s)''',
                               (wid, pos, number, lo, hi, unit))
-    show_workout(chat, wid, mid)
+    if not silent:
+        show_workout(chat, wid, mid)
+    return wid
 
 
 def show_workout(chat, wid, mid=None, note=''):
@@ -1744,7 +1810,7 @@ def coach(chat, mid=None):
         return send(chat, '🔒 Включить Yandex AI?\n\nВ Яндекс отправляются вопрос, краткая анкета, последние результаты упражнений (включая веса), оценки готовности и недавние сообщения. История ИИ хранится в PostgreSQL FORMIQ. Не отправляй секреты и лишние медицинские данные. Согласен?',
                     [('✅ Да', 'ai_yes'), ('❌ Нет', 'menu')], mid)
     ai_enable(chat)
-    send(chat, '🤖 FORMIQ 31.0 на связи. Спроси о тренировках или прогрессе.',
+    send(chat, '🤖 FORMIQ 36.6 на связи. Спроси о тренировках или прогрессе.',
          [('⏹ Выключить ИИ', 'ai_off'), ('🏠 Меню', 'menu')], mid)
 
 
@@ -1877,7 +1943,7 @@ def cmd_start(m):
         home(m.chat.id)
 
 
-@BOT.message_handler(commands=['profile', 'plan', 'premium', 'gallery', 'workout', 'week', 'stats', 'progress',
+@BOT.message_handler(commands=['mini', 'profile', 'plan', 'premium', 'gallery', 'workout', 'week', 'stats', 'progress',
                                'history', 'weights', 'records', 'exercise_progress',
                                'coach', 'nutrition', 'forget_ai', 'delete_me'])
 def commands(m):
@@ -1885,7 +1951,9 @@ def commands(m):
         return
     chat = m.chat.id
     cmd = m.text.split()[0].split('@')[0]
-    if cmd == '/profile':
+    if cmd == '/mini':
+        mini_entry(chat)
+    elif cmd == '/profile':
         show_profile(chat)
     elif cmd == '/premium':
         premium_screen(chat)
@@ -1996,6 +2064,10 @@ def callback(call):
             clear_input(chat)
             ai_disable(chat)
             home(chat, mid)
+        elif data == 'hub_progress':
+            progress_hub(chat, mid)
+        elif data == 'hub_profile':
+            profile_hub(chat, mid)
         elif data == 'profile':
             show_profile(chat, mid)
         elif data == 'premium':
@@ -2156,9 +2228,293 @@ def replay_pending():
         WORKERS.submit(run_update, update_id, payload)
 
 
+
+# ==================================
+# FORMIQ 36.6 · TELEGRAM MINI APP
+# HTML, CSS, JS inside main.py. No paid hosting or extra files.
+# No untrusted chat/user id is accepted from the browser.
+# ==================================
+MINI_HTML_GZIP = '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'
+
+
+def mini_auth(raw):
+    # Validate Mini App initData signed with the bot token.
+    if not isinstance(raw, str) or len(raw) > 6500 or len(raw) < 20:
+        return None
+    try:
+        pairs = parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None
+    if len(pairs) != len({key for key, value in pairs}) or len(pairs) > 30:
+        return None
+    received = dict(pairs)
+    digest = received.get('hash', '')
+    if len(digest) != 64:
+        return None
+    try:
+        auth_date = int(received['auth_date'])
+        now = int(time.time())
+        if auth_date > now + 60 or now - auth_date > 86400:
+            return None
+        check = '\n'.join(
+            key + '=' + value for key, value in sorted(pairs)
+            if key not in ('hash', 'signature')
+        )
+        secret = hmac.new(b'WebAppData', TOKEN.encode(), hashlib.sha256).digest()
+        expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, digest):
+            return None
+        user = json.loads(received['user'])
+        uid = user.get('id')
+        return uid if type(uid) is int and uid > 0 else None
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def mini_state(chat, just_finished=False):
+    p = profile(chat)
+    error = ready(p)
+    result = {
+        'profile': {k: LABELS.get((k, p.get(k)), '—') for k in FIELDS},
+        'error': error,
+        'workout': None,
+        'week': None,
+        'next_day': None,
+        'plan': [],
+        'goal': LABELS.get(('goal',p.get('goal')), 'Тренировка'),
+        'stats': {'total': 0, 'last7': 0, 'last30': 0, 'sets': 0},
+        'premium': {'label': 'Тестовый режим'},
+    }
+    with db() as c:
+        total, last7, last30 = c.execute('''
+            SELECT COUNT(*),
+            COUNT(*) FILTER (WHERE finished_at>=NOW()-INTERVAL '7 days'),
+            COUNT(*) FILTER (WHERE finished_at>=NOW()-INTERVAL '30 days')
+            FROM workouts WHERE chat_id=%s AND status='finished'
+        ''',(chat,)).fetchone()
+        count_sets = c.execute('''SELECT COUNT(*) FROM workout_sets s
+            JOIN workouts w ON w.id=s.workout_id
+            WHERE w.chat_id=%s AND w.status='finished' AND s.state='done' ''', (chat,)).fetchone()[0]
+        result['stats'] = {
+            'total': total, 'last7': last7,
+            'last30': last30, 'sets': count_sets
+        }
+        trial = c.execute('''SELECT trial_started_at,premium_until
+                FROM premium_access WHERE chat_id=%s''',(chat,)).fetchone()
+        if trial and trial[0]:
+            remaining = (trial[0] + timedelta(days=TRIAL_DAYS) - datetime.now(timezone.utc)).total_seconds()
+            result['premium']['label'] = (
+                'Пробные 5 дней' if remaining > 0 else 'Free · тестовый доступ'
+            )
+        active_row = c.execute('''SELECT id,plan_day,week_no FROM workouts
+            WHERE chat_id=%s AND status='active' ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
+        if active_row:
+            wid, day, week = active_row
+            rows = c.execute('''SELECT s.position,s.set_no,s.target_min,s.target_max,
+                s.unit,s.state,i.exercise,i.exercise_key
+                FROM workout_sets s JOIN workout_items i
+                ON i.workout_id=s.workout_id AND i.position=s.position
+                WHERE s.workout_id=%s ORDER BY s.position,s.set_no''',(wid,)).fetchall()
+            done = sum(s[5]=='done' for s in rows)
+            skipped = sum(s[5]=='skipped' for s in rows)
+            current = next((s for s in rows if s[5]=='pending'),None)
+            workout = {'id':wid,'day':day,'week':week,'done':done,
+                'skipped':skipped,'total':len(rows),'exercise_count':len({s[0] for s in rows}),
+                'current':None, 'finished':False, 'legacy':not bool(rows)}
+            if current:
+                pos, num, low, high, unit, _, name, key = current
+                info = EX.get(key, (name,'Двигайся плавно.','При боли остановись.'))
+                workout['current'] = {
+                    'position':pos, 'set_no':num, 'index':sorted({s[0] for s in rows}).index(pos)+1,
+                    'set_count':sum(s[0]==pos for s in rows),
+                    'low':low,'high':high,'unit':unit,
+                    'name':name,'tip':info[1],'caution':info[2],
+                    'image':'/mini/image/'+key if key in BUILTIN_ILLUSTRATIONS else None
+                }
+            result['workout'] = workout
+    if just_finished:
+        result['workout'] = {'finished':True}
+    if error is None:
+        cycle, week = get_cycle(chat,p)
+        result['week'] = week
+        count = sessions(p)
+        result['next_day'] = next_day_in_readonly(chat,cycle,count)
+        result['plan'] = [[{
+                'key':key,'name':EX[key][0], 'sets':n,
+                'low':lo, 'high':hi, 'unit':unit
+            } for key,n,lo,hi,unit in make_session(p,week,day,cycle_id=cycle)]
+            for day in 'ABCD'[:count]]
+    return result
+
+
+def next_day_in_readonly(chat, cycle, count):
+    with db() as c:
+        return next_day_in(c,chat,cycle,count)
+
+
+def mini_current(conn, chat):
+    w = conn.execute('''SELECT id FROM workouts WHERE chat_id=%s
+       AND status='active' ORDER BY id DESC LIMIT 1 FOR UPDATE''', (chat,)).fetchone()
+    return w[0] if w else None
+
+
+def mini_write(chat, action, body):
+    # Every mutation is scoped to the authenticated Telegram user.
+    if action == 'start':
+        mood = body.get('mood')
+        if mood not in ('normal','tired'):
+            raise ValueError('Выбери самочувствие')
+        error = ready(profile(chat))
+        if error:
+            raise ValueError(error)
+        begin(chat, mood, silent=True)
+        return False
+
+    if action == 'alternatives':
+        with db() as c:
+            wid = mini_current(c,chat)
+            if not wid:
+                raise ValueError('Активной тренировки нет')
+            row = c.execute('''SELECT s.position FROM workout_sets s
+                WHERE s.workout_id=%s AND s.state='pending'
+                ORDER BY s.position,s.set_no LIMIT 1''',(wid,)).fetchone()
+        if not row:
+            return {'options':[]}
+        keys, error = replacement_options(chat,wid,row[0])
+        if error:
+            raise ValueError(error)
+        return {'options':[{'key':k,'name':EX[k][0]} for k in keys]}
+
+    if action not in ('record','skip','replace','finish','cancel','rate'):
+        raise ValueError('Неизвестная операция')
+
+    with db() as c:
+        if action == 'rate':
+            grade = body.get('grade')
+            if grade not in ('easy','ok','hard'):
+                raise ValueError('Оценка не распознана')
+            c.execute('''UPDATE workouts SET difficulty=%s WHERE id=(
+                SELECT id FROM workouts WHERE chat_id=%s AND status='finished'
+                AND difficulty IS NULL ORDER BY finished_at DESC,id DESC LIMIT 1)
+                AND chat_id=%s''',(grade,chat,chat))
+            return False
+        wid = mini_current(c,chat)
+        if not wid:
+            raise ValueError('Активной тренировки нет')
+        if action == 'cancel':
+            c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
+            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+            return False
+        if action == 'finish':
+            done = c.execute('''SELECT COUNT(*) FROM workout_sets
+                WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
+            if done == 0:
+                raise ValueError('Сначала запиши хотя бы один подход')
+            c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
+                WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
+            affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
+                WHERE workout_id=%s AND state='pending' RETURNING position''',(wid,)).fetchall()
+            for pos in {r[0] for r in affected}:
+                recalc_item(c,wid,pos)
+            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+            return True
+        row = c.execute('''SELECT s.position,s.set_no,s.unit,s.state
+            FROM workout_sets s WHERE s.workout_id=%s AND s.state='pending'
+            ORDER BY s.position,s.set_no LIMIT 1''',(wid,)).fetchone()
+        if row is None:
+            raise ValueError('Все подходы уже отмечены')
+        pos, num, unit, status = row
+        if action == 'record':
+            count = body.get('reps')
+            if type(count) is not int or not (1 <= count <= 300):
+                raise ValueError('Повторений/секунд: от 1 до 300')
+            raw_weight = body.get('weight')
+            kg = parse_weight(raw_weight) if raw_weight is not None else None
+            if raw_weight is not None and kg is None:
+                raise ValueError('Неверный вес: допустимо 0–500 кг, например 12,5')
+            if unit == 'sec' and kg is not None:
+                raise ValueError('У статических упражнений вес не записываем')
+            # Exact guarded update; no client-supplied workout/set identifiers.
+            c.execute('''UPDATE workout_sets SET actual_value=%s,weight_kg=%s,
+                state='done',completed_at=NOW() WHERE workout_id=%s
+                AND position=%s AND set_no=%s AND state='pending' ''',(count,kg,wid,pos,num))
+            recalc_item(c,wid,pos)
+            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+        elif action == 'skip':
+            changed = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
+                WHERE workout_id=%s AND position=%s AND state='pending' RETURNING set_no''',(wid,pos)).fetchall()
+            if changed:
+                recalc_item(c,wid,pos)
+        elif action == 'replace':
+            key = body.get('key')
+            if not isinstance(key,str) or key not in EX:
+                raise ValueError('Упражнение не найдено')
+            changed = c.execute('''SELECT COUNT(*) FROM workout_sets
+                WHERE workout_id=%s AND position=%s AND state<>'pending' ''',(wid,pos)).fetchone()[0]
+            if changed:
+                raise ValueError('Упражнение уже начато: замена недоступна')
+            keys,error = replacement_options(chat,wid,pos)
+            if error or key not in keys:
+                raise ValueError(error or 'Неподходящая замена')
+            c.execute('''UPDATE workout_items SET exercise=%s,exercise_key=%s
+                WHERE workout_id=%s AND position=%s''',(EX[key][0],key,wid,pos))
+    return False
+
+
+@APP.get('/mini')
+def mini_page():
+    response = make_response(gzip.decompress(base64.b64decode(MINI_HTML_GZIP)))
+    response.headers['Content-Type'] = 'text/html; charset=utf-8'
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
+@APP.get('/mini/image/<key>')
+def mini_image(key):
+    if key not in BUILTIN_ILLUSTRATIONS:
+        abort(404)
+    image_bytes = base64.b64decode(BUILTIN_ILLUSTRATIONS[key])
+    response = send_file(BytesIO(image_bytes), mimetype='image/png')
+    response.headers['Cache-Control'] = 'public, max-age=86400'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@APP.post('/mini/api')
+def mini_api():
+    if not request.is_json or request.content_length and request.content_length > 1500:
+        abort(415)
+    chat = mini_auth(request.headers.get('X-Formiq-Init',''))
+    if not chat:
+        return jsonify(ok=False,error='Открой Mini App из Telegram заново.'),401
+    data = request.get_json(silent=True)
+    if not isinstance(data,dict):
+        return jsonify(ok=False,error='Некорректный запрос'),400
+    action = data.get('action')
+    try:
+        if action == 'state':
+            payload = {'ok':True, 'data':mini_state(chat)}
+        else:
+            result = mini_write(chat,action,data)
+            if isinstance(result,dict):
+                payload = {'ok':True, **result}
+            else:
+                payload = {'ok':True, 'data':mini_state(chat,result)}
+    except ValueError as e:
+        return jsonify(ok=False,error=str(e)),400
+    except Exception:
+        LOG.exception('Mini app error: action=%s',action)
+        return jsonify(ok=False,error='Ошибка сервера. Попробуй позже.'),500
+    response = jsonify(payload)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @APP.get('/')
 def health():
-    return 'FORMIQ 31.0 online', 200
+    return 'FORMIQ 36.6 online', 200
 
 
 @APP.post('/telegram-webhook')
@@ -2186,5 +2542,5 @@ if __name__ == '__main__':
     replay_pending()
     BOT.set_webhook(url=BASE_URL + '/telegram-webhook',
                     secret_token=SECRET, drop_pending_updates=False)
-    LOG.info('FORMIQ 31.0 ready; Yandex configured=%s', bool(YANDEX_KEY and FOLDER_ID))
+    LOG.info('FORMIQ 36.6 ready; Yandex configured=%s', bool(YANDEX_KEY and FOLDER_ID))
     APP.run(host='0.0.0.0', port=int(os.getenv('PORT', '10000')), debug=False)
