@@ -1,12 +1,13 @@
 import os
 import json
+import html
 import time
 import hmac
 import hashlib
 import logging
 import urllib.request
 import urllib.error
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,7 +18,7 @@ from flask import Flask, request, abort
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '20.0'
+VERSION = '30.0'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -29,6 +30,10 @@ SECRET = hashlib.sha256(TOKEN.encode()).hexdigest()
 BOT = telebot.TeleBot(TOKEN, threaded=False)
 APP = Flask(__name__)
 WORKERS = ThreadPoolExecutor(max_workers=1)
+ADMIN_ID = int(os.getenv('FORMIQ_ADMIN_ID', '0') or '0')
+PREMIUM_ENFORCED = os.getenv('FORMIQ_PREMIUM_ENFORCED', '0') == '1'
+TRIAL_DAYS = 5
+PREMIUM_PRICE_RUB = 1990
 
 QUESTIONS = [
     ('goal', 'Какая твоя цель?', [('Похудеть', 'loss'), ('Мышцы и сила', 'muscle'), ('Выносливость', 'endurance'), ('Поддерживать форму', 'general')]),
@@ -66,6 +71,92 @@ EX = {
     'leg_ext': ('Разгибание ног в тренажёре', 'Работай в комфортной амплитуде.', 'Не выпрямляй колени рывком.'),
     'cable_row': ('Тяга блока сидя', 'Опусти плечи, держи нейтральную спину.', 'Не раскачивайся.')
 }
+
+
+EX.update({
+    'sit_to_stand': ('Вставание со стула', 'Сядь на устойчивый стул и спокойно поднимись.', 'Не отталкивайся рывком.'),
+    'pause_squat': ('Приседания с паузой', 'На секунду задержись у стула и встань.', 'Не проваливайся вниз.'),
+    'sumo_squat': ('Широкие приседания', 'Стой чуть шире плеч и двигайся плавно.', 'Не разворачивай колени насильно.'),
+    'wall_sit': ('Статический присед у стены', 'Обопрись о стену и удерживай комфортную позицию.', 'Не садись слишком низко.'),
+    'assisted_split': ('Разножка с опорой', 'Держись за устойчивую опору и мягко сгибай ноги.', 'Не теряй равновесие.'),
+    'back_step': ('Шаг назад с опорой', 'Сделай небольшой шаг назад и вернись.', 'Не делай глубокий выпад.'),
+    'lateral_step': ('Боковой шаг на платформу', 'Поднимайся на невысокую устойчивую платформу.', 'Не прыгай.'),
+    'standing_march': ('Марш на месте', 'Поднимай ноги попеременно в удобном темпе.', 'Не задерживай дыхание.'),
+    'heel_touch': ('Касания пяткой вперёд', 'Попеременно касайся пола пяткой перед собой.', 'Не делай резких движений.'),
+    'knee_raise': ('Подъём колена стоя', 'Поднимай колени поочерёдно, при необходимости держись за опору.', 'Не запрокидывай корпус.'),
+    'step_jack': ('Шаги в стороны с руками', 'Шагай в сторону и плавно поднимай руки.', 'Без прыжков и боли.'),
+    'heel_curl': ('Захлёст голени стоя', 'Поочерёдно сгибай колено, пяткой к ягодице.', 'Не прогибай поясницу.'),
+    'calf_pause': ('Подъём на носки с паузой', 'Задержись вверху на секунду.', 'Не раскачивайся.'),
+    'seated_calf': ('Подъём пяток сидя', 'Сидя плавно поднимай и опускай пятки.', 'Не напрягай шею.'),
+    'toe_raise': ('Подъём носков у стены', 'Удерживая равновесие, приподнимай носки.', 'Не опрокидывай корпус.'),
+    'bridge_pause': ('Ягодичный мост с паузой', 'В верхнем положении задержись на секунду.', 'Не выгибай поясницу.'),
+    'bridge_march': ('Марш в ягодичном мосте', 'Удерживая таз, поочерёдно слегка отрывай стопы.', 'Не заваливай таз.'),
+    'standing_kickback': ('Отведение ноги назад стоя', 'Держись за опору и мягко отводи ногу назад.', 'Не прогибай спину.'),
+    'side_leg_raise': ('Отведение ноги в сторону', 'Держись за опору и поднимай ногу в сторону.', 'Не заваливай корпус.'),
+    'clamshell': ('Ракушка лёжа на боку', 'Согни колени и плавно разводи верхнее колено.', 'Не разворачивай таз.'),
+    'hinge_wall': ('Отведение таза к стене', 'Встань перед стеной спиной и тяни таз назад.', 'Не округляй спину.'),
+    'hinge_pause': ('Наклон с паузой', 'Отведи таз назад и замри на секунду.', 'Не делай рывков.'),
+    'standing_bird': ('Птица-собака у стены', 'Опирайся о стену и вытяни руку с противоположной ногой.', 'Не вращай таз.'),
+    'dead_bug_heel': ('Мёртвый жук с касанием пяткой', 'Лёжа попеременно опускай пятку к полу.', 'Не отрывай поясницу резко.'),
+    'knee_plank': ('Планка с колен', 'Удерживай ровный корпус с опорой на колени.', 'Не провисай поясницей.'),
+    'side_plank_knee': ('Боковая планка с колен', 'Держи прямую линию от плеча до колен.', 'Не проваливай плечо.'),
+    'wall_core_press': ('Давление ладонями в стену', 'Упрись руками в стену и слегка напряги корпус.', 'Не задерживай дыхание.'),
+    'wall_push_pause': ('Отжимания от стены с паузой', 'Задержись у стены на секунду, затем оттолкнись.', 'Не ударяйся грудью.'),
+    'incline_push_pause': ('Отжимания от опоры с паузой', 'Плавно задержись в нижней точке.', 'Держи опору неподвижной.'),
+    'knee_push': ('Отжимания с колен', 'Держи ровную линию корпуса и опускайся плавно.', 'Не провисай поясницей.'),
+    'scapular_wall': ('Лопаточные отжимания от стены', 'Плавно своди и разводи лопатки с прямыми руками.', 'Не сгибай шею.'),
+    'arm_raise': ('Подъёмы рук в стороны без веса', 'Плавно поднимай руки до комфортной высоты.', 'Не поднимай через боль.'),
+    'reverse_fly_no_weight': ('Разведение рук в наклоне без веса', 'Наклонись слегка и плавно разведи руки.', 'Не дёргай плечами.'),
+    'db_goblet': ('Присед с гантелью у груди', 'Держи лёгкую гантель у груди и приседай плавно.', 'Не округляй спину.'),
+    'db_rdl': ('Румынская тяга с гантелями', 'Отводи таз назад с нейтральной спиной.', 'Не тяни спиной рывком.'),
+    'db_row': ('Тяга гантели с опорой', 'Держись за устойчивую опору, тяни гантель к тазу.', 'Не скручивай корпус.'),
+    'db_floor_press': ('Жим гантелей лёжа на полу', 'Лёжа на полу плавно жми лёгкие гантели.', 'Не ударяй локтями о пол.'),
+    'db_curl': ('Сгибание рук с гантелями', 'Держи локти у корпуса и поднимай гантели плавно.', 'Не раскачивайся.'),
+    'db_lateral': ('Махи гантелями в стороны', 'Поднимай лёгкие гантели до комфортной высоты.', 'Не задирай плечи.'),
+    'db_front_raise': ('Подъём гантелей перед собой', 'Поочерёдно плавно поднимай лёгкие гантели.', 'Не выгибай поясницу.'),
+    'db_reverse_fly': ('Разведение гантелей в наклоне', 'Чуть согни колени и медленно разводи руки.', 'Не делай рывков.'),
+    'db_step': ('Шаг на платформу с гантелями', 'Используй очень низкую устойчивую ступень и лёгкий вес.', 'Не прыгай.'),
+    'db_bridge': ('Ягодичный мост с гантелью', 'Аккуратно удерживай лёгкую гантель на тазу.', 'Не дави гантелью на живот.'),
+    'db_calf': ('Подъём на носки с гантелями', 'Держи лёгкие гантели и опирайся для равновесия.', 'Не раскачивайся.'),
+    'band_row': ('Тяга резинки к поясу', 'Закрепи резинку надёжно и тяни локти назад.', 'Проверь крепление.'),
+    'band_pull_apart': ('Разведение резинки перед собой', 'Разводи руки, слегка натягивая резинку.', 'Не выгибай спину.'),
+    'band_chest': ('Жим резинки от груди', 'Закрепи резинку за спиной безопасно и выпрямляй руки.', 'Проверь резинку.'),
+    'band_squat': ('Приседания с резинкой', 'Делай неглубокий присед с лёгкой резинкой.', 'Не своди колени внутрь.'),
+    'band_walk': ('Боковые шаги с мини-резинкой', 'Делай небольшие шаги в полуприседе.', 'Не раскачивай таз.'),
+    'band_glute': ('Ягодичный мост с мини-резинкой', 'Выполняй мост с лёгким натяжением резинки.', 'Не разводи колени рывком.'),
+    'band_curl': ('Сгибание рук с резинкой', 'Прижми локти к корпусу и тяни плавно.', 'Проверь крепление под стопами.'),
+    'band_triceps': ('Разгибание рук с резинкой', 'Плавно выпрямляй руку, не меняя корпус.', 'Не дёргай локоть.'),
+    'band_face_pull': ('Тяга резинки к лицу', 'Тяни лёгкую резинку к уровню глаз.', 'Не задирай плечи.'),
+    'band_rdl': ('Румынская тяга с резинкой', 'Отводи таз назад, удерживай спину ровной.', 'Не округляй спину.'),
+    'band_pallof': ('Антиротационное удержание резинки', 'Удерживай резинку перед грудью, не поворачивая корпус.', 'Проверь крепление.'),
+    'band_lat': ('Вертикальная тяга резинки', 'Тяни резинку вниз к плечам с надёжным креплением.', 'Не тяни за голову.'),
+    'incline_chest_press': ('Жим в наклонном тренажёре', 'Настрой положение сиденья и жми плавно.', 'Не выталкивай плечи вперёд.'),
+    'neutral_lat': ('Тяга верхнего блока нейтральным хватом', 'Тяни рукоять к груди, держи корпус устойчиво.', 'Не дёргай спиной.'),
+    'cable_face_pull': ('Тяга каната к лицу', 'Тяни к уровню лица с лёгким весом.', 'Не запрокидывай голову.'),
+    'cable_triceps': ('Разгибание рук на блоке', 'Держи локти у корпуса, разгибай плавно.', 'Не наваливайся на рукоять.'),
+    'machine_curl': ('Сгибание рук в тренажёре', 'Подстрой сиденье и работай плавно.', 'Не переразгибай локти.'),
+    'machine_abductor': ('Отведение ног в тренажёре', 'Подстрой сиденье и мягко разводи ноги.', 'Не делай рывков.'),
+    'machine_adductor': ('Приведение ног в тренажёре', 'Работай в умеренной амплитуде.', 'Не раздвигай ноги через боль.'),
+    'back_extension': ('Гиперэкстензия без веса', 'Поднимай корпус до линии с ногами.', 'Не переразгибай спину.'),
+    'smith_box': ('Присед к стулу в Смите', 'Используй лёгкий вес и правильную настройку.', 'Не смещай колени насильно.'),
+    'db_bench_press': ('Жим гантелей лёжа на скамье', 'Плавно жми гантели над грудью.', 'Не опускай локти через дискомфорт.'),
+    'db_supported_row': ('Тяга гантелей с опорой грудью', 'Тяни локти назад на наклонной скамье.', 'Не задирай плечи.'),
+    'cable_pullthrough': ('Тяга каната между ног', 'Отводи таз назад с небольшим сопротивлением.', 'Не округляй поясницу.'),
+    'seated_leg_press': ('Жим ногами сидя', 'Настрой расстояние и жми плавно.', 'Не блокируй колени.'),
+    'incline_walk': ('Ходьба на дорожке под наклоном', 'Иди в умеренном темпе, не держись за поручни без необходимости.', 'Не завышай наклон.'),
+    'easy_bike': ('Велотренажёр, спокойный темп', 'Крути педали в разговорном темпе.', 'Не выставляй слишком высокое сопротивление.'),
+    'elliptical': ('Эллипс, спокойный темп', 'Сохраняй ровную осанку и плавный ритм.', 'Не сутулься.'),
+    'machine_row': ('Тяга в рычажном тренажёре', 'Настрой сиденье и тяни локти к корпусу.', 'Не размахивай корпусом.'),
+    'machine_shoulder': ('Жим плечами в тренажёре', 'Настрой высоту сиденья, жми плавно.', 'Не прогибай спину.'),
+    'cable_lateral': ('Отведение руки на нижнем блоке', 'Поднимай руку в сторону с лёгким весом.', 'Не раскачивайся.'),
+})
+
+VARIANTS = {'chair_squat': ('chair_squat', 'sit_to_stand', 'pause_squat', 'sumo_squat'), 'partial_squat': ('partial_squat', 'chair_squat', 'pause_squat', 'sit_to_stand'), 'wall_push': ('wall_push', 'wall_push_pause', 'scapular_wall', 'incline_push'), 'incline_push': ('incline_push', 'incline_push_pause', 'wall_push', 'knee_push'), 'bridge': ('bridge', 'bridge_pause', 'clamshell', 'standing_kickback'), 'bird': ('bird', 'standing_bird', 'dead_bug', 'dead_bug_heel'), 'step': ('step', 'back_step', 'lateral_step', 'assisted_split'), 'calf': ('calf', 'calf_pause', 'seated_calf', 'toe_raise'), 'wall_plank': ('wall_plank', 'knee_plank', 'side_plank_knee', 'wall_core_press'), 'side_step': ('side_step', 'standing_march', 'heel_touch', 'step_jack'), 'hip_hinge': ('hip_hinge', 'hinge_wall', 'hinge_pause', 'standing_kickback'), 'dead_bug': ('dead_bug', 'dead_bug_heel', 'bird', 'standing_bird'), 'leg_press': ('leg_press', 'seated_leg_press', 'smith_box', 'leg_press'), 'lat_pull': ('lat_pull', 'neutral_lat', 'machine_row', 'lat_pull'), 'chest_press': ('chest_press', 'incline_chest_press', 'db_bench_press', 'chest_press'), 'seated_row': ('seated_row', 'machine_row', 'cable_row', 'db_supported_row'), 'db_press': ('db_press', 'machine_shoulder', 'cable_lateral', 'db_press'), 'leg_curl': ('leg_curl', 'back_extension', 'leg_curl', 'machine_abductor'), 'leg_ext': ('leg_ext', 'leg_press', 'leg_ext', 'seated_leg_press'), 'cable_row': ('cable_row', 'seated_row', 'db_supported_row', 'machine_row')}
+GEAR_VARIANTS = {'chair_squat': ('chair_squat', 'db_goblet', 'band_squat', 'pause_squat'), 'partial_squat': ('partial_squat', 'band_squat', 'db_goblet', 'sit_to_stand'), 'wall_push': ('wall_push', 'band_chest', 'db_floor_press', 'incline_push'), 'incline_push': ('incline_push', 'db_floor_press', 'band_chest', 'wall_push'), 'bridge': ('bridge', 'db_bridge', 'band_glute', 'bridge_pause'), 'bird': ('bird', 'band_pallof', 'dead_bug', 'standing_bird'), 'step': ('step', 'db_step', 'back_step', 'lateral_step'), 'calf': ('calf', 'db_calf', 'calf_pause', 'seated_calf'), 'wall_plank': ('wall_plank', 'wall_core_press', 'knee_plank', 'side_plank_knee'), 'side_step': ('side_step', 'band_walk', 'step_jack', 'standing_march'), 'hip_hinge': ('hip_hinge', 'db_rdl', 'band_rdl', 'hinge_wall'), 'dead_bug': ('dead_bug', 'band_pallof', 'bird', 'dead_bug_heel')}
+TIMED_EXERCISES = {'wall_plank', 'knee_plank', 'side_plank_knee', 'wall_sit', 'band_pallof', 'wall_core_press'}
+BEGINNER_EXCLUDE = {'knee_push', 'bridge_march', 'smith_box', 'db_step', 'db_bench_press'}
+IMAGE_ADMIN_HELP = 'Картинки можно загрузить владельцу: фото с подписью /photo ключ_упражнения. Нужен FORMIQ_ADMIN_ID в Render.'
+
 
 ROUTINES = {
     'home': {
@@ -141,8 +232,140 @@ def init_db():
         c.execute("ALTER TABLE incoming_updates ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'done'")
         c.execute('CREATE INDEX IF NOT EXISTS workouts_chat_idx ON workouts(chat_id,started_at DESC)')
         c.execute('CREATE INDEX IF NOT EXISTS training_cycles_chat_idx ON training_cycles(chat_id,id DESC)')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS premium_access (
+            chat_id BIGINT PRIMARY KEY,
+            trial_started_at TIMESTAMPTZ,
+            premium_until TIMESTAMPTZ
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS exercise_images (
+            exercise_key TEXT PRIMARY KEY,
+            file_id TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS rest_timers (
+            chat_id BIGINT PRIMARY KEY,
+            rest_until TIMESTAMPTZ NOT NULL
+        )''')
         c.execute('CREATE INDEX IF NOT EXISTS ai_history_idx ON ai_messages(chat_id,id DESC)')
         c.execute("DELETE FROM incoming_updates WHERE state='done' AND received_at < NOW()-INTERVAL '30 days'")
+
+
+def trial_start_in(c, chat):
+    """Start the 5-day trial only when the first real workout starts.
+    No payment and no automatic renewal.
+    """
+    c.execute("""INSERT INTO premium_access(chat_id, trial_started_at)
+        VALUES(%s, NOW()) ON CONFLICT(chat_id) DO NOTHING""", (chat,))
+    c.execute("""UPDATE premium_access SET trial_started_at=NOW()
+        WHERE chat_id=%s AND trial_started_at IS NULL""", (chat,))
+
+
+def premium_state(chat):
+    with db() as c:
+        row = c.execute("""SELECT trial_started_at,premium_until
+            FROM premium_access WHERE chat_id=%s""", (chat,)).fetchone()
+    if not row or not row[0]:
+        return 'not_started', None
+    now = datetime.now(timezone.utc)
+    expiry = row[0] + timedelta(days=TRIAL_DAYS)
+    if row[1] and row[1] > now:
+        return 'premium', row[1]
+    return ('trial', expiry) if expiry > now else ('free', expiry)
+
+
+def has_premium(chat):
+    state, _ = premium_state(chat)
+    return (not PREMIUM_ENFORCED) or state in ('trial', 'premium')
+
+
+def premium_screen(chat, mid=None):
+    state, expires = premium_state(chat)
+    names = {
+        'not_started': '⏳ Ещё не запущен',
+        'trial': '🎁 Пробные 5 дней активны',
+        'premium': '⭐ Premium активен',
+        'free': '🆓 Free — пробный период истёк'
+    }
+    text = ('⭐ FORMIQ Premium · демонстрация\n\n'
+            f'Статус: {names[state]}\n'
+            f'Планируемая цена: {PREMIUM_PRICE_RUB} ₽/месяц.\n'
+            'Без оплаты, автопродления и списаний.\n'
+            'Отсчёт пяти дней начинается с первой тренировки.\n'
+            'После пробного периода базовый тренер остаётся бесплатным.')
+    if expires:
+        text += f'\nКонец периода: {expires:%d.%m.%Y %H:%M} UTC.'
+    if not PREMIUM_ENFORCED:
+        text += '\n\n🧪 Тестовый режим: все функции доступны для проверки.'
+    return send(chat, text, [('🏋️ Программа','plan'),('🏠 Меню','menu')], mid)
+
+
+def premium_required(chat, mid=None):
+    if has_premium(chat):
+        return False
+    send(chat, '⭐ Расширенная аналитика доступна в пробные 5 дней или Premium. '
+               'Базовые тренировки бесплатны. Оплата пока не подключена.',
+         [('⭐ Premium','premium'),('🏠 Меню','menu')], mid)
+    return True
+
+
+def get_exercise_image(key):
+    if not key:
+        return None
+    with db() as c:
+        r = c.execute('SELECT file_id FROM exercise_images WHERE exercise_key=%s', (key,)).fetchone()
+    return r[0] if r else None
+
+
+def show_card(chat, body, choices, key=None, mid=None):
+    """Telegram controls font size; HTML helps visually emphasize current exercise.
+    If an owner-uploaded image exists, deliver photo with caption.
+    """
+    markup = kb(*choices) if choices else None
+    img = get_exercise_image(key)
+    if img:
+        try:
+            if mid:
+                try:
+                    BOT.edit_message_media(types.InputMediaPhoto(img, caption=body[:950],
+                             parse_mode='HTML'), chat_id=chat, message_id=mid,
+                             reply_markup=markup)
+                    return
+                except Exception:
+                    pass
+            BOT.send_photo(chat, img, caption=body[:950], parse_mode='HTML', reply_markup=markup)
+            return
+        except Exception:
+            LOG.exception('Photo card failed, fall back to text')
+    if mid:
+        try:
+            BOT.edit_message_text(body[:3950], chat, mid,
+                                  parse_mode='HTML', reply_markup=markup)
+            return
+        except Exception:
+            pass
+    BOT.send_message(chat, body[:3950], parse_mode='HTML', reply_markup=markup)
+
+
+def rest_timer(chat, wid, mid=None):
+    # No background callbacks/notifications on Render Free.
+    now = datetime.now(timezone.utc)
+    with db() as c:
+        r = c.execute("SELECT id FROM workouts WHERE id=%s AND chat_id=%s AND status='active'",
+                      (wid, chat)).fetchone()
+        if not r:
+            return send(chat, 'Нет активного занятия.', [('🏠 Меню','menu')], mid)
+        row = c.execute('SELECT rest_until FROM rest_timers WHERE chat_id=%s', (chat,)).fetchone()
+        if row and row[0] > now:
+            left = max(1, int((row[0] - now).total_seconds()))
+            msg = f'⏱ До конца отдыха примерно {left} сек.'
+        else:
+            c.execute("""INSERT INTO rest_timers(chat_id,rest_until)
+                VALUES(%s, NOW()+INTERVAL '60 seconds')
+                ON CONFLICT(chat_id) DO UPDATE SET rest_until=EXCLUDED.rest_until""", (chat,))
+            msg = '⏱ Отдых 60 секунд начался. Проверяй остаток кнопкой — уведомления автоматически не приходят.'
+    send(chat, msg, [('⏱ Проверить / начать заново', f'rest:{wid}'),
+                     ('▶️ Продолжить', 'current')], mid)
 
 
 def kb(*items):
@@ -164,11 +387,12 @@ def send(chat, text, options=(), mid=None):
 
 
 def home(chat, mid=None):
-    send(chat, '💪 FORMIQ 20.0\n\nТвой план, дневник, прогресс и ИИ-тренер.', [
+    send(chat, '💪 FORMIQ 30.0\n\n🏋️ Удобные карточки, новые упражнения и тестовый Premium на 5 дней.', [
         ('🏋️ Моя программа', 'plan'), ('▶️ Тренировка', 'current'),
-        ('📅 Неделя и восстановление', 'week'), ('🏆 Личные рекорды', 'records'),
-        ('📈 Прогресс упражнений', 'exercise_progress'), ('⚖️ Рабочие веса', 'weights'),
-        ('📊 Статистика', 'stats'), ('📖 История', 'history'), ('🤖 ИИ-тренер', 'coach'),
+        ('📅 Неделя и восстановление', 'week'), ('⭐ 5 дней Premium', 'premium'),
+        ('🏆 Личные рекорды', 'records'), ('📈 Прогресс упражнений', 'exercise_progress'),
+        ('⚖️ Рабочие веса', 'weights'), ('📊 Статистика', 'stats'),
+        ('📖 История', 'history'), ('🤖 ИИ-тренер', 'coach'),
         ('👤 Профиль', 'profile'), ('📝 Анкета', 'restart'),
         ('🔒 Настройки ИИ', 'ai_settings')], mid)
 
@@ -278,17 +502,25 @@ def adjustment(chat, day):
     return 'more', 'Два полных лёгких занятия: пробуем +1 повторение, без увеличения веса.'
 
 
-def make_session(p, week, day, mood='normal', adapt='normal'):
+def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1):
     kind = 'gym' if p['equipment'] == 'gym' else 'home'
     goal = p['goal'] if p['goal'] in ROUTINES[kind] else 'general'
     keys = list(ROUTINES[kind][goal]['ABCD'.index(day)])
-    if week >= 3:
-        swaps = {'chair_squat': 'partial_squat', 'partial_squat': 'chair_squat',
-                 'wall_push': 'incline_push', 'incline_push': 'wall_push',
-                 'seated_row': 'cable_row', 'cable_row': 'seated_row',
-                 'bridge': 'hip_hinge', 'hip_hinge': 'bridge'}
-        keys = [swaps.get(key, key) if i in (0, 2) else key
-                for i, key in enumerate(keys)]
+    # Variants remain stable for two weeks. Alterations are in the same movement family.
+    phase = (week - 1) // 2
+    mode = p['equipment']
+    new_keys = []
+    for slot, base in enumerate(keys):
+        choices = (GEAR_VARIANTS if mode == 'homegear' else VARIANTS).get(base, (base,))
+        options = [k for k in choices if k in EX and
+                   (p['level'] != 'beginner' or k not in BEGINNER_EXCLUDE)]
+        if not options:
+            options = [base]
+        # For changes between the two halves of a cycle, and on future cycles:
+        selected = options[((cycle_id - 1) + phase) % len(options)]
+        if selected in new_keys:
+            selected = next((k for k in options if k not in new_keys), base)
+        new_keys.append(selected)
     mins = int(p['minutes'])
     nsets = 2 if p['level'] == 'beginner' or mins == 20 else 3
     if week == 4 or mood == 'tired' or adapt == 'lighter':
@@ -298,8 +530,8 @@ def make_session(p, week, day, mood='normal', adapt='normal'):
     if adapt == 'more' and mood == 'normal' and week in (2, 3):
         lo, hi = lo + 1, hi + 1
     result = []
-    for key in keys[:3 if mins == 20 else 4]:
-        sec = key == 'wall_plank'
+    for key in new_keys[:3 if mins == 20 else 4]:
+        sec = key in TIMED_EXERCISES
         result.append((key, nsets, 15 if sec else lo,
                        30 if sec else hi, 'sec' if sec else 'reps'))
     return result
@@ -340,7 +572,7 @@ def show_plan(chat, mid=None):
         lines.append('🧘 Четвёртая неделя — облегчённая.')
     for d in 'ABCD'[:count]:
         lines.append(f'\nДень {d}:')
-        for key, nsets, lo, hi, unit in make_session(p, week, d, adapt=adapt if d == day else 'normal'):
+        for key, nsets, lo, hi, unit in make_session(p, week, d, adapt=adapt if d == day else 'normal', cycle_id=cycle):
             lines.append(f'• {EX[key][0]} — {nsets}×{lo}–{hi} {"сек" if unit == "sec" else "повт."}')
     lines.append('\nРазминка 3–5 мин, отдых 60–90 сек. Между силовыми оставляй время для восстановления.')
     send(chat, '\n'.join(lines),
@@ -396,7 +628,8 @@ def begin(chat, mood, mid=None):
             cycle, week = cycle_status(c, chat, p)
             day = next_day_in(c, chat, cycle, sessions(p))
             adapt, _ = adjustment(chat, day)
-            routine = make_session(p, week, day, mood, adapt)
+            routine = make_session(p, week, day, mood, adapt, cycle)
+            trial_start_in(c, chat)
             wid = c.execute('''INSERT INTO workouts(chat_id,plan_day,cycle_id,week_no,readiness)
                                VALUES(%s,%s,%s,%s,%s) RETURNING id''',
                             (chat, day, cycle, week, mood)).fetchone()[0]
@@ -416,49 +649,123 @@ def show_workout(chat, wid, mid=None, note=''):
         w = c.execute('SELECT plan_day,status,week_no FROM workouts WHERE id=%s AND chat_id=%s',
                       (wid, chat)).fetchone()
         if not w:
-            return send(chat, 'Тренировка не найдена.', [('🏠 Меню', 'menu')], mid)
-        sets = c.execute('''SELECT s.position,s.set_no,s.target_min,s.target_max,s.unit,
-                                   s.state,s.actual_value,s.weight_kg,i.exercise,i.exercise_key
-                            FROM workout_sets s JOIN workout_items i
-                              ON i.workout_id=s.workout_id AND i.position=s.position
-                            WHERE s.workout_id=%s ORDER BY s.position,s.set_no''',
-                         (wid,)).fetchall()
-        old = [] if sets else c.execute('''SELECT position,exercise,target,done,skipped
-                                          FROM workout_items WHERE workout_id=%s
-                                          ORDER BY position''', (wid,)).fetchall()
+            return send(chat, 'Тренировка не найдена.', [('🏠 Меню','menu')], mid)
+        sets = c.execute("""SELECT s.position,s.set_no,s.target_min,s.target_max,s.unit,
+                          s.state,s.actual_value,s.weight_kg,i.exercise,i.exercise_key
+                          FROM workout_sets s JOIN workout_items i
+                          ON i.workout_id=s.workout_id AND i.position=s.position
+                          WHERE s.workout_id=%s ORDER BY s.position,s.set_no""", (wid,)).fetchall()
+        old = [] if sets else c.execute("""SELECT position,exercise,target,done,skipped
+                             FROM workout_items WHERE workout_id=%s ORDER BY position""", (wid,)).fetchall()
     if w[1] != 'active':
-        return send(chat, 'Тренировка закрыта.', [('🏠 Меню', 'menu')], mid)
+        return send(chat, 'Тренировка закрыта.', [('🏠 Меню','menu')], mid)
     if not sets:
         lines = [f'🏋️ Старая тренировка {w[0]}']
-        opts = []
+        buttons = []
         for pos, name, target, done, skipped in old:
             lines.append(f'{"✅" if done else "⏭" if skipped else "⬜"} {name} — {target}')
             if not done and not skipped:
-                opts += [(f'✅ {name[:22]}', f'legacy_done:{wid}:{pos}'),
-                         (f'⏭ {name[:22]}', f'legacy_skip:{wid}:{pos}')]
-        opts += [('🏁 Завершить', f'finish:{wid}'), ('❌ Отменить', f'cancel:{wid}')]
-        return send(chat, '\n'.join(lines), opts, mid)
+                buttons += [(f'✅ {name[:22]}', f'legacy_done:{wid}:{pos}'),
+                            (f'⏭ {name[:22]}', f'legacy_skip:{wid}:{pos}')]
+        buttons += [('🏁 Завершить', f'finish:{wid}'), ('❌ Отменить', f'cancel:{wid}')]
+        return send(chat, '\n'.join(lines), buttons, mid)
+
     done = sum(s[5] == 'done' for s in sets)
     skipped = sum(s[5] == 'skipped' for s in sets)
-    cur = next((s for s in sets if s[5] == 'pending'), None)
-    lines = [f'🏋️ День {w[0]}' + (f' · неделя {w[2]}/4' if w[2] else ''),
-             f'Подходов: ✅ {done}/{len(sets)} · ⏭ {skipped}']
-    opts = []
-    if cur:
-        pos, no, lo, hi, unit, _, _, _, name, key = cur
-        lines.append(f'\n🎯 {name} · подход {no}: {lo}–{hi} {"сек" if unit == "sec" else "повт."}')
+    current = next((s for s in sets if s[5] == 'pending'), None)
+    positions = sorted(set(s[0] for s in sets))
+    buttons = []
+    key = None
+    if current:
+        pos, number, lo, hi, unit, _, _, _, name, key = current
         info = EX.get(key) or next((v for v in EX.values() if v[0] == name), None)
-        if info:
-            lines += [f'✅ {info[1]}', f'⚠️ {info[2]}']
-        opts += [('📝 Записать подход', f'set:{wid}:{pos}:{no}'),
-                 ('⏭ Пропустить упражнение', f'skip_ex:{wid}:{pos}')]
+        technique, warning = (info[1], info[2]) if info else ('Двигайся плавно.', 'При боли остановись.')
+        item_number = positions.index(pos) + 1
+        number_total = sum(s[0] == pos for s in sets)
+        header = (f'🏋️ ТРЕНИРОВКА {html.escape(w[0])} · НЕДЕЛЯ {w[2] or "—"}/4\n'
+                  f'━━━━━━━━━━━━━━\n'
+                  f'<b>УПРАЖНЕНИЕ {item_number} ИЗ {len(positions)}</b>\n\n'
+                  f'<b>💪 {html.escape(name.upper())}</b>\n\n'
+                  f'<b>ПОДХОД {number} ИЗ {number_total}</b>\n'
+                  f'<b>ЦЕЛЬ: {lo}–{hi} {"СЕК" if unit == "sec" else "ПОВТОРЕНИЙ"}</b>\n\n'
+                  f'✅ {html.escape(technique)}\n'
+                  f'⚠️ {html.escape(warning)}\n\n'
+                  f'📊 Сделано {done}/{len(sets)} · Пропущено {skipped}')
+        buttons += [('✅ ЗАПИСАТЬ ПОДХОД', f'set:{wid}:{pos}:{number}'),
+                    ('🔁 ЗАМЕНИТЬ УПРАЖНЕНИЕ', f'swap:{wid}:{pos}'),
+                    ('⏱ ОТДЫХ 60 СЕК', f'rest:{wid}'),
+                    ('⏭ Пропустить упражнение', f'skip_ex:{wid}:{pos}')]
     else:
-        lines.append('\n✅ Все подходы отмечены.')
-    no_weight = next((s for s in reversed(sets) if s[5] == 'done' and s[4] == 'reps' and s[7] is None), None)
+        header = ('<b>🏁 ВСЕ ПОДХОДЫ ОТМЕЧЕНЫ</b>\n\n'
+                  f'✅ Выполнено: {done}/{len(sets)}\n'
+                  f'⏭ Пропущено: {skipped}\n'
+                  'Сохрани тренировку и оцени нагрузку.')
+
+    no_weight = next((s for s in reversed(sets) if s[5] == 'done' and
+                      s[4] == 'reps' and s[7] is None), None)
     if no_weight:
-        opts.append(('⚖️ Записать вес подхода', f'weight_prompt:{wid}:{no_weight[0]}:{no_weight[1]}'))
-    opts += [('🏁 Завершить', f'finish:{wid}'), ('❌ Отменить', f'cancel:{wid}'), ('🏠 Меню', 'menu')]
-    send(chat, (note + '\n\n' if note else '') + '\n'.join(lines), opts, mid)
+        buttons.append(('⚖️ Добавить вес',
+                        f'weight_prompt:{wid}:{no_weight[0]}:{no_weight[1]}'))
+    buttons += [('🏁 Завершить тренировку', f'finish:{wid}'),
+                ('❌ Отменить', f'cancel:{wid}'), ('🏠 Меню','menu')]
+    if note:
+        header = f'<b>{html.escape(note)}</b>\n\n' + header
+    show_card(chat, header, buttons, key, mid)
+
+
+def replacement_options(chat, wid, pos):
+    with db() as c:
+        item = c.execute("""SELECT i.exercise_key,w.status
+                FROM workout_items i JOIN workouts w ON w.id=i.workout_id
+                WHERE w.id=%s AND w.chat_id=%s AND i.position=%s""",
+                (wid, chat, pos)).fetchone()
+        if not item or item[1] != 'active' or not item[0]:
+            return [], 'Заменить это упражнение нельзя.'
+        updated = c.execute("""SELECT COUNT(*) FROM workout_sets WHERE workout_id=%s
+                 AND position=%s AND state <> 'pending'""", (wid, pos)).fetchone()[0]
+        if updated:
+            return [], 'Упражнение уже начато. Заверши его или пропусти.'
+        used = {x[0] for x in c.execute("SELECT exercise_key FROM workout_items WHERE workout_id=%s AND position<>%s",
+                                         (wid, pos)).fetchall()}
+    mode = profile(chat).get('equipment', 'home')
+    pool = (GEAR_VARIANTS if mode == 'homegear' else VARIANTS).get(item[0], (item[0],))
+    old_unit = 'sec' if item[0] in TIMED_EXERCISES else 'reps'
+    results = [k for k in pool if k != item[0] and k not in used and
+               k in EX and ('sec' if k in TIMED_EXERCISES else 'reps') == old_unit]
+    return list(dict.fromkeys(results))[:4], None
+
+
+def swap_menu(chat, wid, pos, mid=None):
+    pool, err = replacement_options(chat, wid, pos)
+    if err:
+        return send(chat, err, [('▶️ Тренировка','current')], mid)
+    if not pool:
+        return send(chat, 'Для этого упражнения нет подходящей альтернативы.',
+                    [('▶️ Тренировка','current')], mid)
+    return send(chat, '🔁 Выбери замену того же типа движения. '
+                'Ранее выполненные подходы не изменяются.',
+                [(EX[key][0], f'swap_to:{wid}:{pos}:{key}') for key in pool] +
+                [('↩️ Назад','current')], mid)
+
+
+def swap_to(chat, wid, pos, key, mid=None):
+    choices, err = replacement_options(chat, wid, pos)
+    if err or key not in choices:
+        return send(chat, err or 'Замена недоступна.', [('▶️ Тренировка','current')], mid)
+    with db() as c:
+        # Acquire workout row lock and recheck before updating
+        active_row = c.execute("SELECT id FROM workouts WHERE id=%s AND chat_id=%s AND status='active' FOR UPDATE",
+                               (wid, chat)).fetchone()
+        if not active_row:
+            return send(chat, 'Тренировка уже закрыта.', [('🏠 Меню','menu')], mid)
+        remaining = c.execute("""SELECT COUNT(*) FROM workout_sets WHERE workout_id=%s
+                   AND position=%s AND state<>'pending'""", (wid,pos)).fetchone()[0]
+        if remaining:
+            return send(chat, 'Упражнение уже начато, заменить нельзя.',
+                        [('▶️ Тренировка','current')], mid)
+        c.execute("UPDATE workout_items SET exercise=%s,exercise_key=%s WHERE workout_id=%s AND position=%s",
+                  (EX[key][0], key, wid, pos))
+    show_workout(chat, wid, mid, '🔁 Упражнение заменено')
 
 
 def set_prompt(chat, wid, pos, no, mid=None):
@@ -744,6 +1051,8 @@ def weights(chat, mid=None):
 
 
 def records(chat, mid=None):
+    if premium_required(chat, mid):
+        return
     with db() as c:
         rows = c.execute('''SELECT i.exercise,MAX(s.weight_kg) FILTER(WHERE s.weight_kg>0),
             MAX(s.actual_value) FILTER(WHERE s.unit='reps'),COUNT(*)
@@ -766,6 +1075,8 @@ def records(chat, mid=None):
 
 
 def exercise_progress(chat, mid=None):
+    if premium_required(chat, mid):
+        return
     with db() as c:
         rows = c.execute('''SELECT i.exercise,w.id,w.started_at,
             MAX(s.actual_value) FILTER(WHERE s.unit='reps'),MAX(s.weight_kg)
@@ -827,7 +1138,7 @@ def coach(chat, mid=None):
         return send(chat, '🔒 Включить Yandex AI?\n\nВ Яндекс отправляются вопрос, краткая анкета, последние результаты упражнений (включая веса), оценки готовности и недавние сообщения. История ИИ хранится в PostgreSQL FORMIQ. Не отправляй секреты и лишние медицинские данные. Согласен?',
                     [('✅ Да', 'ai_yes'), ('❌ Нет', 'menu')], mid)
     ai_enable(chat)
-    send(chat, '🤖 FORMIQ 20.0 на связи. Спроси о тренировках или прогрессе.',
+    send(chat, '🤖 FORMIQ 30.0 на связи. Спроси о тренировках или прогрессе.',
          [('⏹ Выключить ИИ', 'ai_off'), ('🏠 Меню', 'menu')], mid)
 
 
@@ -945,7 +1256,7 @@ def confirm_delete(chat, mid=None):
 
 def delete_all(chat, mid=None):
     with db() as c:
-        for table in ('workouts', 'training_cycles', 'pending_inputs', 'profiles',
+        for table in ('workouts', 'training_cycles', 'pending_inputs', 'premium_access', 'rest_timers', 'profiles',
                       'ai_messages', 'ai_preferences', 'ai_usage'):
             c.execute(f'DELETE FROM {table} WHERE chat_id=%s', (chat,))
     send(chat, 'Локальные данные удалены; сообщения Telegram и внешние копии не затронуты.',
@@ -960,7 +1271,7 @@ def cmd_start(m):
         home(m.chat.id)
 
 
-@BOT.message_handler(commands=['profile', 'plan', 'workout', 'week', 'stats', 'progress',
+@BOT.message_handler(commands=['profile', 'plan', 'premium', 'workout', 'week', 'stats', 'progress',
                                'history', 'weights', 'records', 'exercise_progress',
                                'coach', 'nutrition', 'forget_ai', 'delete_me'])
 def commands(m):
@@ -970,6 +1281,8 @@ def commands(m):
     cmd = m.text.split()[0].split('@')[0]
     if cmd == '/profile':
         show_profile(chat)
+    elif cmd == '/premium':
+        premium_screen(chat)
     elif cmd == '/plan':
         show_plan(chat)
     elif cmd == '/week':
@@ -998,6 +1311,31 @@ def commands(m):
     elif cmd == '/nutrition':
         send(chat, 'Модуль питания пока в разработке. Общий вопрос можно задать в /coach.')
 
+
+
+@BOT.message_handler(content_types=['photo'], func=lambda m: True)
+def upload_exercise_photo(m):
+    if m.chat.type != 'private' or not ADMIN_ID or m.from_user.id != ADMIN_ID:
+        return
+    # Example photo caption: /photo chair_squat
+    caption = (m.caption or '').strip().split()
+    if len(caption) != 2 or caption[0] != '/photo':
+        return send(m.chat.id, 'Фото: подпись /photo chair_squat. Ключи — /image_keys.')
+    key = caption[1]
+    if key not in EX:
+        return send(m.chat.id, 'Неизвестный ключ упражнения. /image_keys')
+    file_id = m.photo[-1].file_id
+    with db() as c:
+        c.execute("INSERT INTO exercise_images(exercise_key,file_id) VALUES(%s,%s) ON CONFLICT(exercise_key) DO UPDATE SET file_id=EXCLUDED.file_id,updated_at=NOW()", (key,file_id))
+    send(m.chat.id, f'🖼 Картинка для {EX[key][0]} сохранена.')
+
+
+@BOT.message_handler(commands=['image_keys'])
+def image_keys(m):
+    if not ADMIN_ID or m.from_user.id != ADMIN_ID or m.chat.type != 'private':
+        return
+    lines = [f'{key}: {v[0]}' for key,v in sorted(EX.items())]
+    send(m.chat.id, 'Ключи упражнений (часть списка):\n' + '\n'.join(lines[:75]))
 
 @BOT.message_handler(content_types=['text'], func=lambda m: True)
 def plain_text(m):
@@ -1040,6 +1378,8 @@ def callback(call):
             home(chat, mid)
         elif data == 'profile':
             show_profile(chat, mid)
+        elif data == 'premium':
+            premium_screen(chat, mid)
         elif data == 'plan':
             show_plan(chat, mid)
         elif data == 'week':
@@ -1088,6 +1428,14 @@ def callback(call):
             clear_input(chat)
             row = active(chat)
             show_workout(chat, row[0], mid) if row else send(chat, 'Нет активной тренировки.', [('🏋️ Программа', 'plan')], mid)
+        elif data.startswith('swap_to:'):
+            _, wid, pos, key = data.split(':', 3)
+            swap_to(chat, int(wid), int(pos), key, mid)
+        elif data.startswith('swap:'):
+            _, wid, pos = data.split(':')
+            swap_menu(chat, int(wid), int(pos), mid)
+        elif data.startswith('rest:'):
+            rest_timer(chat, int(data.split(':')[1]), mid)
         elif data.startswith('set:'):
             _, wid, pos, num = data.split(':')
             set_prompt(chat, int(wid), int(pos), int(num), mid)
@@ -1186,7 +1534,7 @@ def replay_pending():
 
 @APP.get('/')
 def health():
-    return 'FORMIQ 20.0 online', 200
+    return 'FORMIQ 30.0 online', 200
 
 
 @APP.post('/telegram-webhook')
@@ -1214,5 +1562,5 @@ if __name__ == '__main__':
     replay_pending()
     BOT.set_webhook(url=BASE_URL + '/telegram-webhook',
                     secret_token=SECRET, drop_pending_updates=False)
-    LOG.info('FORMIQ 20.0 ready; Yandex configured=%s', bool(YANDEX_KEY and FOLDER_ID))
+    LOG.info('FORMIQ 30.0 ready; Yandex configured=%s', bool(YANDEX_KEY and FOLDER_ID))
     APP.run(host='0.0.0.0', port=int(os.getenv('PORT', '10000')), debug=False)
