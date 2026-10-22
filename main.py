@@ -2866,6 +2866,7 @@ def mini_state(chat, just_finished=False):
     p = profile(chat)
     h = health_profile(chat)
     error = ready(p, chat)
+    tier = tier_for(chat)
     result = {
         'profile': {k: LABELS.get((k, p.get(k)), '—') for k in FIELDS},
         'profile_raw': {k:p.get(k) for k in FIELDS},
@@ -2882,9 +2883,9 @@ def mini_state(chat, just_finished=False):
         'goal': LABELS.get(('goal',p.get('goal')), 'Тренировка'),
         'stats': {'total': 0, 'last7': 0, 'last30': 0, 'sets': 0},
         'premium': {'label': 'Тестовый режим'},
-        'tier': tier_for(chat),
+        'tier': tier,
         'tier_demo': not PREMIUM_ENFORCED,
-        'tier_name': TIER_LABEL[tier_for(chat)],
+        'tier_name': TIER_LABEL[tier],
     }
     with db() as c:
         total, last7, last30 = c.execute('''
@@ -2961,7 +2962,7 @@ def mini_state(chat, just_finished=False):
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     combined=[{'id':wid,'date':dt.strftime('%d.%m.%Y'),
         'sort_at':dt.isoformat(),'type':'workout',
-        'title':manual_title or day_title_for_code(chat,day)}
+        'title':manual_title or day_title(p,day)}
         for wid,day,dt,manual_title in history_rows]
     combined.extend({'id':-cid,'date':dt.strftime('%d.%m.%Y'),
         'sort_at':dt.isoformat(),'type':'cardio',
@@ -2988,7 +2989,7 @@ def mini_state(chat, just_finished=False):
         result['cycle_end']=(bounds[0]+timedelta(days=27)).isoformat() if bounds else None
         count = sessions(p)
         result['next_day'] = next_day_in_readonly(chat,cycle,count)
-        result['plan_names']=[day_title_for_code(chat,day) for day in TRAINING_DAYS[:count]]
+        result['plan_names']=[day_title(p,day) for day in TRAINING_DAYS[:count]]
         result['custom']={day:get_custom(chat,day) for day in TRAINING_DAYS[:count]}
         result['library']=[{'key':k,'name':v[0]} for k,v in EX.items() if valid_exercise(chat,k)]
         result['plan'] = [[{
