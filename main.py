@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.2'
+VERSION = '38.1.3'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -859,13 +859,25 @@ def mini_entry(chat, mid=None):
 
 
 def formiq_chat_keyboard():
-    """Two buttons immediately above Telegram's message field (the native Menu slot cannot hold two)."""
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
+    """Use inline Mini App entry: Telegram reply-keyboard WebApps may have EMPTY
+    initData, which breaks our signed Telegram auth. Both buttons must work
+    without a text command appearing in chat.
+    """
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
     keyboard.row(
-        types.KeyboardButton('FormIQ', web_app=types.WebAppInfo(BASE_URL+'/mini')),
-        types.KeyboardButton('Разбудить')
+        types.InlineKeyboardButton('🚀 Открыть FormIQ',
+            web_app=types.WebAppInfo(url=BASE_URL + '/mini')),
+        types.InlineKeyboardButton('⚡ Разбудить',
+            callback_data='wake')
     )
     return keyboard
+
+
+def remove_obsolete_reply_keyboard(chat):
+    """One-time migration away from broken persistent reply WebApp keyboard."""
+    return BOT.send_message(
+        chat, 'Кнопки запуска FORMIQ теперь под приветствием 👇',
+        reply_markup=types.ReplyKeyboardRemove())
 
 
 def home(chat, mid=None, welcome_image=False):
@@ -875,8 +887,9 @@ def home(chat, mid=None, welcome_image=False):
             'Твой тренировочный план, результаты и AI-помощник — в одном приложении.\n'
             'Подстроим занятия под твою цель и ритм.')
     if welcome_image:
-        picture = BytesIO(base64.b64decode(FORMIQ_CHAT_WELCOME_JPG_B64))
-        picture.name = 'formiq-avatar.jpg'
+        from welcome_art import welcome_jpeg
+        picture = BytesIO(welcome_jpeg())
+        picture.name = 'formiq-welcome-3813.jpg'
         try:
             return BOT.send_photo(chat, picture, caption=text, parse_mode='HTML',reply_markup=markup)
         except Exception:
@@ -1957,6 +1970,10 @@ def cmd_start(m):
         clear_input(m.chat.id)
         with db() as conn:conn.execute('DELETE FROM feedback_drafts WHERE chat_id=%s',(m.chat.id,))
         try:
+            remove_obsolete_reply_keyboard(m.chat.id)
+        except Exception:
+            LOG.warning('Could not clear legacy reply keyboard, chat=%s', m.chat.id)
+        try:
             configure_formiq_bot_profile()
         except Exception:
             LOG.exception('Telegram profile configuration failed')
@@ -2053,7 +2070,13 @@ def plain_text(m):
         return
     chat = m.chat.id
     if (m.text or '').strip().casefold() in ('разбудить', 'formiq'):
-        return home(chat)
+        # Handle stale reply-keyboard taps once, then replace them with
+        # functional inline Mini App + non-message wake callback.
+        try:
+            remove_obsolete_reply_keyboard(chat)
+        except Exception:
+            LOG.warning('Could not clear legacy reply keyboard, chat=%s', chat)
+        return home(chat, welcome_image=False)
     with db() as c:
         pending = c.execute('''SELECT workout_id,position,set_no,input_kind
             FROM pending_inputs WHERE chat_id=%s''', (chat,)).fetchone()
@@ -2087,6 +2110,15 @@ def plain_text(m):
 @BOT.callback_query_handler(func=lambda call: True)
 def callback(call):
     chat = call.message.chat.id
+    if (call.data or '') == 'wake':
+        # Receiving a Telegram webhook already wakes our Render service.
+        # Respond silently to callback instead of generating a chat message.
+        if call.message.chat.type == 'private' and call.from_user.id == chat:
+            try:
+                BOT.answer_callback_query(call.id, text='FORMIQ на связи ✅')
+            except Exception:
+                LOG.exception('Telegram wake acknowledgement failed')
+        return
     try:
         BOT.answer_callback_query(call.id)
     except Exception:
@@ -3072,7 +3104,8 @@ def formiq_gender_wallpaper(palette):
 
 @APP.get('/mini/welcome-cover.jpg')
 def formiq_welcome_cover():
-    response=send_file(BytesIO(base64.b64decode(FORMIQ_CHAT_WELCOME_JPG_B64)), mimetype='image/jpeg')
+    from welcome_art import welcome_jpeg
+    response=send_file(BytesIO(welcome_jpeg()), mimetype='image/jpeg')
     response.headers['Cache-Control']='public, max-age=3600'
     response.headers['X-Content-Type-Options']='nosniff'
     return response
