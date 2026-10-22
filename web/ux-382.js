@@ -1,4 +1,4 @@
-/* FORMIQ 38.2.0: readable titles, equipment form, two trial levels.
+/* FORMIQ 38.3.4: readable titles, equipment form, two trial levels.
    Loaded after previous, working UX layers; avoid changing the embedded app. */
 (()=>{
 'use strict';
@@ -124,6 +124,6 @@ renderCoach=function(){
 show=function(markup){
   previousShow382(markup);
   const foot=$('fq-version-footer');
-  if(foot)foot.textContent='FORMIQ 38.2.0';
+  if(foot)foot.textContent='FORMIQ 38.3.4';
 };
 })();

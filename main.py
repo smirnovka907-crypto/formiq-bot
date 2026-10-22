@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.3.3'
+VERSION = '38.3.4'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -984,8 +984,8 @@ def eligible_exercise(key, health):
     return True
 
 
-def health_adjust_session(chat, p, exercise_plan):
-    h=health_profile(chat)
+def health_adjust_session(chat, p, exercise_plan, *, known_health=None):
+    h = known_health if known_health is not None else health_profile(chat)
     err=health_safety_error(h)
     if err:
         raise ValueError(err)
@@ -1026,19 +1026,21 @@ def health_adjust_session(chat, p, exercise_plan):
     return result
 
 
-def ready(p, chat=None):
+def ready(p, chat=None, *, known_health=None, known_metrics=None, known_agreement=None):
     needed=('goal','level','days','equipment','age_group','minutes')
     if any(not p.get(f) for f in needed):
         return 'Заполни анкету перед тренировкой.'
     if p.get('age_group')!='adult':
         return 'FORMIQ доступен только с 18 лет.'
-    if chat is not None and not has_agreement(chat):
-        return 'Прими актуальные условия и обнови анкету.'
     if chat is not None:
-        m=metrics(chat)
+        accepted = known_agreement if known_agreement is not None else has_agreement(chat)
+        if not accepted:
+            return 'Прими актуальные условия и обнови анкету.'
+        m = known_metrics if known_metrics is not None else metrics(chat)
         if not (m.get('age') and m.get('height_cm') and m.get('weight_kg')):
             return 'Для подбора программы сначала укажи возраст, рост и вес в анкете.'
-        return health_safety_error(health_profile(chat))
+        h = known_health if known_health is not None else health_profile(chat)
+        return health_safety_error(h)
     return None
 
 
@@ -1119,19 +1121,25 @@ def get_cycle(chat, p):
         return cycle_status(c, chat, p)
 
 
+def _insert_schedule_in(conn, chat, cycle, count, start_date):
+    """One conflict-safe bulk INSERT without resetting manually moved dates."""
+    offsets=session_offsets(count)
+    rows=[(chat,cycle,week,TRAINING_DAYS[j],
+           start_date+timedelta(days=(week-1)*7+offset))
+          for week in range(1,5) for j,offset in enumerate(offsets)]
+    values=','.join(['(%s,%s,%s,%s,%s)']*len(rows))
+    args=tuple(value for row in rows for value in row)
+    conn.execute('''INSERT INTO scheduled_sessions
+        (chat_id,cycle_id,week_no,day_code,planned_date) VALUES ''' + values +
+        ''' ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''', args)
+
+
 def planned_next_in(c, chat, cycle_id, count):
     # Next uncompleted calendar session ordered by (possibly rescheduled) date.
     start = c.execute('SELECT starts_on FROM training_cycles WHERE id=%s AND chat_id=%s',
                       (cycle_id,chat)).fetchone()
     if not start: raise ValueError('Программа не найдена')
-    offsets=session_offsets(count)
-    for week in range(1,5):
-        for j, offset in enumerate(offsets):
-            day = TRAINING_DAYS[j]
-            scheduled = start[0]+timedelta(days=(week-1)*7+offset)
-            c.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,day_code,planned_date)
-                VALUES(%s,%s,%s,%s,%s) ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''',
-                (chat,cycle_id,week,day,scheduled))
+    _insert_schedule_in(c,chat,cycle_id,count,start[0])
     # One planned slot can have only one finished workout. Manual entries do not consume slots.
     return c.execute('''SELECT s.day_code,s.week_no,s.planned_date
       FROM scheduled_sessions s WHERE s.chat_id=%s AND s.cycle_id=%s
@@ -2629,14 +2637,8 @@ def day_title(p,day):
 
 
 def ensure_schedule(chat, cycle, count, start_date):
-    offsets=session_offsets(count)
     with db() as conn:
-        for week in range(1,5):
-            for j,offset in enumerate(offsets):
-                scheduled=start_date+timedelta(days=(week-1)*7+offset)
-                conn.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,day_code,planned_date)
-                    VALUES(%s,%s,%s,%s,%s) ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''',
-                    (chat,cycle,week,TRAINING_DAYS[j],scheduled))
+        _insert_schedule_in(conn,chat,cycle,count,start_date)
 
 
 def scheduled_calendar(chat,p,cycle):
@@ -2737,9 +2739,15 @@ def save_metrics(chat,body):
     return True
 
 
+def exercise_allowed_for_profile(p, health, key):
+    return (exercise_for_equipment(p.get('equipment'), key)
+            and equipment_available(p, key)
+            and eligible_exercise(key, health))
+
+
 def valid_exercise(chat,key):
-    return (exercise_for_equipment(profile(chat).get('equipment'),key)
-            and eligible_exercise(key,health_profile(chat)))
+    p=profile(chat)
+    return exercise_allowed_for_profile(p,health_profile(chat),key)
 
 
 def exercise_for_equipment(eq,key):
@@ -2771,11 +2779,12 @@ def save_custom(chat,day,keys):
         (chat,day,json.dumps(keys)))
 
 
-def user_session(chat,p,week,day,mood='normal',adapt='normal',cycle_id=1):
-    custom=get_custom(chat,day)
+def user_session(chat,p,week,day,mood='normal',adapt='normal',cycle_id=1,
+                 *, loaded_custom=False, custom_keys=None, known_health=None):
+    custom = custom_keys if loaded_custom else get_custom(chat,day)
     planned=make_session(p,week,day,mood,adapt,cycle_id,custom_keys=custom)
     # Always check even manually customized routines.
-    return health_adjust_session(chat,p,planned)
+    return health_adjust_session(chat,p,planned,known_health=known_health)
 
 
 def is_ai_unlimited(chat):
@@ -2855,7 +2864,10 @@ def mini_history_detail(chat,wid):
 def mini_state(chat, just_finished=False):
     p = profile(chat)
     h = health_profile(chat)
-    error = ready(p, chat)
+    m = metrics(chat)
+    agreed = has_agreement(chat)
+    error = ready(p, chat, known_health=h, known_metrics=m,
+                  known_agreement=agreed)
     tier = tier_for(chat)
     result = {
         'profile': {k: LABELS.get((k, p.get(k)), '—') for k in FIELDS},
@@ -2863,7 +2875,7 @@ def mini_state(chat, just_finished=False):
         'health_profile': h,
         'equipment_description': p.get('equipment_description',''),
         'needs_health_profile': not bool(h),
-        'agreed': has_agreement(chat),
+        'agreed': agreed,
         'agreement_version': AGREEMENT_VERSION,
         'error': error,
         'workout': None,
@@ -2962,8 +2974,8 @@ def mini_state(chat, just_finished=False):
         entry.pop('sort_at')
     result['history']=combined[:20]
     result['stats']['cardio7']=cardio
-    result['metrics']=metrics(chat)
-    result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(result['metrics']))
+    result['metrics']=m
+    result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(m))
     result['ai']={'consent':ai_state(chat)[0], 'left':ai_quota(chat)}
     result['prices']={'start':START_PRICE_RUB,'comfort':COMFORT_PRICE_RUB,'max':MAX_PRICE_RUB,
        'monthly':MONTH_PRICES_RUB,'quarter':{'start':1470,'comfort':2970,'max':4170},'trial_days':TRIAL_DAYS}
@@ -2981,11 +2993,15 @@ def mini_state(chat, just_finished=False):
         result['next_day'] = next_day_in_readonly(chat,cycle,count)
         result['plan_names']=[day_title(p,day) for day in TRAINING_DAYS[:count]]
         result['custom']={day:get_custom(chat,day) for day in TRAINING_DAYS[:count]}
-        result['library']=[{'key':k,'name':v[0]} for k,v in EX.items() if valid_exercise(chat,k)]
+        # Catalog filtering is in memory; no ~190 DB round trips per page.
+        result['library']=[{'key':k,'name':v[0]} for k,v in EX.items()
+                           if exercise_allowed_for_profile(p,h,k)]
         result['plan'] = [[{
                 'key':key,'name':EX[key][0], 'sets':n,
                 'low':lo, 'high':hi, 'unit':unit
-            } for key,n,lo,hi,unit in user_session(chat,p,week,day,cycle_id=cycle)]
+            } for key,n,lo,hi,unit in user_session(
+                chat,p,week,day,cycle_id=cycle,
+                loaded_custom=True,custom_keys=result['custom'][day],known_health=h)]
             for day in TRAINING_DAYS[:count]]
     return result
 
@@ -3340,8 +3356,8 @@ def mini_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-382.css?v=38.2.0"></head>', 1)
-    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script><script src="/mini/ux-382.js?v=38.2.0"></script></body>', 1)
+    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-382.css?v=38.3.4"></head>', 1)
+    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script><script src="/mini/ux-382.js?v=38.3.4"></script></body>', 1)
     response = make_response(markup)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'
