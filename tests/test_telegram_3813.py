@@ -58,7 +58,7 @@ class Telegram3813(unittest.TestCase):
              patch.object(self.botmod.BOT, 'send_message') as text_message:
             self.botmod.home(123, welcome_image=True)
         photo.assert_called_once()
-        self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\\xff\\xd8'))
+        self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\xff\xd8'))
         self.assertIsInstance(photo.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
         edit.assert_called_once()
         self.assertEqual(edit.call_args.kwargs['message_id'], 57)
