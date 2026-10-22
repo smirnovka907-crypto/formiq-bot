@@ -5,7 +5,10 @@ from html.parser import HTMLParser
 source = Path(__file__).resolve().parents[1] / 'main.py'
 text = source.read_text(encoding='utf-8')
 module = ast.parse(text)
-assert re.search(r"^VERSION = '\\d+\\.\\d+\\.\\d+'$", text, re.M), 'Missing semantic VERSION'
+version = next(ast.literal_eval(node.value) for node in module.body if isinstance(node, ast.Assign)
+               and any(isinstance(target, ast.Name) and target.id == 'VERSION' for target in node.targets))
+assert isinstance(version, str) and len(version.split('.')) == 3
+assert all(part.isdecimal() for part in version.split('.')), 'Missing semantic VERSION'
 assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
 assert 'welcome_jpeg()' in text
 
