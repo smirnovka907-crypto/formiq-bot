@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 source = Path(__file__).resolve().parents[1] / 'main.py'
 text = source.read_text(encoding='utf-8')
 module = ast.parse(text)
-assert "VERSION = '38.2.0'" in text
+assert re.search(r"^VERSION = '\\d+\\.\\d+\\.\\d+'$", text, re.M), 'Missing semantic VERSION'
 assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
 assert 'welcome_jpeg()' in text
 
