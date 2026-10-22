@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - feature/health-integrations-38.1.0
+      - release/formiq-38.1.1
+      - main
   workflow_dispatch:
 jobs:
   integration-tests:
@@ -17,7 +19,7 @@ jobs:
       - name: Compile integration modules
         run: python -m py_compile integrations/fatsecret.py integrations/garmin.py tests/test_integrations.py
       - name: Check UX JavaScript
-        run: node --check web/ux-381.js
+        run: node --check web/ux-381.js && node --check web/ux-3811.js
       - name: Install runtime and CSS validator
         run: pip install -r requirements.txt tinycss2
       - name: Compile bot
