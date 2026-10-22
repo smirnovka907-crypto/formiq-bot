@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.3.2'
+VERSION = '38.3.3'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -874,6 +874,15 @@ def formiq_chat_keyboard():
 
 def home(chat, mid=None, welcome_image=False):
     """Show an approved banner with exactly two clickable Telegram inline buttons."""
+    # An explicit per-chat override is needed: MenuButtonDefault reuses the
+    # old BotFather/global Web App button instead of hiding it.
+    try:
+        BOT.set_chat_menu_button(chat_id=chat, menu_button=types.MenuButtonCommands())
+        current_menu = BOT.get_chat_menu_button(chat_id=chat)
+        if getattr(current_menu, 'type', None) != 'commands':
+            LOG.warning('Could not confirm commands-only menu for chat')
+    except Exception:
+        LOG.exception('Failed to remove old Mini App menu button for chat')
     markup = formiq_chat_keyboard()
     caption = ('<b>FORMIQ · AI Coach</b>\n'
                'Тренировки, питание и прогресс — в одном приложении.\n'
@@ -3700,7 +3709,8 @@ def configure_formiq_bot_profile():
         except Exception:
             LOG.exception('Telegram description update failed (%s)', code)
     try:
-        BOT.set_chat_menu_button(menu_button=types.MenuButtonDefault())
+        # Explicitly replace the BotFather/default Web App launch button.
+        BOT.set_chat_menu_button(menu_button=types.MenuButtonCommands())
         BOT.delete_my_commands()
         _FORMIQ_PROFILE_CONFIGURED = True
         try:
