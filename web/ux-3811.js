@@ -1,7 +1,7 @@
-/* FORMIQ 38.1.4: single health narrative, always-visible feedback and version. */
+/* FORMIQ 38.2.0: single health narrative, always-visible feedback and version. */
 (()=>{
 'use strict';
-const VERSION_LABEL='38.1.4';
+const VERSION_LABEL='38.2.0';
 const previousOnboarding=onboarding;
 const previousExecute=execute;
 const previousRefreshNav=refreshNav;

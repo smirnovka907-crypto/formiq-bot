@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.4'
+VERSION = '38.2.0'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -342,6 +342,9 @@ def db():
 
 def init_db():
     with db() as c:
+        c.execute('''CREATE TABLE IF NOT EXISTS profile_equipment (
+            chat_id BIGINT PRIMARY KEY, description TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
         c.execute('''CREATE TABLE IF NOT EXISTS profiles (
             chat_id BIGINT PRIMARY KEY, goal TEXT, level TEXT, days TEXT,
             equipment TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())''')
@@ -510,8 +513,8 @@ def has_premium(chat):
 
 
 # No billing: test-only access levels. Never treat a self-selected demo tier as payment.
-TIER_ORDER = {'start':0, 'comfort':1, 'max':2}
-TIER_LABEL = {'start':'Старт', 'comfort':'Свой план', 'max':'Тренер'}
+TIER_ORDER = {'start':0, 'comfort':0, 'max':1}
+TIER_LABEL = {'start':'Coach', 'comfort':'Coach', 'max':'360'}
 
 
 def tier_for(chat):
@@ -917,9 +920,15 @@ def profile_hub(chat, mid=None):
 
 def profile(chat):
     with db() as c:
-        r = c.execute('''SELECT goal,level,days,equipment,age_group,minutes,clearance
-                         FROM profiles WHERE chat_id=%s''', (chat,)).fetchone()
-    return dict(zip(FIELDS, r)) if r else {}
+        r = c.execute('''SELECT p.goal,p.level,p.days,p.equipment,p.age_group,
+                                p.minutes,p.clearance,COALESCE(e.description,'')
+                         FROM profiles p LEFT JOIN profile_equipment e
+                         ON e.chat_id=p.chat_id WHERE p.chat_id=%s''', (chat,)).fetchone()
+    if not r:
+        return {}
+    result = dict(zip(FIELDS, r[:len(FIELDS)]))
+    result['equipment_description'] = r[-1] if result.get('equipment') == 'homegear' else ''
+    return result
 
 
 # Affected regions only; never infer a diagnosis from user-reported pain.
@@ -1167,6 +1176,20 @@ def adjustment(chat, day):
     return 'more', 'Два полных лёгких занятия: пробуем +1 повторение, без увеличения веса.'
 
 
+def equipment_available(p, key):
+    """Reject dumbbell/band substitutions not listed in the user's home inventory."""
+    if p.get('equipment') != 'homegear':
+        return True
+    note = p.get('equipment_description', '').casefold()
+    has_dumbbells = any(word in note for word in ('гантел', 'dumbbell'))
+    has_bands = any(word in note for word in ('резинк', 'эспанд', 'band', 'петли'))
+    if key.startswith('db_'):
+        return has_dumbbells
+    if key.startswith('band_'):
+        return has_bands
+    return True
+
+
 def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom_keys=None):
     """Scale sessions 20–90 min; 5–7 weekly days mix strength and recovery."""
     kind = 'gym' if p['equipment'] == 'gym' else 'home'
@@ -1178,8 +1201,17 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
     # Recovery sessions are gentle; never force a user to fill all seven days.
     if not custom_keys and count >= 5 and day in 'BDFG':
         if kind == 'gym':
-            return [('elliptical', 1, max(10, min(30, mins - 10)),
-                     max(15, min(45, mins - 5)), 'min')]
+            # An actual gym visit: cardio plus two easy accessory movements.
+            # Never schedule a 10-minute elliptical-only commute.
+            recovery = {
+                'B': ('cable_face_pull','dead_bug'),
+                'D': ('seated_row','calf'),
+                'F': ('cable_row','bird'),
+                'G': ('machine_abductor','dead_bug'),
+            }
+            low = max(12,min(50,mins-15))
+            return [('elliptical',1,low,min(60,low+5),'min')] + [
+                (key,2,10,12,'reps') for key in recovery.get(day,recovery['B'])]
         easier = {
             'B': ('standing_march', 'arm_raise', 'scapular_wall'),
             'D': ('heel_touch', 'bird', 'calf'),
@@ -1213,7 +1245,8 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
             continue
         choices = (GEAR_VARIANTS if mode == 'homegear' else VARIANTS).get(base, (base,))
         options = [k for k in choices if k in EX and
-                   (p['level'] != 'beginner' or k not in BEGINNER_EXCLUDE)]
+                   (p['level'] != 'beginner' or k not in BEGINNER_EXCLUDE)
+                   and equipment_available(p,k)]
         if not options:
             options = [base]
         selected = options[((cycle_id - 1) + phase) % len(options)]
@@ -1246,7 +1279,7 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
         for key in pool:
             if len(new_keys) >= max_exercises:
                 break
-            if key not in new_keys and key in EX and exercise_for_equipment(mode, key):
+            if key not in new_keys and key in EX and exercise_for_equipment(mode, key) and equipment_available(p,key):
                 new_keys.append(key)
 
     nsets = 2 if p['level'] == 'beginner' or mins <= 25 else (4 if mins >= 70 and p['level'] == 'experienced' else 3)
@@ -2455,6 +2488,45 @@ def analyze_health_description(chat, body):
         LOG.warning('Health AI analysis unavailable or invalid; no health data saved')
         raise ValueError('Не получилось разобрать текст. Попробуй ещё раз или укажи ограничения вручную')
 
+def analyze_equipment_description(body):
+    """User-approved Yandex parsing; no raw text persisted automatically."""
+    if body.get('privacy_ack') is not True or body.get('adult') is not True:
+        raise ValueError('Разреши передачу текста и подтверди возраст 18+')
+    raw=body.get('text')
+    if not isinstance(raw,str) or not 3<=len(raw.strip())<=400:
+        raise ValueError('Опиши свой инвентарь (3–400 символов)')
+    if not (YANDEX_KEY and FOLDER_ID):
+        raise ValueError('ИИ временно недоступен; список можно сохранить вручную')
+    system=('Выдели ТОЛЬКО спортивный инвентарь, явно названный человеком. '
+            'Не выдумывай оборудование и не давай советов. '
+            'Верни JSON {"items": ["краткое название", ...]}, не более 15 элементов.')
+    payload={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+             'completionOptions':{'stream':False,'temperature':0,'maxTokens':'220'},
+             'messages':[{'role':'system','text':system},
+                         {'role':'user','text':raw.strip()}]}
+    req=urllib.request.Request(AI_URL,
+        data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),
+        headers={'Authorization':'Api-Key '+YANDEX_KEY,'Content-Type':'application/json'},
+        method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=25) as response:
+            body=json.load(response)
+        message=body['result']['alternatives'][0]['message']['text']
+        match=re.search(r'\{[\s\S]*\}',message)
+        parsed=json.loads(match.group(0)) if match else {}
+        items=parsed.get('items',[])
+        if not isinstance(items,list) or len(items)>15:
+            raise ValueError('Invalid equipment response')
+        cleaned=[x.strip()[:60] for x in items if isinstance(x,str) and x.strip()]
+        if not cleaned:
+            raise ValueError('Equipment is unclear')
+        return {'items':list(dict.fromkeys(cleaned))}
+    except (ValueError,KeyError,TypeError,IndexError,urllib.error.HTTPError,
+            urllib.error.URLError,TimeoutError,json.JSONDecodeError):
+        LOG.warning('Equipment AI unavailable; no data saved')
+        raise ValueError('Не получилось разобрать список. Проверь описание и попробуй ещё раз')
+
+
 def save_onboarding(chat,body):
     vals=body.get('answers')
     if not isinstance(vals,dict):raise ValueError('Заполни анкету')
@@ -2479,11 +2551,18 @@ def save_onboarding(chat,body):
     if sex not in (None,'male','female','other'):
         raise ValueError('Проверь пол')
     health=validate_health(body.get('health_profile'))
+    equipment_description=body.get('equipment_description','')
+    if not isinstance(equipment_description,str) or len(equipment_description)>400:
+        raise ValueError('Описание инвентаря: не более 400 символов')
+    equipment_description=equipment_description.strip() if vals['equipment']=='homegear' else ''
     with db() as c:
         c.execute('INSERT INTO profiles(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
         c.execute('''UPDATE profiles SET goal=%s,level=%s,days=%s,equipment=%s,
             age_group=%s,minutes=%s,clearance=%s,updated_at=NOW() WHERE chat_id=%s''',
             tuple(vals[k] for k in allowed_fields)+('yes' if health['affected'] else 'none',chat))
+        c.execute('''INSERT INTO profile_equipment(chat_id,description) VALUES(%s,%s)
+            ON CONFLICT(chat_id) DO UPDATE SET description=EXCLUDED.description,
+            updated_at=NOW()''',(chat,equipment_description))
         c.execute('''INSERT INTO user_agreements(chat_id,version,terms_accepted_at,privacy_ack_at,health_notice_ack_at)
             VALUES(%s,%s,NOW(),NOW(),NOW()) ON CONFLICT(chat_id) DO UPDATE SET
             version=EXCLUDED.version,terms_accepted_at=NOW(),privacy_ack_at=NOW(),
@@ -2546,17 +2625,17 @@ def day_title(p,day):
     count = sessions(p) if p.get('days') and p.get('level') else 2
     if count >= 5:
         if day in 'BDFG':
-            return 'Лёгкая активность / восстановление'
+            return 'Кардио и подвижность' if p.get('equipment')=='gym' else 'Восстановление дома'
         if p.get('equipment') == 'gym':
             index = {'A': 'A', 'C': 'B', 'E': 'C'}.get(day, 'A')
             return GYM_TITLES[3].get(goal, GYM_TITLES[3]['general']).get(index, 'Всё тело')
-        return {'A': 'Всё тело', 'C': 'Спина и корпус', 'E': 'Всё тело'}.get(day, 'Всё тело')
+        return {'A': 'Всё тело', 'C': 'Спина и пресс', 'E': 'Всё тело'}.get(day, 'Всё тело')
     if p.get('equipment') == 'gym':
         library_count = count if count >= 2 else 2
         return GYM_TITLES[library_count].get(goal, GYM_TITLES[library_count]['general']).get(day, 'Всё тело')
     if count <= 2:
-        return 'Всё тело' if day == 'A' else ('Кардио и всё тело' if goal in ('loss', 'endurance') else 'Всё тело')
-    return {'A': 'Ноги и корпус', 'B': 'Спина и плечи', 'C': 'Всё тело', 'D': 'Ноги и спина'}.get(day, 'Всё тело')
+        return 'Всё тело' if day == 'A' else ('Всё тело и кардио' if goal in ('loss', 'endurance') else 'Всё тело')
+    return {'A': 'Ноги и пресс', 'B': 'Спина и плечи', 'C': 'Всё тело', 'D': 'Ноги и спина'}.get(day, 'Всё тело')
 
 
 def ensure_schedule(chat, cycle, count, start_date):
@@ -2737,7 +2816,7 @@ def ai_quota(chat):
 
 
 def mini_ai(chat,question):
-    require_tier(chat,'max')
+    require_tier(chat,'comfort')
     if profile(chat).get('age_group')!='adult':raise ValueError('Сначала пройди анкету 18+')
     if not YANDEX_KEY or not FOLDER_ID:raise ValueError('ИИ пока недоступен')
     consent,enabled=ai_state(chat)
@@ -2760,6 +2839,17 @@ def mini_ai(chat,question):
 
 
 def mini_history_detail(chat,wid):
+    if wid < 0:
+        with db() as conn:
+            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr FROM cardio_sessions
+                WHERE id=%s AND chat_id=%s''',(-wid,chat)).fetchone()
+        if not cardio:
+            raise ValueError('Запись кардио не найдена')
+        dt,minutes,hr=cardio
+        items=[{'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
+        if hr is not None:
+            items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
+        return {'date':dt.strftime('%d.%m.%Y'),'title':'Кардио','items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
@@ -2780,6 +2870,7 @@ def mini_state(chat, just_finished=False):
         'profile': {k: LABELS.get((k, p.get(k)), '—') for k in FIELDS},
         'profile_raw': {k:p.get(k) for k in FIELDS},
         'health_profile': h,
+        'equipment_description': p.get('equipment_description',''),
         'needs_health_profile': not bool(h),
         'agreed': has_agreement(chat),
         'agreement_version': AGREEMENT_VERSION,
@@ -2866,8 +2957,19 @@ def mini_state(chat, just_finished=False):
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
-    result['history']=[{'id':wid,'date':dt.strftime('%d.%m.%Y'),
-         'title':manual_title or day_title_for_code(chat,day)} for wid,day,dt,manual_title in history_rows]
+        cardio_rows=c.execute('''SELECT id,performed_at,minutes FROM cardio_sessions
+          WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
+    combined=[{'id':wid,'date':dt.strftime('%d.%m.%Y'),
+        'sort_at':dt.isoformat(),'type':'workout',
+        'title':manual_title or day_title_for_code(chat,day)}
+        for wid,day,dt,manual_title in history_rows]
+    combined.extend({'id':-cid,'date':dt.strftime('%d.%m.%Y'),
+        'sort_at':dt.isoformat(),'type':'cardio',
+        'title':f'Кардио · {mins} мин'} for cid,dt,mins in cardio_rows)
+    combined.sort(key=lambda row:row['sort_at'],reverse=True)
+    for entry in combined:
+        entry.pop('sort_at')
+    result['history']=combined[:20]
     result['stats']['cardio7']=cardio
     result['metrics']=metrics(chat)
     result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(result['metrics']))
@@ -2962,13 +3064,13 @@ def mini_aux(chat,action,body):
               (chat,mins,hr or None))
         return True
     if action=='ai_consent':
-        require_tier(chat,'max')
+        require_tier(chat,'comfort')
         if body.get('agreed') is not True:raise ValueError('Нужно согласие')
         if profile(chat).get('age_group')!='adult':raise ValueError('Только для 18+')
         ai_enable(chat,True)
         return True
     if action=='ai_ask':
-        require_tier(chat,'max')
+        require_tier(chat,'comfort')
         return mini_ai(chat,body.get('question'))
     return None
 
@@ -3159,7 +3261,7 @@ def legal_doc(content):
 
 def analyze_nutrition_report(chat, data_bytes, filename, mime):
     """Return a plain Russian analysis. No original uploaded file is stored."""
-    require_tier(chat,'max')
+    require_tier(chat,'comfort')
     if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
         raise ValueError('Сначала пройди анкету')
     if not all(ai_state(chat)):
@@ -3247,7 +3349,8 @@ def mini_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
-    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script></body>', 1)
+    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-382.css?v=38.2.0"></head>', 1)
+    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script><script src="/mini/ux-382.js?v=38.2.0"></script></body>', 1)
     response = make_response(markup)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'
@@ -3268,6 +3371,22 @@ def mini_ux_381_css():
 def mini_ux_381_js():
     response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-381.js'), mimetype='text/javascript', max_age=3600))
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@APP.get('/mini/ux-382.css')
+def mini_ux_382_css():
+    response=make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-382.css'),
+        mimetype='text/css',max_age=3600))
+    response.headers['X-Content-Type-Options']='nosniff'
+    return response
+
+
+@APP.get('/mini/ux-382.js')
+def mini_ux_382_js():
+    response=make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-382.js'),
+        mimetype='text/javascript',max_age=3600))
+    response.headers['X-Content-Type-Options']='nosniff'
     return response
 
 
@@ -3464,6 +3583,8 @@ def mini_api():
             payload = {'ok':True, 'data':mini_state(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
+        elif action == 'equipment_analyze':
+            payload = {'ok':True, 'equipment':analyze_equipment_description(data)}
         elif action in ('detail','ai_ask','feedback'):
             payload = {'ok':True, **mini_aux(chat,action,data)}
         elif action == 'save_metrics':
