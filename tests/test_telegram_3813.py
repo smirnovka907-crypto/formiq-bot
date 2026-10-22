@@ -50,18 +50,43 @@ class Telegram3813(unittest.TestCase):
             send.assert_not_called()
             send_photo.assert_not_called()
 
-    def test_welcome_photo_and_inline_fallback(self):
-        with patch.object(self.botmod.BOT, 'send_photo') as photo:
+    def test_welcome_photo_is_the_only_new_message(self):
+        from types import SimpleNamespace
+        with patch.object(self.botmod.BOT, 'send_photo',
+                          return_value=SimpleNamespace(message_id=57)) as photo, \
+             patch.object(self.botmod.BOT, 'edit_message_reply_markup') as edit, \
+             patch.object(self.botmod.BOT, 'send_message') as text_message:
             self.botmod.home(123, welcome_image=True)
-            photo.assert_called_once()
-            args = photo.call_args
-            self.assertTrue(args.args[1].getvalue().startswith(b'\xff\xd8'))
-            self.assertIsInstance(args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        photo.assert_called_once()
+        self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\\xff\\xd8'))
+        self.assertIsInstance(photo.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
+        edit.assert_called_once()
+        self.assertEqual(edit.call_args.kwargs['message_id'], 57)
+        self.assertIsInstance(edit.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        text_message.assert_not_called()
 
-    def test_legacy_keyboard_clears_only_via_reply_remove(self):
-        with patch.object(self.botmod.BOT, 'send_message') as message:
-            self.botmod.remove_obsolete_reply_keyboard(123)
-            self.assertIsInstance(message.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
+    def test_plain_welcome_cleans_old_keyboard_without_service_text(self):
+        from types import SimpleNamespace
+        with patch.object(self.botmod.BOT, 'send_message',
+                          return_value=SimpleNamespace(message_id=58)) as send, \
+             patch.object(self.botmod.BOT, 'edit_message_reply_markup') as edit:
+            self.botmod.home(123, welcome_image=False)
+        send.assert_called_once()
+        self.assertIn('FORMIQ', send.call_args.args[1])
+        self.assertNotIn('Кнопки запуска', send.call_args.args[1])
+        self.assertIsInstance(send.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
+        self.assertIsInstance(edit.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+
+    def test_fallback_if_telegram_refuses_inline_edit(self):
+        from types import SimpleNamespace
+        with patch.object(self.botmod.BOT, 'send_photo',
+                          return_value=SimpleNamespace(message_id=59)), \
+             patch.object(self.botmod.BOT, 'edit_message_reply_markup',
+                          side_effect=RuntimeError('edit failed')), \
+             patch.object(self.botmod.BOT, 'send_message') as send:
+            self.botmod.home(123, welcome_image=True)
+        self.assertEqual(send.call_count, 1)
+        self.assertIsInstance(send.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
 
 
 if __name__=='__main__':
