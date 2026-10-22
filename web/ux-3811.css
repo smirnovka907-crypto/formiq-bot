@@ -1,0 +1,34 @@
+/* FORMIQ 38.1.1 small UX refinements */
+.fq-health-choices[hidden],#health_fallback[hidden],#fq_optional_health[hidden],
+#health_ai_consent:disabled,#fq-health-description-box[hidden]{display:none!important}
+.fq-health-hint{font-size:14px!important;color:var(--muted)!important;
+ margin:0 0 16px!important;line-height:1.5!important}
+#fq-health-description-box{display:block!important}
+#fq-health-description-box textarea{display:block!important;min-height:150px!important;
+ border-radius:16px!important;background:var(--soft)!important;
+ color:var(--text)!important;border:1px solid var(--line)!important}
+#fq-health-description-box label[hidden],
+#fq-health-description-box button[hidden]{display:none!important}
+#fq-feedback-quick{padding:2px 0 8px!important;margin-bottom:4px}
+#fq-feedback-quick[hidden]{display:none!important}
+.fq-feedback-quick-button{
+ display:flex;align-items:center;justify-content:space-between;gap:12px;
+ width:100%;min-height:52px;padding:12px 16px;
+ border:1px solid var(--line);border-radius:14px;
+ font:650 16px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+ text-align:left;background:var(--surface);color:var(--text);
+ cursor:pointer;box-shadow:none
+}
+.fq-feedback-quick-button span{color:var(--blue);font-size:20px}
+#fq-version-footer{
+ padding:24px 0 max(18px,env(safe-area-inset-bottom))!important;
+ margin-top:12px!important;
+ text-align:center!important;color:var(--muted)!important;
+ font:500 12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important;
+ letter-spacing:.02em!important
+}
+.fq-tech-preview{display:block;width:100%;border-radius:14px;overflow:hidden;
+ margin:12px 0;aspect-ratio:16/10;object-fit:cover;background:var(--soft)}
+.fq-tech-caption{font:400 12px/1.4 -apple-system,BlinkMacSystemFont,Roboto,Arial,sans-serif;
+ color:var(--muted);text-align:left;margin:6px 0 12px}
+.fq-visual-note{font-size:13px;color:var(--muted)}
