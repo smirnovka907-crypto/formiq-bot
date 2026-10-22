@@ -46,7 +46,7 @@ class TelegramHotfixTests(unittest.TestCase):
         self.assertEqual(buttons[1].url, "https://example.invalid/wake")
 
     def test_start_posts_new_photo_and_keyboard(self):
-        with patch.object(self.bot.BOT, "send_photo") as photo, \\
+        with patch.object(self.bot.BOT, "send_photo") as photo, \
              patch.object(self.bot.BOT, "send_message") as message:
             self.bot.home(171, welcome_image=True)
         self.assertEqual(photo.call_count, 1)
@@ -62,7 +62,7 @@ class TelegramHotfixTests(unittest.TestCase):
         msg = SimpleNamespace(
             chat=SimpleNamespace(type="private", id=171),
             text="Разбудить")
-        with patch.object(self.bot.BOT, "send_message") as send, \\
+        with patch.object(self.bot.BOT, "send_message") as send, \
              patch.object(self.bot, "home") as home:
             self.bot.plain_text(msg)
         self.assertFalse(home.called)
