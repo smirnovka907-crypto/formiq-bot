@@ -62,6 +62,36 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(result.json['patch']['workout']['id'], 7)
         self.assertNotIn('data', result.json)
 
+    def test_feedback_and_version_assets(self):
+        client=self.app.test_client()
+        res=client.get('/mini')
+        self.assertEqual(res.status_code,200)
+        self.assertIn(b'ux-3811.js',res.data)
+        self.assertIn(b'ux-3811.css',res.data)
+        js=client.get('/mini/ux-3811.js')
+        self.assertEqual(js.status_code,200)
+        self.assertIn(b'fq-feedback-quick',js.data)
+        self.assertIn(b'prepareHealthSubmission',js.data)
+        self.assertIn(b'FORMIQ',js.data)
+        css=client.get('/mini/ux-3811.css')
+        self.assertEqual(css.status_code,200)
+        self.assertIn(b'fq-version-footer',css.data)
+
+    def test_exercise_photo_is_present_and_specific(self):
+        client=self.app.test_client()
+        photos=('chair_squat','partial_squat','wall_push','bridge')
+        for key in photos:
+            r=client.get('/mini/technique/'+key)
+            self.assertEqual(r.status_code,200)
+            self.assertIn(b'class="fq-exercise-photo"',r.data)
+            self.assertIn(b'<img src="https://',r.data)
+            self.assertIn(b'alt=',r.data)
+        unknown=client.get('/mini/technique/unknown_fake')
+        self.assertEqual(unknown.status_code,404)
+        text_only=client.get('/mini/technique/lat_pull')
+        self.assertEqual(text_only.status_code,200)
+        self.assertIn(b'fq-photo-pending',text_only.data)
+
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
         self.assertIn(b'38.1.1', self.app.test_client().get('/').data)
