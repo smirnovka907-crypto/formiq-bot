@@ -22,7 +22,7 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'ux-381.css', page.data)
         self.assertIn(b'ux-381.js', page.data)
-        self.assertIn(b'Отзывы и предложения', page.data)
+        self.assertIn('Отзывы и предложения'.encode('utf-8'), page.data)
         for url, mime, snippet in [
             ('/mini/ux-381.css', 'text/css', b'.today-hero'),
             ('/mini/ux-381.js', 'javascript', b'health-refine'),
