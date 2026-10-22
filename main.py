@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.2.1'
+VERSION = '38.3.0'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -861,30 +861,33 @@ def mini_entry(chat, mid=None):
     home(chat, mid)
 
 
-def home(chat, mid=None, welcome_image=False):
-    """Clean welcome: image + short description, no duplicate launch buttons.
+def formiq_chat_keyboard():
+    """Two actual Telegram inline buttons, below the welcome message."""
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    keyboard.row(
+        types.InlineKeyboardButton('FormIQ',
+            web_app=types.WebAppInfo(url=BASE_URL + '/mini')),
+        types.InlineKeyboardButton('Разбудить', callback_data='wake')
+    )
+    return keyboard
 
-    Remove legacy reply keyboards. The only Mini App entry is the persistent
-    Telegram menu button configured in configure_formiq_bot_profile().
-    """
-    text = ('<b>FORMIQ · AI Coach</b>\n'
-            'Твой тренировочный план, результаты и AI-помощник — в одном приложении.\n'
-            'Подстроим занятия под твою цель и ритм.')
-    sent = None
+
+def home(chat, mid=None, welcome_image=False):
+    """One welcome message; no duplicate bottom Web App menu button."""
+    markup = formiq_chat_keyboard()
+    caption = ('<b>FORMIQ · AI Coach</b>\n'
+               'Тренировки, питание и прогресс — в одном приложении.\n'
+               'Персональный план и AI-помощник под твою цель.')
     if welcome_image:
         from welcome_art import welcome_jpeg
         picture = BytesIO(welcome_jpeg())
-        picture.name = 'formiq-welcome-3814.jpg'
+        picture.name = 'formiq-welcome.jpg'
         try:
-            sent = BOT.send_photo(chat, picture, caption=text, parse_mode='HTML',
-                                  reply_markup=types.ReplyKeyboardRemove())
+            return BOT.send_photo(chat, picture, caption=caption, parse_mode='HTML',
+                                  reply_markup=markup)
         except Exception:
-            LOG.exception('Could not send intro visual; sending compact text instead')
-    if sent is None:
-        sent = BOT.send_message(chat, text, parse_mode='HTML',
-                                reply_markup=types.ReplyKeyboardRemove())
-    return sent
-
+            LOG.exception('Welcome image failed; sending text with same buttons')
+    return BOT.send_message(chat, caption, parse_mode='HTML', reply_markup=markup)
 
 def progress_hub(chat, mid=None):
     history(chat, mid)
@@ -3628,9 +3631,9 @@ def configure_formiq_bot_profile():
     global _FORMIQ_PROFILE_CONFIGURED
     if _FORMIQ_PROFILE_CONFIGURED:
         return
-    bot_description = ('FORMIQ — персональные тренировки в Telegram. '
-                       'Подберём программу под твою цель, ритм и прогресс. '
-                       'Открывай приложение одной кнопкой «Открыть FORMIQ» внизу чата.')
+    bot_description = ('FORMIQ — тренировки, питание и прогресс в Telegram. '
+                       'Подберём программу под твою цель. '
+                       'Открывай приложение через кнопку FormIQ под приветствием.')
     short_description = ('FORMIQ: персональные тренировки, прогресс и AI-помощник.')
     assert len(bot_description) <= 512 and len(short_description) <= 120
     for code in (None, 'ru'):
@@ -3640,9 +3643,7 @@ def configure_formiq_bot_profile():
         except Exception:
             LOG.exception('Telegram description update failed (%s)', code)
     try:
-        BOT.set_chat_menu_button(menu_button=types.MenuButtonWebApp(
-            text='Открыть FORMIQ',
-            web_app=types.WebAppInfo(url=BASE_URL + '/mini')))
+        BOT.set_chat_menu_button(menu_button=types.MenuButtonDefault())
         BOT.delete_my_commands()
         _FORMIQ_PROFILE_CONFIGURED = True
     except Exception:
