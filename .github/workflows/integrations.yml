@@ -1,0 +1,20 @@
+name: Integrations (offline)
+on:
+  push:
+    branches:
+      - feature/health-integrations-38.1.0
+  workflow_dispatch:
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile integration modules
+        run: python -m py_compile integrations/fatsecret.py integrations/garmin.py tests/test_integrations.py
+      - name: Run integration tests
+        run: python -m unittest discover -s tests -p test_integrations.py -v
