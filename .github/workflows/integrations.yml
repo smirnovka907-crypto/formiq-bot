@@ -3,7 +3,7 @@ on:
   push:
     branches:
       - feature/health-integrations-38.1.0
-      - release/formiq-38.1.1
+      - release/formiq-38.1.2
       - main
   workflow_dispatch:
 jobs:
