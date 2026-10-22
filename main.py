@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.1'
+VERSION = '38.1.2'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -3256,14 +3256,26 @@ def mini_ux_3811_js():
 # Preserve human-readable technique for every exercise; never substitute
 # an unrelated photo simply to fill space.
 EXERCISE_PHOTOS = {
-    'chair_squat': ('https://static.wixstatic.com/media/956a76_f85e1907150b4ef782c85bc5feef7015~mv2.jpg/v1/fill/w_769%2Ch_521%2Cal_c%2Clg_1%2Cq_85/956a76_f85e1907150b4ef782c85bc5feef7015~mv2.jpg',
-                    'Rehab United'),
-    'partial_squat': ('https://image.pim.regionh.dk/images/PROD/www.nordsjaellandshospital.dk/12107/St%C3%A5ende%C3%B8velse5.jpg',
-                      'Nordsjællands Hospital'),
-    'wall_push': ('https://www.berkshirehealthcare.nhs.uk/media/hegifzeh/wall-push-ups.jpg',
-                  'Berkshire Healthcare NHS'),
-    'bridge': ('https://a.storyblok.com/f/304083/768x512/a47fa7df02/charlotte-bridging.webp',
-                'Carter & George'),
+    "chair_squat": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Chair_Squat/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "incline_push": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Push-Up/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "bridge": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Butt_Lift_Bridge/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "calf": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Standing_Calf_Raises/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "dead_bug": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dead_Bug/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "leg_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "lat_pull": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Lat_Pulldown/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "chest_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leverage_Chest_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "seated_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "db_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Shoulder_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "leg_curl": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Lying_Leg_Curls/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "leg_ext": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Extensions/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "cable_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
+    "partial_squat": ("https://image.pim.regionh.dk/images/PROD/www.nordsjaellandshospital.dk/12107/St%C3%A5ende%C3%B8velse5.jpg", "Nordsjællands Hospital"),
+    "wall_push": ("https://www.berkshirehealthcare.nhs.uk/media/hegifzeh/wall-push-ups.jpg", "Berkshire Healthcare NHS"),
+    "bird": ("https://images.squarespace-cdn.com/content/v1/5e74bdfb17cf424c9cb44beb/9d5fb150-4444-47bd-8761-82772e932294/Table%2BTop%2B.jpg", "First Line Physio"),
+    "step": ("https://assets.nhs.uk/nhsuk-cms/images/NHSC_0518_Step-up_SmmhoMf.width-1534.jpg", "NHS"),
+    "wall_plank": ("https://www.physiotherapie-ndh.de/fileadmin/user_upload/militaryPlank-im-Stand.jpg", "Physiotherapie Silvio Krebs"),
+    "side_step": ("https://assets.nhs.uk/nhsuk-cms/images/NHSC_0518_Sideways-walking.width-1534.jpg", "NHS"),
+    "hip_hinge": ("https://cdn-ak.f.st-hatena.com/images/fotolife/b/bodybase/20220812/20220812145801.jpg", "Bodybase"),
 }
 
 
@@ -3297,7 +3309,11 @@ p{margin:0 0 10px}small{font-size:13px;color:var(--muted)}</style></head><body><
             '" alt="Фото выполнения: ' + title + '" loading="lazy" '
             'referrerpolicy="no-referrer" decoding="async">'
             '<figcaption>Пример движения · фото: ' + html.escape(credit) +
-            '. Следуй инструкции и выбирай комфортную амплитуду.</figcaption></figure>'
+            '. Следуй инструкции и выбирай комфортную амплитуду.'
+            + (' <a href="https://github.com/yuhonas/free-exercise-db" '
+               'target="_blank" rel="noopener noreferrer">Источник</a>'
+               if "Free Exercise DB" in credit else '')
+            + '</figcaption></figure>'
         )
     else:
         photo_block = (
