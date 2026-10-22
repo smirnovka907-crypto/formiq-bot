@@ -64,7 +64,7 @@ class RouteTests(unittest.TestCase):
 
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
-        self.assertIn(b'38.1.0-rc1', self.app.test_client().get('/').data)
+        self.assertIn(b'38.1.1', self.app.test_client().get('/').data)
 
 
 if __name__ == '__main__':
