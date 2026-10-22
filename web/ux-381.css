@@ -1,0 +1,140 @@
+/* FORMIQ 38.1 — one compact, accessible iOS-inspired design layer.
+   Intentionally last in the cascade: supersedes legacy 37.x/38.0 skins. */
+:root{
+  --fq-accent:#007aff;--fq-radius:16px;--fq-pad:16px;--fq-title:24px;
+  --fq-section:20px;--fq-text:16px;--fq-small:14px;
+  --bg:#f5f5f7;--surface:#fff;--soft:#f0f0f3;
+  --text:#1c1c1e;--muted:#585864;--line:rgba(60,60,67,.16);
+  --blue:#006bd6;--shadow:none;--fq-control-height:50px;
+  color-scheme:light
+}
+html[data-theme="dark"]{
+  --bg:#000;--surface:#1c1c1e;--soft:#2c2c2e;
+  --text:#f5f5f7;--muted:#c4c4cc;--line:rgba(255,255,255,.20);
+  --blue:#0a84ff;--shadow:none;color-scheme:dark
+}
+html,html body{background:var(--bg)!important;color:var(--text)!important}
+html body{font:400 16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif!important;
+  letter-spacing:0!important;overflow-x:hidden}
+body::before,body::after{display:none!important}
+main{max-width:620px!important}
+main header{background:transparent!important;padding:15px 1px 11px!important}
+main header .brand{font-size:23px!important;letter-spacing:-.035em!important;font-weight:750!important}
+main header .brand::after{display:none!important}
+main header .brand img{width:32px;height:32px;box-shadow:none!important}
+#profileLink{background:var(--soft)!important;border:1px solid var(--line)!important;
+  color:var(--text)!important;min-width:48px;min-height:48px;border-radius:14px!important}
+#tabs{background:var(--soft)!important;border:0!important;border-radius:16px!important;
+ padding:4px!important;gap:4px!important;box-shadow:none!important;margin-bottom:14px!important}
+#tabs button{font:650 15px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif!important;
+ color:var(--muted)!important;border:0!important;border-radius:12px!important;
+ background:transparent!important;min-height:48px!important;padding:10px 4px!important}
+#tabs button::before,#tabs button::after{display:none!important}
+#tabs button.sel{background:var(--surface)!important;color:var(--text)!important;
+ border:0!important;box-shadow:0 1px 3px rgba(0,0,0,.10)!important}
+.card,.fq-onboard,.fq-start-benefits{background:var(--surface)!important;color:var(--text)!important;
+ border:1px solid var(--line)!important;border-radius:20px!important;
+ box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+ padding:18px!important;margin:12px 0!important}
+.card::before,.card::after,.fq-onboard::before{display:none!important}
+.title,.fq-onboard .title{font-size:24px!important;font-weight:750!important;letter-spacing:-.035em!important;
+ line-height:1.2!important;color:var(--text)!important}
+.fq-dashboard-heading strong{font-size:20px!important;font-weight:750!important;letter-spacing:-.03em!important}
+.eyebrow{font-size:12px!important;letter-spacing:.03em!important;font-weight:650!important;text-transform:none!important;color:var(--muted)!important}
+.subtitle,.small,.tip{font-size:14px!important;color:var(--muted)!important;line-height:1.5!important}
+.btn,.btn.slim,.welcome button,.fq-relaunch .fq-start-action .btn,
+html[data-theme="dark"] .btn,html[data-theme="dark"] .btn:not(.ghost),
+html[data-theme="dark"] .fq-relaunch .fq-start-action .btn{
+  min-height:50px!important;border-radius:14px!important;font-size:16px!important;
+  font-weight:650!important;line-height:1.25!important;letter-spacing:0!important;
+  background:var(--blue)!important;color:#fff!important;
+  border:1px solid transparent!important;box-shadow:none!important;
+  transition:background-color .15s ease,opacity .15s ease!important
+}
+.btn.ghost,.btn.slim.ghost,html[data-theme="dark"] .btn.ghost,
+.fq-return,.list-btn{
+  background:var(--soft)!important;color:var(--text)!important;
+  border:1px solid var(--line)!important;box-shadow:none!important;
+  min-height:48px!important;border-radius:14px!important;font-size:16px!important;
+  font-weight:600!important
+}
+.btn.danger{background:var(--dangerbg)!important;color:var(--danger)!important}
+.btn:disabled{opacity:.64!important;cursor:progress}
+.btn:focus-visible,#tabs button:focus-visible,.list-btn:focus-visible,
+textarea:focus-visible,input:focus-visible,select:focus-visible{
+ outline:3px solid var(--blue)!important;outline-offset:2px!important
+}
+.field label,.fq-onboard .field label{color:var(--muted)!important;font-size:14px!important;font-weight:600!important}
+.field input,.field select,.field textarea,.fq-onboard input:not([type=range]):not([type=radio]):not([type=checkbox]),
+.fq-onboard select,.fq-onboard textarea{
+ min-height:48px!important;background:var(--soft)!important;border:1px solid var(--line)!important;
+ color:var(--text)!important;border-radius:12px!important;font-size:16px!important;
+ box-shadow:none!important
+}
+.fq-onboard .fq-range-block{background:none!important;border:0!important;padding:8px 0!important}
+.fq-onboard .fq-range-top strong{color:var(--text)!important}
+.fq-onboard .fq-health-choices label,.fq-health-panel,.fq-ai-result{
+ background:var(--soft)!important;border:1px solid var(--line)!important;
+ color:var(--text)!important;border-radius:14px!important;box-shadow:none!important
+}
+.fq-health-confirm,.fq-ai-result p{font-size:14px!important;line-height:1.5!important}
+.fq-theme-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px!important}
+.fq-theme-option{font-size:14px!important;background:var(--soft)!important;color:var(--text)!important;
+ border:1px solid var(--line)!important;border-radius:12px!important;box-shadow:none!important}
+.fq-theme-option.sel{border:2px solid var(--blue)!important;box-shadow:none!important}
+.fq-dashboard-metrics{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
+.fq-stat{background:var(--surface)!important;border:1px solid var(--line)!important;
+ border-radius:16px!important;box-shadow:none!important;backdrop-filter:none!important;padding:16px!important}
+.fq-stat::before,.fq-stat::after{display:none!important}
+.fq-stat-number{font-size:26px!important;font-weight:750!important;color:var(--text)!important}
+.fq-stat-label{font-size:13px!important;color:var(--muted)!important}
+.today-hero,html[data-theme="dark"] .today-hero,html[data-fq-theme] .today-hero{
+ background:var(--surface)!important;border:1px solid var(--line)!important;
+ color:var(--text)!important;border-radius:20px!important;box-shadow:none!important;
+ min-height:unset!important;padding:22px 18px!important
+}
+.today-hero::before,.today-hero::after{display:none!important}
+.today-hero .hero-name{font-size:26px!important;line-height:1.2!important;
+ font-weight:750!important;letter-spacing:-.035em!important;color:var(--text)!important;
+ max-width:100%!important}
+.today-hero .hero-meta{color:var(--muted)!important;font-size:14px!important}
+.today-hero .hero-actions{max-width:100%!important;width:100%!important;margin-top:18px!important}
+.today-hero .hero-actions .btn{background:var(--blue)!important;color:#fff!important;
+ width:100%!important;max-width:none!important}
+.today-hero .hero-actions .text-link{color:var(--blue)!important;font-size:14px!important;
+ min-height:44px!important}
+.fq-feedback-link{margin:12px 0 8px!important;display:block!important}
+.fq-feedback-link .list-btn{width:100%;padding:14px!important}
+.fq-ai-entry{margin:8px 0!important}
+.fq-ai-entry .list-btn{width:100%;padding:14px!important}
+.fq-start-hero.fq-relaunch,html[data-fq-theme] .fq-start-hero.fq-relaunch{
+ min-height:360px!important;background:var(--surface)!important;
+ color:var(--text)!important;border:1px solid var(--line)!important;border-radius:20px!important;
+ padding:22px!important;box-shadow:none!important;display:flex!important;justify-content:space-between!important
+}
+.fq-start-hero::before,.fq-start-hero::after,.fq-speed-art,.fq-start-kicker::before{display:none!important}
+.fq-relaunch .fq-start-copy{padding-top:25px!important}
+.fq-relaunch .fq-start-copy h1{font-size:36px!important;color:var(--text)!important;line-height:1.12!important}
+.fq-relaunch .fq-start-copy h1 em{color:var(--blue)!important;font-style:normal!important}
+.fq-relaunch .fq-start-copy p{color:var(--muted)!important;font-size:16px!important}
+.fq-start-kicker,.fq-start-detail,.fq-start-edition{color:var(--muted)!important}
+.fq-health-followup{display:block;margin:12px 0 0}
+.fq-health-followup textarea{min-height:84px!important;width:100%}
+.fq-health-followup .btn{margin-top:10px!important}
+.fq-optional-health{background:transparent;border:1px solid var(--line);border-radius:14px;padding:0 12px;margin:12px 0}
+.fq-optional-health summary{padding:14px 0;cursor:pointer;font-size:14px;font-weight:600}
+.fq-optional-health .two{padding:0 0 12px}
+.notice{background:var(--soft)!important;color:var(--text)!important;border-radius:14px!important;font-size:14px!important}
+.notice.error{background:var(--dangerbg)!important;color:var(--danger)!important}
+.notice.ok{background:var(--soft)!important;color:var(--text)!important}
+.fq-wait{opacity:.7!important}
+@media(max-width:385px){
+ body{padding:0 12px calc(24px + env(safe-area-inset-bottom))!important}
+ .card,.fq-onboard{padding:15px!important}
+ #tabs button{font-size:14px!important}
+ .fq-dashboard-metrics{gap:9px!important}
+ .fq-theme-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+}
+@media(prefers-reduced-motion:reduce){
+ *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
