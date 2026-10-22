@@ -68,7 +68,7 @@ class Release382Tests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'web' / 'ux-382.js').read_text()
         marker = '/* Approved Telegram Mini App fullscreen startup'
         self.assertIn(marker, source)
-        fragment = marker + source.split(marker, 1)[1].rsplit('\\n})();', 1)[0]
+        fragment = marker + source.split(marker, 1)[1].rsplit('})();', 1)[0]
         runner = r'''
 const vm=require('vm'), assert=require('assert');
 const fragment=process.argv[1];
