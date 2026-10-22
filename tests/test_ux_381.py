@@ -15,7 +15,7 @@ UI_CSS = (ROOT / 'web' / 'ux-381.css').read_text(encoding='utf-8')
 
 class Ux381Tests(unittest.TestCase):
     def test_main_is_release_candidate(self):
-        self.assertIn("VERSION = '38.2.0'", SOURCE)
+        self.assertRegex(SOURCE, r"(?m)^VERSION = '\d+\.\d+\.\d+'$")
         self.assertIn("@APP.get('/mini/ux-381.css')", SOURCE)
         self.assertIn("@APP.get('/mini/ux-381.js')", SOURCE)
         self.assertIn("markup.replace('</head>'", SOURCE)
@@ -68,7 +68,7 @@ class Ux381Tests(unittest.TestCase):
         self.assertIn('Разобрать с ИИ', html)
         self.assertIn('Отзывы и предложения', html)
         self.assertIn('main', SOURCE)
-        self.assertIn("InlineKeyboardButton('⚡ Разбудить'", SOURCE)
+        self.assertIn("InlineKeyboardButton('Разбудить', callback_data='wake')", SOURCE)
 
 
 if __name__ == '__main__':

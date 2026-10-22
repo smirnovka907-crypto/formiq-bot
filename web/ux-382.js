@@ -124,6 +124,6 @@ renderCoach=function(){
 show=function(markup){
   previousShow382(markup);
   const foot=$('fq-version-footer');
-  if(foot)foot.textContent='FORMIQ 38.2.0';
+  if(foot)foot.textContent='FORMIQ '+(document.querySelector('meta[name="formiq-version"]')?.getAttribute('content') || '—');
 };
 })();
