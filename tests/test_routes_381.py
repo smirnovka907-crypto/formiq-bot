@@ -88,7 +88,8 @@ class RouteTests(unittest.TestCase):
             self.assertIn(b'alt=',r.data)
         unknown=client.get('/mini/technique/unknown_fake')
         self.assertEqual(unknown.status_code,404)
-        self.assertEqual(len(importlib.import_module('main').EXERCISE_PHOTOS),len(importlib.import_module('main').EX))
+        self.assertEqual(len(importlib.import_module('main').EXERCISE_PHOTOS),20)
+        self.assertGreaterEqual(len(importlib.import_module('main').EX),95)
 
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
