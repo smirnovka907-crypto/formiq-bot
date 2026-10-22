@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.3.0'
+VERSION = '38.3.1'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -873,7 +873,7 @@ def formiq_chat_keyboard():
 
 
 def home(chat, mid=None, welcome_image=False):
-    """One welcome message; no duplicate bottom Web App menu button."""
+    """Show an approved banner with exactly two clickable Telegram inline buttons."""
     markup = formiq_chat_keyboard()
     caption = ('<b>FORMIQ · AI Coach</b>\n'
                'Тренировки, питание и прогресс — в одном приложении.\n'
@@ -886,8 +886,9 @@ def home(chat, mid=None, welcome_image=False):
             return BOT.send_photo(chat, picture, caption=caption, parse_mode='HTML',
                                   reply_markup=markup)
         except Exception:
-            LOG.exception('Welcome image failed; sending text with same buttons')
+            LOG.exception('Welcome image failed; sending text with same two buttons')
     return BOT.send_message(chat, caption, parse_mode='HTML', reply_markup=markup)
+
 
 def progress_hub(chat, mid=None):
     history(chat, mid)
