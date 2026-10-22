@@ -863,7 +863,7 @@ def formiq_chat_keyboard():
     """Two persistent actions; WebApp opening can vary by Telegram client."""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
     keyboard.row(
-        types.KeyboardButton('FormIQ', web_app=types.WebAppInfo(BASE_URL + '/mini')),
+        types.KeyboardButton('FormIQ'),
         types.KeyboardButton('Разбудить')
     )
     return keyboard
