@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.3'
+VERSION = '38.1.4'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -873,28 +873,37 @@ def formiq_chat_keyboard():
     return keyboard
 
 
-def remove_obsolete_reply_keyboard(chat):
-    """One-time migration away from broken persistent reply WebApp keyboard."""
-    return BOT.send_message(
-        chat, 'Кнопки запуска FORMIQ теперь под приветствием 👇',
-        reply_markup=types.ReplyKeyboardRemove())
-
-
 def home(chat, mid=None, welcome_image=False):
-    """Clean chat entrypoint; the app owns all other navigation."""
+    """One polished welcome message: clear obsolete reply keyboard, attach inline app actions.
+
+    Telegram cannot remove a persistent reply keyboard AND supply inline buttons
+    with the same send call. Send welcome with ReplyKeyboardRemove, then edit
+    that same message to attach the inline launch buttons.
+    """
     markup = formiq_chat_keyboard()
     text = ('<b>FORMIQ · AI Coach</b>\n'
             'Твой тренировочный план, результаты и AI-помощник — в одном приложении.\n'
             'Подстроим занятия под твою цель и ритм.')
+    sent = None
     if welcome_image:
         from welcome_art import welcome_jpeg
         picture = BytesIO(welcome_jpeg())
-        picture.name = 'formiq-welcome-3813.jpg'
+        picture.name = 'formiq-welcome-3814.jpg'
         try:
-            return BOT.send_photo(chat, picture, caption=text, parse_mode='HTML',reply_markup=markup)
+            sent = BOT.send_photo(chat, picture, caption=text, parse_mode='HTML',
+                                  reply_markup=types.ReplyKeyboardRemove())
         except Exception:
             LOG.exception('Could not send intro visual; sending compact text instead')
-    return BOT.send_message(chat,text,parse_mode='HTML',reply_markup=markup)
+    if sent is None:
+        sent = BOT.send_message(chat, text, parse_mode='HTML',
+                                reply_markup=types.ReplyKeyboardRemove())
+    try:
+        BOT.edit_message_reply_markup(chat_id=chat, message_id=sent.message_id,
+                                      reply_markup=markup)
+    except Exception:
+        LOG.exception('Could not attach launch buttons to welcome message')
+        BOT.send_message(chat, 'Открыть FORMIQ', reply_markup=markup)
+    return sent
 
 
 def progress_hub(chat, mid=None):
@@ -1970,10 +1979,6 @@ def cmd_start(m):
         clear_input(m.chat.id)
         with db() as conn:conn.execute('DELETE FROM feedback_drafts WHERE chat_id=%s',(m.chat.id,))
         try:
-            remove_obsolete_reply_keyboard(m.chat.id)
-        except Exception:
-            LOG.warning('Could not clear legacy reply keyboard, chat=%s', m.chat.id)
-        try:
             configure_formiq_bot_profile()
         except Exception:
             LOG.exception('Telegram profile configuration failed')
@@ -2070,12 +2075,7 @@ def plain_text(m):
         return
     chat = m.chat.id
     if (m.text or '').strip().casefold() in ('разбудить', 'formiq'):
-        # Handle stale reply-keyboard taps once, then replace them with
-        # functional inline Mini App + non-message wake callback.
-        try:
-            remove_obsolete_reply_keyboard(chat)
-        except Exception:
-            LOG.warning('Could not clear legacy reply keyboard, chat=%s', chat)
+        # Legacy reply-keyboard fallback: replace it within one welcome message.
         return home(chat, welcome_image=False)
     with db() as c:
         pending = c.execute('''SELECT workout_id,position,set_no,input_kind
