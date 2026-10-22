@@ -79,7 +79,7 @@ class RouteTests(unittest.TestCase):
 
     def test_exercise_photo_is_present_and_specific(self):
         client=self.app.test_client()
-        photos=('chair_squat','partial_squat','wall_push','bridge')
+        photos=('chair_squat','partial_squat','wall_push','incline_push','bridge','bird','step','calf','wall_plank','side_step','hip_hinge','dead_bug','leg_press','lat_pull','chest_press','seated_row','db_press','leg_curl','leg_ext','cable_row')
         for key in photos:
             r=client.get('/mini/technique/'+key)
             self.assertEqual(r.status_code,200)
@@ -88,13 +88,11 @@ class RouteTests(unittest.TestCase):
             self.assertIn(b'alt=',r.data)
         unknown=client.get('/mini/technique/unknown_fake')
         self.assertEqual(unknown.status_code,404)
-        text_only=client.get('/mini/technique/lat_pull')
-        self.assertEqual(text_only.status_code,200)
-        self.assertIn(b'fq-photo-pending',text_only.data)
+        self.assertEqual(len(importlib.import_module('main').EXERCISE_PHOTOS),len(importlib.import_module('main').EX))
 
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
-        self.assertIn(b'38.1.1', self.app.test_client().get('/').data)
+        self.assertIn(b'38.1.2', self.app.test_client().get('/').data)
 
 
 if __name__ == '__main__':
