@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.0-rc1'
+VERSION = '38.1.1'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -3213,7 +3213,8 @@ def mini_report():
 def mini_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
-    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script></body>', 1)
+    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
+    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script></body>', 1)
     response = make_response(markup)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'
@@ -3237,6 +3238,35 @@ def mini_ux_381_js():
     return response
 
 
+@APP.get('/mini/ux-3811.css')
+def mini_ux_3811_css():
+    response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-3811.css'), mimetype='text/css', max_age=3600))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@APP.get('/mini/ux-3811.js')
+def mini_ux_3811_js():
+    response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-3811.js'), mimetype='text/javascript', max_age=3600))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+# Curated exercise reference photos. Not all exercises have a cleared photo yet.
+# Preserve human-readable technique for every exercise; never substitute
+# an unrelated photo simply to fill space.
+EXERCISE_PHOTOS = {
+    'chair_squat': ('https://static.wixstatic.com/media/956a76_f85e1907150b4ef782c85bc5feef7015~mv2.jpg/v1/fill/w_769%2Ch_521%2Cal_c%2Clg_1%2Cq_85/956a76_f85e1907150b4ef782c85bc5feef7015~mv2.jpg',
+                    'Rehab United'),
+    'partial_squat': ('https://image.pim.regionh.dk/images/PROD/www.nordsjaellandshospital.dk/12107/St%C3%A5ende%C3%B8velse5.jpg',
+                      'Nordsjællands Hospital'),
+    'wall_push': ('https://www.berkshirehealthcare.nhs.uk/media/hegifzeh/wall-push-ups.jpg',
+                  'Berkshire Healthcare NHS'),
+    'bridge': ('https://a.storyblok.com/f/304083/768x512/a47fa7df02/charlotte-bridging.webp',
+                'Carter & George'),
+}
+
+
 @APP.get('/mini/technique/<key>')
 def mini_technique(key):
     exercise = EX.get(key)
@@ -3258,6 +3288,35 @@ p{margin:0 0 10px}small{font-size:13px;color:var(--muted)}</style></head><body><
 <small>Если возникает боль — прекрати упражнение. Вернись в Telegram, чтобы продолжить тренировку.</small>
 </article></body></html>''')
     doc = doc.replace('__TITLE__', title).replace('__TECHNIQUE__', technique).replace('__WARNING__', warning)
+    photo = EXERCISE_PHOTOS.get(key)
+    if photo:
+        image_url, credit = photo
+        safe_url = html.escape(image_url, quote=True)
+        photo_block = (
+            '<figure class="fq-exercise-photo"><img src="' + safe_url +
+            '" alt="Фото выполнения: ' + title + '" loading="lazy" '
+            'referrerpolicy="no-referrer" decoding="async">'
+            '<figcaption>Пример движения · фото: ' + html.escape(credit) +
+            '. Следуй инструкции и выбирай комфортную амплитуду.</figcaption></figure>'
+        )
+    else:
+        photo_block = (
+            '<div class="fq-photo-pending" role="note">'
+            '<b>FORMIQ · техника движения</b><span>Фотография для этого '
+            'упражнения ещё готовится. Текстовая инструкция ниже доступна полностью.</span></div>'
+        )
+    doc = doc.replace('<h2>Как выполнять</h2>', photo_block + '<h2>Как выполнять</h2>', 1)
+    doc = doc.replace('</style>', (
+        'figure.fq-exercise-photo{margin:0 0 18px}'
+        '.fq-exercise-photo img{display:block;width:100%;aspect-ratio:3/2;'
+        'object-fit:cover;border-radius:14px;background:var(--bg)}'
+        '.fq-exercise-photo figcaption{font-size:12px;color:var(--muted);margin-top:7px}'
+        '.fq-photo-pending{display:flex;flex-direction:column;gap:8px;padding:26px 20px;'
+        'margin:4px 0 18px;border:1px solid var(--border);border-radius:16px;'
+        'background:var(--bg);font-size:14px}'
+        '.fq-photo-pending span{color:var(--muted)}'
+        '</style>'
+    ), 1)
     response = make_response(doc)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'
