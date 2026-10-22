@@ -6,7 +6,9 @@ source = Path(__file__).resolve().parents[1] / 'main.py'
 text = source.read_text(encoding='utf-8')
 module = ast.parse(text)
 assert "VERSION = '38.3.4'" in text
-assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
+assert "types.InlineKeyboardButton('FormIQ'" in text
+assert "types.InlineKeyboardButton('Разбудить'" in text
+assert "callback_data='wake'" in text
 assert 'welcome_jpeg()' in text
 
 assignment = next(node for node in module.body if isinstance(node, ast.Assign)

@@ -68,7 +68,8 @@ class Ux381Tests(unittest.TestCase):
         self.assertIn('Разобрать с ИИ', html)
         self.assertIn('Отзывы и предложения', html)
         self.assertIn('main', SOURCE)
-        self.assertIn("InlineKeyboardButton('⚡ Разбудить'", SOURCE)
+        self.assertIn("types.InlineKeyboardButton('FormIQ'", SOURCE)
+        self.assertIn("types.InlineKeyboardButton('Разбудить'", SOURCE)
 
 
 if __name__ == '__main__':
