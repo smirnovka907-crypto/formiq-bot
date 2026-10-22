@@ -9,7 +9,7 @@ version = next(ast.literal_eval(node.value) for node in module.body if isinstanc
                and any(isinstance(target, ast.Name) and target.id == 'VERSION' for target in node.targets))
 assert isinstance(version, str) and len(version.split('.')) == 3
 assert all(part.isdecimal() for part in version.split('.')), 'Missing semantic VERSION'
-assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
+assert 'def formiq_chat_keyboard():' in text and "InlineKeyboardButton('Разбудить', callback_data='wake')" in text
 assert 'welcome_jpeg()' in text
 
 assignment = next(node for node in module.body if isinstance(node, ast.Assign)
