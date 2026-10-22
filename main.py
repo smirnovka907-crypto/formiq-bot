@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.0.0'
+VERSION = '38.1.0-rc1'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -3211,13 +3211,30 @@ def mini_report():
 
 @APP.get('/mini')
 def mini_page():
-    response = make_response(gzip.decompress(base64.b64decode(MINI_HTML_GZIP)))
+    markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
+    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
+    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script></body>', 1)
+    response = make_response(markup)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
+
+
+@APP.get('/mini/ux-381.css')
+def mini_ux_381_css():
+    response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-381.css'), mimetype='text/css', max_age=3600))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@APP.get('/mini/ux-381.js')
+def mini_ux_381_js():
+    response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-381.js'), mimetype='text/javascript', max_age=3600))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 @APP.get('/mini/technique/<key>')
@@ -3347,7 +3364,7 @@ def mini_api():
             result = mini_write(chat,action,data)
             if isinstance(result,dict):
                 payload = {'ok':True, **result}
-            elif action in ('record','skip','replace'):
+            elif action in ('record','skip','replace','start'):
                 payload = {'ok':True, 'patch':mini_workout_delta(chat)}
             else:
                 payload = {'ok':True, 'data':mini_state(chat,result)}
