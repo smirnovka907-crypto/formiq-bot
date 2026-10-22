@@ -17,13 +17,24 @@ class Telegram3813(unittest.TestCase):
         }):
             cls.botmod = importlib.import_module('main')
 
+    def setUp(self):
+        """No Telegram network calls while exercising welcome behavior."""
+        from unittest.mock import patch
+        self._set_menu = patch.object(self.botmod.BOT, 'set_chat_menu_button')
+        self._get_menu = patch.object(self.botmod.BOT, 'get_chat_menu_button',
+                                      return_value=types.MenuButtonCommands())
+        self._set_menu.start()
+        self._get_menu.start()
+        self.addCleanup(self._get_menu.stop)
+        self.addCleanup(self._set_menu.stop)
+
     def test_welcome_art_changes_and_is_valid_jpeg(self):
         from welcome_art import welcome_jpeg
         from PIL import Image
         content = welcome_jpeg()
         self.assertTrue(content.startswith(b'\xff\xd8\xff'))
         image = Image.open(BytesIO(content))
-        self.assertEqual(image.size, (1200,675))
+        self.assertEqual(image.size, (800, 533))  # Current approved art, not retired banner
         self.assertLess(len(content), 5_000_000)
         self.assertEqual(self.botmod.APP.test_client().get('/mini/welcome-cover.jpg').data, content)
 
@@ -59,10 +70,8 @@ class Telegram3813(unittest.TestCase):
             self.botmod.home(123, welcome_image=True)
         photo.assert_called_once()
         self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\xff\xd8'))
-        self.assertIsInstance(photo.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
-        edit.assert_called_once()
-        self.assertEqual(edit.call_args.kwargs['message_id'], 57)
-        self.assertIsInstance(edit.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        self.assertIsInstance(photo.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        edit.assert_not_called()
         text_message.assert_not_called()
 
     def test_plain_welcome_cleans_old_keyboard_without_service_text(self):
@@ -74,15 +83,13 @@ class Telegram3813(unittest.TestCase):
         send.assert_called_once()
         self.assertIn('FORMIQ', send.call_args.args[1])
         self.assertNotIn('Кнопки запуска', send.call_args.args[1])
-        self.assertIsInstance(send.call_args.kwargs['reply_markup'], types.ReplyKeyboardRemove)
-        self.assertIsInstance(edit.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        self.assertIsInstance(send.call_args.kwargs['reply_markup'], types.InlineKeyboardMarkup)
+        edit.assert_not_called()
 
     def test_fallback_if_telegram_refuses_inline_edit(self):
         from types import SimpleNamespace
         with patch.object(self.botmod.BOT, 'send_photo',
-                          return_value=SimpleNamespace(message_id=59)), \
-             patch.object(self.botmod.BOT, 'edit_message_reply_markup',
-                          side_effect=RuntimeError('edit failed')), \
+                          side_effect=RuntimeError('photo failed')), \
              patch.object(self.botmod.BOT, 'send_message') as send:
             self.botmod.home(123, welcome_image=True)
         self.assertEqual(send.call_count, 1)
