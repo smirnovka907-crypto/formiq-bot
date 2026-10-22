@@ -2,6 +2,8 @@
 import importlib
 import os
 import unittest
+import subprocess
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
@@ -60,6 +62,32 @@ class Release382Tests(unittest.TestCase):
         self.assertIn(b'/mini/ux-382.js',page.data)
         self.assertEqual(client.get('/mini/ux-382.css').status_code,200)
         self.assertEqual(client.get('/mini/ux-382.js').status_code,200)
+
+    def test_telegram_fullscreen_supported_and_fallback(self):
+        """Runtime code must expand safely without changing page state or calling APIs."""
+        source = (Path(__file__).resolve().parents[1] / 'web' / 'ux-382.js').read_text()
+        marker = '/* Approved Telegram Mini App fullscreen startup'
+        self.assertIn(marker, source)
+        fragment = marker + source.split(marker, 1)[1].rsplit('\\n})();', 1)[0]
+        runner = r'''
+const vm=require('vm'), assert=require('assert');
+const fragment=process.argv[1];
+function scenario(initData,version,supported){
+  const calls=[];
+  const webApp={initData,isFullscreen:false,
+    expand:()=>calls.push('expand'),
+    isVersionAtLeast:()=>supported,
+    requestFullscreen:()=>calls.push('fullscreen')};
+  vm.runInNewContext(fragment,{window:{Telegram:{WebApp:webApp}}},{timeout:1000});
+  return calls;
+}
+assert.deepStrictEqual(scenario('signed-user-init','8.0',true),['expand','fullscreen']);
+assert.deepStrictEqual(scenario('signed-user-init','7.0',false),['expand']);
+assert.deepStrictEqual(scenario('','8.0',true),[]);
+'''
+        result = subprocess.run(['node', '-e', runner, fragment],
+                                capture_output=True, text=True, timeout=6)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_public_api_rejects_unauthorized_analysis(self):
         resp=self.m.APP.test_client().post('/mini/api',
