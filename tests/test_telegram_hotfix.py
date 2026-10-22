@@ -34,9 +34,9 @@ class TelegramHotfixTests(unittest.TestCase):
     def test_lower_buttons_both_dispatch_as_text(self):
         markup = self.bot.formiq_chat_keyboard()
         buttons = markup.keyboard[0]
-        self.assertEqual([b.text for b in buttons], ["FormIQ", "Разбудить"])
-        self.assertIsNone(buttons[0].web_app)
-        self.assertIsNone(buttons[1].web_app)
+        self.assertEqual([b['text'] for b in buttons], ["FormIQ", "Разбудить"])
+        self.assertIsNone(buttons[0].get('web_app'))
+        self.assertIsNone(buttons[1].get('web_app'))
 
     def test_fallback_inline_buttons_have_valid_targets(self):
         markup = self.bot.formiq_open_links()
@@ -56,7 +56,7 @@ class TelegramHotfixTests(unittest.TestCase):
         inline = photo.call_args.kwargs["reply_markup"]
         self.assertIsNotNone(inline.keyboard[0][0].web_app)
         keys = message.call_args.kwargs["reply_markup"]
-        self.assertEqual(keys.keyboard[0][0].text, "FormIQ")
+        self.assertEqual(keys.keyboard[0][0]['text'], "FormIQ")
 
     def test_wake_no_longer_repeats_home(self):
         msg = SimpleNamespace(
