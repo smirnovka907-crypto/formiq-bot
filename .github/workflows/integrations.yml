@@ -18,13 +18,14 @@ jobs:
         run: python -m py_compile integrations/fatsecret.py integrations/garmin.py tests/test_integrations.py
       - name: Check UX JavaScript
         run: node --check web/ux-381.js
-      - name: Install optional CSS validator
-        run: pip install tinycss2
+      - name: Install runtime and CSS validator
+        run: pip install -r requirements.txt tinycss2
       - name: Compile bot
         run: python -m py_compile main.py
       - name: Run full static smoke and UX tests
         run: |
           python tests/test_static.py
           python -m unittest discover -s tests -p test_ux_381.py -v
+          python -m unittest discover -s tests -p test_routes_381.py -v
       - name: Run integration tests
         run: python -m unittest discover -s tests -p test_integrations.py -v
