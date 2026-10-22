@@ -5,6 +5,7 @@ on:
       - feature/health-integrations-38.1.0
       - release/formiq-38.1.2
       - main
+      - release/formiq-38.1.3-telegram-hotfix
   workflow_dispatch:
 jobs:
   integration-tests:
