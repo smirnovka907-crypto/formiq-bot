@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.2.0'
+VERSION = '38.2.1'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -861,29 +861,12 @@ def mini_entry(chat, mid=None):
     home(chat, mid)
 
 
-def formiq_chat_keyboard():
-    """Use inline Mini App entry: Telegram reply-keyboard WebApps may have EMPTY
-    initData, which breaks our signed Telegram auth. Both buttons must work
-    without a text command appearing in chat.
-    """
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.row(
-        types.InlineKeyboardButton('🚀 Открыть FormIQ',
-            web_app=types.WebAppInfo(url=BASE_URL + '/mini')),
-        types.InlineKeyboardButton('⚡ Разбудить',
-            callback_data='wake')
-    )
-    return keyboard
-
-
 def home(chat, mid=None, welcome_image=False):
-    """One polished welcome message: clear obsolete reply keyboard, attach inline app actions.
+    """Clean welcome: image + short description, no duplicate launch buttons.
 
-    Telegram cannot remove a persistent reply keyboard AND supply inline buttons
-    with the same send call. Send welcome with ReplyKeyboardRemove, then edit
-    that same message to attach the inline launch buttons.
+    Remove legacy reply keyboards. The only Mini App entry is the persistent
+    Telegram menu button configured in configure_formiq_bot_profile().
     """
-    markup = formiq_chat_keyboard()
     text = ('<b>FORMIQ · AI Coach</b>\n'
             'Твой тренировочный план, результаты и AI-помощник — в одном приложении.\n'
             'Подстроим занятия под твою цель и ритм.')
@@ -900,12 +883,6 @@ def home(chat, mid=None, welcome_image=False):
     if sent is None:
         sent = BOT.send_message(chat, text, parse_mode='HTML',
                                 reply_markup=types.ReplyKeyboardRemove())
-    try:
-        BOT.edit_message_reply_markup(chat_id=chat, message_id=sent.message_id,
-                                      reply_markup=markup)
-    except Exception:
-        LOG.exception('Could not attach launch buttons to welcome message')
-        BOT.send_message(chat, 'Открыть FORMIQ', reply_markup=markup)
     return sent
 
 
@@ -3653,7 +3630,7 @@ def configure_formiq_bot_profile():
         return
     bot_description = ('FORMIQ — персональные тренировки в Telegram. '
                        'Подберём программу под твою цель, ритм и прогресс. '
-                       'Открой Mini App кнопкой FormIQ. Если сервер спит — нажми «Разбудить».')
+                       'Открывай приложение одной кнопкой «Открыть FORMIQ» внизу чата.')
     short_description = ('FORMIQ: персональные тренировки, прогресс и AI-помощник.')
     assert len(bot_description) <= 512 and len(short_description) <= 120
     for code in (None, 'ru'):
@@ -3663,7 +3640,9 @@ def configure_formiq_bot_profile():
         except Exception:
             LOG.exception('Telegram description update failed (%s)', code)
     try:
-        BOT.set_chat_menu_button(menu_button=types.MenuButtonDefault())
+        BOT.set_chat_menu_button(menu_button=types.MenuButtonWebApp(
+            text='Открыть FORMIQ',
+            web_app=types.WebAppInfo(url=BASE_URL + '/mini')))
         BOT.delete_my_commands()
         _FORMIQ_PROFILE_CONFIGURED = True
     except Exception:
