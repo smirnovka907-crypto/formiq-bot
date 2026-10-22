@@ -3343,6 +3343,7 @@ def mini_workout_delta(chat):
 def mini_api():
     if not request.is_json or (request.content_length and request.content_length > 8192):
         abort(415)
+    api_started = time.perf_counter()
     chat = mini_auth(request.headers.get('X-Formiq-Init',''))
     if not chat:
         return jsonify(ok=False,error='Открой Mini App из Telegram заново.'),401
@@ -3357,7 +3358,14 @@ def mini_api():
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action in ('detail','ai_ask','feedback'):
             payload = {'ok':True, **mini_aux(chat,action,data)}
-        elif action in ('onboarding','set_demo_tier','save_metrics','save_custom','reschedule','cardio','ai_consent'):
+        elif action == 'save_metrics':
+            mini_aux(chat,action,data)
+            new_metrics = metrics(chat)
+            limits = health_profile(chat)
+            restricted = bool(limits and any(x in limits['affected'] for x in ('heart','breathing')))
+            payload = {'ok':True, 'patch':{'metrics':new_metrics,
+                'zones':[] if restricted else heart_zones(new_metrics)}}
+        elif action in ('onboarding','set_demo_tier','save_custom','reschedule','cardio','ai_consent'):
             mini_aux(chat,action,data)
             payload = {'ok':True, 'data':mini_state(chat)}
         else:
@@ -3375,6 +3383,10 @@ def mini_api():
         return jsonify(ok=False,error='Ошибка сервера. Попробуй позже.'),500
     response = jsonify(payload)
     response.headers['Cache-Control'] = 'no-store'
+    elapsed_ms = round((time.perf_counter() - api_started) * 1000)
+    response.headers['Server-Timing'] = f'formiq;dur={elapsed_ms}'
+    if elapsed_ms > 1500:
+        LOG.warning('Slow Mini App action=%s duration_ms=%s',action,elapsed_ms)
     return response
 
 
