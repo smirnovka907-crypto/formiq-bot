@@ -23,11 +23,12 @@ from collections import Counter
 import psycopg
 import telebot
 from telebot import types
+from brand_assets import welcome_cover_jpeg
 from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.1.2'
+VERSION = '38.1.3'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -859,29 +860,55 @@ def mini_entry(chat, mid=None):
 
 
 def formiq_chat_keyboard():
-    """Two buttons immediately above Telegram's message field (the native Menu slot cannot hold two)."""
+    """Two persistent actions; WebApp opening can vary by Telegram client."""
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2, is_persistent=True)
     keyboard.row(
-        types.KeyboardButton('FormIQ', web_app=types.WebAppInfo(BASE_URL+'/mini')),
+        types.KeyboardButton('FormIQ', web_app=types.WebAppInfo(BASE_URL + '/mini')),
         types.KeyboardButton('Разбудить')
     )
     return keyboard
 
 
+def formiq_open_links():
+    """Visible fallback if this Telegram client's ReplyKeyboard WebApp does not open."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton(
+        'Открыть приложение FormIQ ↗',
+        web_app=types.WebAppInfo(url=BASE_URL + '/mini')))
+    markup.add(types.InlineKeyboardButton(
+        'Разбудить сервер ↗',
+        url=BASE_URL + '/wake'))
+    return markup
+
+
 def home(chat, mid=None, welcome_image=False):
-    """Clean chat entrypoint; the app owns all other navigation."""
-    markup = formiq_chat_keyboard()
+    """One current branded photo; explicit working Mini App/wake alternatives."""
     text = ('<b>FORMIQ · AI Coach</b>\n'
-            'Твой тренировочный план, результаты и AI-помощник — в одном приложении.\n'
-            'Подстроим занятия под твою цель и ритм.')
+            'Тренировки, питание и прогресс — в одном приложении.\n'
+            'Персональная программа под твой ритм.')
     if welcome_image:
-        picture = BytesIO(base64.b64decode(FORMIQ_CHAT_WELCOME_JPG_B64))
-        picture.name = 'formiq-avatar.jpg'
         try:
-            return BOT.send_photo(chat, picture, caption=text, parse_mode='HTML',reply_markup=markup)
+            picture = BytesIO(welcome_cover_jpeg())
+            picture.name = 'formiq-welcome-38-1-3.jpg'
+            BOT.send_photo(chat, picture, caption=text,
+                           parse_mode='HTML', reply_markup=formiq_open_links())
+            return BOT.send_message(
+                chat, 'Нижние кнопки доступны. Если FormIQ не открывается из панели, '
+                'используй кнопку «Открыть приложение» под новой картинкой.',
+                reply_markup=formiq_chat_keyboard())
         except Exception:
-            LOG.exception('Could not send intro visual; sending compact text instead')
-    return BOT.send_message(chat,text,parse_mode='HTML',reply_markup=markup)
+            LOG.exception('Cannot send new welcome cover; showing Mini App entry instead')
+    if mid is not None:
+        return BOT.send_message(chat, text, parse_mode='HTML', reply_markup=formiq_open_links())
+    return BOT.send_message(chat, text, parse_mode='HTML',
+                            reply_markup=formiq_chat_keyboard())
+
+
+def wake_chat(chat):
+    """A delivered webhook proves the service is already awake and responding."""
+    return BOT.send_message(
+        chat, '✅ Сервер FORMIQ на связи. Можно открывать приложение.',
+        reply_markup=formiq_open_links())
 
 
 def progress_hub(chat, mid=None):
@@ -2052,8 +2079,13 @@ def plain_text(m):
     if m.chat.type != 'private':
         return
     chat = m.chat.id
-    if (m.text or '').strip().casefold() in ('разбудить', 'formiq'):
-        return home(chat)
+    button_text = (m.text or '').strip().casefold()
+    if button_text == 'разбудить':
+        return wake_chat(chat)
+    if button_text == 'formiq':
+        return BOT.send_message(
+            chat, 'Открой FORMIQ через кнопку ниже.',
+            reply_markup=formiq_open_links())
     with db() as c:
         pending = c.execute('''SELECT workout_id,position,set_no,input_kind
             FROM pending_inputs WHERE chat_id=%s''', (chat,)).fetchone()
@@ -3072,8 +3104,8 @@ def formiq_gender_wallpaper(palette):
 
 @APP.get('/mini/welcome-cover.jpg')
 def formiq_welcome_cover():
-    response=send_file(BytesIO(base64.b64decode(FORMIQ_CHAT_WELCOME_JPG_B64)), mimetype='image/jpeg')
-    response.headers['Cache-Control']='public, max-age=3600'
+    response=send_file(BytesIO(welcome_cover_jpeg()), mimetype='image/jpeg')
+    response.headers['Cache-Control']='no-store'
     response.headers['X-Content-Type-Options']='nosniff'
     return response
 
@@ -3498,7 +3530,8 @@ def configure_formiq_bot_profile():
         return
     bot_description = ('FORMIQ — персональные тренировки в Telegram. '
                        'Подберём программу под твою цель, ритм и прогресс. '
-                       'Открой Mini App кнопкой FormIQ. Если сервер спит — нажми «Разбудить».')
+                       'Открой Mini App кнопкой FormIQ или через кнопку в приветствии. '
+                       '«Разбудить» проверяет, что бот отвечает.')
     short_description = ('FORMIQ: персональные тренировки, прогресс и AI-помощник.')
     assert len(bot_description) <= 512 and len(short_description) <= 120
     for code in (None, 'ru'):
