@@ -27,7 +27,7 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
-VERSION = '38.3.1'
+VERSION = '38.3.2'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
@@ -3626,6 +3626,62 @@ def webhook():
     return 'OK', 200
 
 
+def apply_approved_avatar_once():
+    """Update bot avatar using Telegram Bot API, once per approved image hash.
+
+    This version of pyTelegramBotAPI predates set_my_profile_photo; submit
+    InputProfilePhotoStatic directly to the official Bot API instead.
+    """
+    from welcome_art import avatar_jpeg
+    image_bytes = avatar_jpeg()
+    image_hash = hashlib.sha256(image_bytes).hexdigest()
+    with db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_branding_state (
+                setting TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        row = conn.execute(
+            "SELECT value FROM bot_branding_state WHERE setting = %s",
+            ('approved_avatar_hash',)
+        ).fetchone()
+        if row and row[0] == image_hash:
+            return
+    boundary = 'FormiqPhoto' + image_hash[:20]
+    photo_spec = json.dumps(
+        {'type': 'static', 'photo': 'attach://avatar'}, separators=(',', ':')
+    ).encode('utf-8')
+    body = (
+        ('--' + boundary + '\r\n'
+         'Content-Disposition: form-data; name="photo"\r\n'
+         'Content-Type: application/json\r\n\r\n').encode('ascii')
+        + photo_spec + b'\r\n'
+        + ('--' + boundary + '\r\n'
+           'Content-Disposition: form-data; name="avatar"; filename="formiq-avatar.jpg"\r\n'
+           'Content-Type: image/jpeg\r\n\r\n').encode('ascii')
+        + image_bytes + b'\r\n'
+        + ('--' + boundary + '--\r\n').encode('ascii')
+    )
+    req = urllib.request.Request(
+        'https://api.telegram.org/bot' + TOKEN + '/setMyProfilePhoto',
+        data=body,
+        headers={'Content-Type': 'multipart/form-data; boundary=' + boundary},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        result = json.loads(resp.read().decode('utf-8'))
+    if not result.get('ok'):
+        raise RuntimeError('Telegram rejected approved avatar')
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO bot_branding_state (setting, value) VALUES (%s, %s)
+               ON CONFLICT (setting) DO UPDATE SET value = EXCLUDED.value""",
+            ('approved_avatar_hash', image_hash)
+        )
+    LOG.info('FORMIQ approved avatar installed')
+
+
 _FORMIQ_PROFILE_CONFIGURED = False
 
 def configure_formiq_bot_profile():
@@ -3647,6 +3703,11 @@ def configure_formiq_bot_profile():
         BOT.set_chat_menu_button(menu_button=types.MenuButtonDefault())
         BOT.delete_my_commands()
         _FORMIQ_PROFILE_CONFIGURED = True
+        try:
+            apply_approved_avatar_once()
+        except Exception as exc:
+            # Do not reveal the Bot API token in request exception text.
+            LOG.warning('Could not update FORMIQ avatar (%s)', type(exc).__name__)
     except Exception:
         LOG.exception('Telegram menu update failed')
 
