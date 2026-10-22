@@ -5,9 +5,9 @@ from html.parser import HTMLParser
 source = Path(__file__).resolve().parents[1] / 'main.py'
 text = source.read_text(encoding='utf-8')
 module = ast.parse(text)
-assert "VERSION = '38.1.2'" in text
-assert 'FormIQ' in text and "KeyboardButton('Разбудить')" in text
-assert 'FORMIQ_CHAT_WELCOME_JPG_B64' in text
+assert "VERSION = '38.1.3'" in text
+assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
+assert 'welcome_jpeg()' in text
 
 assignment = next(node for node in module.body if isinstance(node, ast.Assign)
                   and any(isinstance(target, ast.Name) and target.id == 'MINI_HTML_GZIP' for target in node.targets))
