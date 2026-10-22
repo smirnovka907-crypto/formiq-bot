@@ -134,16 +134,23 @@ execute=async function(action){
  if(action==='onboarding'){
    const status=document.querySelector('input[name="fq_limit_status"]:checked')?.value;
    const pain=$('on_pain')?.value.trim(),course=$('on_course')?.value;
-   if(status==='yes'&&(!pain||!course)){
-     const detail=$('fq_optional_health');
-     if(detail)detail.open=true;
-     notice('При ограничениях уточни степень и характер симптомов: это нужно для безопасного выбора упражнений.','error');
-     $('on_pain')?.focus();
-     return;
+   // If optional clinical details were not provided, do not force extra
+   // questions. Unknown course is treated conservatively as recent.
+   // The server still blocks red flags/high pain and excludes affected regions.
+   if(status==='yes'){
+     if(!pain&&$('on_pain'))$('on_pain').value='0';
+     if(!course&&$('on_course'))$('on_course').value='recent';
    }
    if(status==='yes'&&healthAnalysis?.needs_clarification){
-     $('fq_health_followup')?.focus();
-     notice('Сначала ответь на уточнение ИИ или выбери ограничения вручную.','error');return;
+     const manual=Array.from(document.querySelectorAll('[data-lim]:checked')).map(x=>x.dataset.lim);
+     if(manual.length) {
+       healthAnalysis=null;
+       healthDescription='';
+     } else {
+       $('fq_health_followup')?.focus();
+       notice('Ответь на уточнение ИИ или выбери области вручную.','error');
+       return;
+     }
    }
  }
  if(busy)return;
