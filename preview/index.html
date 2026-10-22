@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1016">
+<title>FORMIQ — интерактивный предпросмотр</title>
+<style>
+:root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f3f6f5;background:#090e14;font-synthesis:none;--bg:#0b1016;--panel:#171e26;--soft:#222b34;--line:#2d3842;--muted:#9aa9b3;--mint:#b7f5d8}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% -25%,#173b39 0%,#0b1016 60%);font-size:15px;line-height:1.45}button,input,textarea{font:inherit}button{cursor:pointer;-webkit-tap-highlight-color:transparent}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--mint);outline-offset:2px}
+.shell{width:min(100%,460px);margin:0 auto;min-height:100dvh;background:linear-gradient(165deg,rgba(19,28,36,.95),rgba(10,15,22,.98));border-left:1px solid #25303b;border-right:1px solid #25303b;padding:24px 22px 105px;position:relative}
+.logo{display:flex;align-items:center;gap:9px;font-size:19px;font-weight:800;letter-spacing:-.5px}.logomark{display:grid;place-items:center;background:var(--mint);color:#09221a;border-radius:12px;width:36px;height:36px;font-size:23px;letter-spacing:-3px;padding-right:3px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:29px}.eyebrow{font-size:10px;letter-spacing:.14em;font-weight:800;color:var(--mint);background:#b7f5d812;border:1px solid #b7f5d82e;padding:7px 10px;border-radius:999px}
+h1{font-size:34px;line-height:1.1;letter-spacing:-1.3px;margin:10px 0 12px;font-weight:780}h2{font-size:22px;letter-spacing:-.55px;margin:0 0 15px}h3{font-size:16px;margin:0 0 9px}p{margin:0 0 14px}p.secondary,.secondary{color:var(--muted)}.hero-desc{color:#a9b7c1;max-width:330px;margin-bottom:26px}.section{margin:24px 0}.card{background:rgba(255,255,255,.065);border:1px solid rgba(255,255,255,.085);border-radius:23px;padding:20px;margin-bottom:13px}.soft{background:#161e27}.flex{display:flex;align-items:center;justify-content:space-between;gap:10px}.stack{display:grid;gap:10px}.muted{color:var(--muted);font-size:13px}.small{font-size:12px}.label{display:block;font-weight:650;margin:0 0 8px;font-size:13px}.control{width:100%;background:#101821;color:#f3f6f5;border:1px solid #37434c;border-radius:13px;min-height:48px;padding:12px 14px;appearance:none}.control::placeholder{color:#70818b}textarea.control{resize:vertical;min-height:94px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.form-field{margin:17px 0 0}.pills{display:flex;flex-wrap:wrap;gap:8px}.pill{border:1px solid #34414b;background:#1d2730;color:#c6d1d7;border-radius:13px;padding:10px 13px;font-size:13px;font-weight:650;transition:background .12s}.pill.on{color:#102820;background:var(--mint);border-color:var(--mint)}.daypill{width:42px;height:42px;padding:0;border-radius:13px;flex:1}.dayrow{display:flex;gap:6px}.btn{border:0;border-radius:16px;width:100%;min-height:52px;padding:13px 16px;background:var(--mint);color:#0c2a1c;font-weight:800;display:flex;align-items:center;justify-content:center;gap:9px}.btn.alt{background:#26323a;color:#f3f6f5}.btn.outline{background:transparent;color:#dce6e8;border:1px solid #35444d}.btn.tiny{min-height:37px;width:auto;padding:8px 13px;border-radius:11px;font-size:12px}.btn:active,.pill:active{transform:scale(.985)}.btn:disabled{opacity:.4;cursor:not-allowed}.space{height:16px}.range{width:100%;accent-color:var(--mint)}.check{display:flex;align-items:flex-start;gap:11px;font-size:12px;color:#acbac1;margin:15px 0}.check input{accent-color:var(--mint);width:18px;height:18px;flex-shrink:0;margin-top:1px}.callout{padding:13px 14px;border:1px solid #3f514a;background:#b7f5d80d;border-radius:14px;color:#dbece3;font-size:12px;margin:12px 0}.notice{font-size:12px;color:#b3c5cc}.error{color:#ffc4ad;font-size:12px;margin:8px 0}.divider{height:1px;background:#303a43;margin:16px 0}.stat{font-size:31px;font-weight:800;letter-spacing:-1px;line-height:1.2}.statcap{font-size:12px;color:var(--muted)}.datebutton{width:100%;padding:13px 15px;min-height:50px;background:#1d2831;color:white;border:1px solid #3a4750;border-radius:14px;text-align:left;display:flex;justify-content:space-between;align-items:center;font-weight:650}.calendar{margin-top:9px;background:#1b2730;border:1px solid #3a4850;border-radius:16px;padding:13px}.cal-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-weight:750}.arrow{width:35px;height:35px;border:0;border-radius:10px;background:#2b3941;color:white;font-size:21px}.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center}.cal-head{font-size:11px;color:#9bb0b5;padding:7px 0}.cal-day{background:transparent;border:0;color:#d4dedf;min-height:36px;border-radius:10px;font-size:13px}.cal-day.dim{color:#61727e}.cal-day.today{outline:1px solid #637b76}.cal-day.selected{background:var(--mint);color:#133126;font-weight:850}.workout-title{font-size:23px;letter-spacing:-.5px;font-weight:770;margin:4px 0}.exercise{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-top:1px solid #303b43;gap:12px}.exercise:first-child{border-top:0}.ex-name{font-weight:600;font-size:14px}.badge{font-size:11px;background:#23372f;color:#b7f5d8;border-radius:9px;padding:4px 7px;white-space:nowrap}.weeks{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:15px}.week{min-height:43px;border-radius:12px;background:#202a33;color:#b7c7cb;border:1px solid #34434d;font-weight:650}.week.on{background:var(--mint);color:#123125;border-color:var(--mint)}.plan-day{padding:13px 0;border-top:1px solid #29363e;display:flex;justify-content:space-between;gap:8px}.plan-day:first-of-type{border-top:0}.nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(100%,460px);display:grid;grid-template-columns:repeat(3,1fr);background:rgba(14,21,28,.97);backdrop-filter:blur(18px);border-top:1px solid #2b373f;padding:8px 16px calc(8px + env(safe-area-inset-bottom));z-index:30}.navbtn{border:0;background:none;color:#8ca2aa;display:grid;justify-items:center;gap:3px;padding:7px 0;font-size:11px;font-weight:680}.navbtn strong{font-size:20px;font-weight:500}.navbtn.active{color:var(--mint)}.welcome-shape{height:186px;background:radial-gradient(circle at center,#b4f6d855 0,#477a7650 26%,transparent 57%),linear-gradient(140deg,#203d41,#0e1c27);border:1px solid #38564f;border-radius:26px;display:grid;place-items:center;margin:35px 0 26px}.welcome-shape span{font-size:88px;font-weight:780;color:var(--mint);letter-spacing:-10px;padding-right:12px;text-shadow:0 0 55px #aefad850}.fade{animation:appear .25s ease}@keyframes appear{from{opacity:.45;transform:translateY(5px)}to{opacity:1;transform:none}}.hidden{display:none!important}
+@media (min-width:530px){.shell{margin:30px auto;min-height:800px;border:1px solid #2c3b42;border-radius:32px;overflow:hidden}.nav{bottom:20px;border:1px solid #2b373f;border-radius:0 0 30px 30px}.welcome-shape{height:230px}}
+</style>
+</head>
+<body><div class="shell"><div id="app"></div></div>
+<script>
+(function(){
+'use strict';
+var KEY='formiq_preview_v1';
+var dayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+var weekdaysFull=['понедельник','вторник','среду','четверг','пятницу','субботу','воскресенье'];
+var goals={muscle:'Мышцы и сила',loss:'Снизить вес',endurance:'Выносливость',general:'Поддерживать форму'};
+var levels={beginner:'Новичок',some:'Иногда тренируюсь',experienced:'Регулярно'};
+var places={gym:'В зале',home:'Дома',homegear:'Дома с инвентарём'};
+function fresh(){return {done:false,age:'',sex:'',height:'',weight:'',goal:'muscle',level:'beginner',place:'gym',minutes:40,days:[0,2,4],restrictions:'',consent:false,approved:[],history:[]};}
+var state=fresh();try{var saved=JSON.parse(localStorage.getItem(KEY)||'null');if(saved&&typeof saved==='object')state=Object.assign(fresh(),saved);}catch(e){}
+var screen=state.done?'home':'welcome';
+var activeWeek=1,calOpen=false,calMonth=new Date().getMonth(),calYear=new Date().getFullYear(),selected=new Date();
+var analysis=[],confirmed=false,error='',menuActive='home';
+var app=document.getElementById('app');
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(x){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x];});}
+function svg(){return '<div class="logo"><div class="logomark">F</div><span>FORMIQ</span></div>';}
+function head(label){return '<div class="top">'+svg()+'<span class="eyebrow">'+esc(label||'ИНТЕРАКТИВНЫЙ МАКЕТ')+'</span></div>';}
+function go(n){screen=n;error='';render();window.scrollTo({top:0,behavior:'smooth'});}
+function nav(){return '<div class="nav">'+[['home','⌂','Главная'],['plan','▦','План'],['profile','☷','Профиль']].map(function(v){return '<button class="navbtn '+(screen===v[0]?'active':'')+'" data-action="go" data-value="'+v[0]+'"><strong>'+v[1]+'</strong>'+v[2]+'</button>';}).join('')+'</div>';}
+function pill(label,v,current,key){return '<button type="button" class="pill '+(v===current?'on':'')+'" data-action="set" data-key="'+key+'" data-value="'+v+'">'+label+'</button>';}
+function renderWelcome(){return head()+'<div class="fade"><div class="welcome-shape"><span>F</span></div><div class="eyebrow" style="display:inline-block">ТВОЙ AI COACH</div><h1>Тренируйся с умом.</h1><p class="hero-desc">Один понятный план, который подстраивается под твои цели, график и ограничения. Без лишних экранов.</p><button class="btn" data-action="go" data-value="onboarding">Начать →</button><p class="small secondary" style="margin-top:16px">Это отдельный демонстрационный макет. Данные остаются в браузере, реальный ИИ и сервер не используются.</p></div>';}
+function renderOnboarding(){
+return head('ОДНА АНКЕТА')+'<h1>Расскажи о себе.</h1><p class="secondary">Заполни один раз. Любое поле потом можно изменить.</p>'+
+'<div class="card">'+
+'<div class="two"><div><label class="label" for="age">Возраст</label><input class="control" id="age" type="number" min="18" max="100" placeholder="Лет" value="'+esc(state.age)+'"></div><div><label class="label" for="sex">Пол</label><select class="control" id="sex"><option value="">Выбери</option><option value="male" '+(state.sex==='male'?'selected':'')+'>Мужской</option><option value="female" '+(state.sex==='female'?'selected':'')+'>Женский</option><option value="other" '+(state.sex==='other'?'selected':'')+'>Не указывать</option></select></div></div>'+
+'<div class="two form-field"><div><label class="label" for="height">Рост, см</label><input class="control" id="height" type="number" min="120" max="230" placeholder="175" value="'+esc(state.height)+'"></div><div><label class="label" for="weight">Вес, кг</label><input class="control" id="weight" type="number" min="30" max="300" step=".1" placeholder="75" value="'+esc(state.weight)+'"></div></div>'+
+'<div class="form-field"><div class="label">Цель</div><div class="pills">'+Object.keys(goals).map(function(k){return pill(goals[k],k,state.goal,'goal');}).join('')+'</div></div>'+
+'<div class="form-field"><div class="label">Опыт</div><div class="pills">'+Object.keys(levels).map(function(k){return pill(levels[k],k,state.level,'level');}).join('')+'</div></div>'+
+'<div class="form-field"><div class="label">Где тренируешься</div><div class="pills">'+Object.keys(places).map(function(k){return pill(places[k],k,state.place,'place');}).join('')+'</div></div>'+
+'<div class="form-field"><div class="flex"><span class="label">Продолжительность тренировки</span><strong id="minutesLabel">'+state.minutes+' мин</strong></div><input id="minutes" type="range" class="range" min="20" max="90" step="5" value="'+state.minutes+'"></div>'+
+'<div class="form-field"><div class="label">Выбери дни недели</div><div class="dayrow">'+dayNames.map(function(d,i){return '<button type="button" class="pill daypill '+(state.days.indexOf(i)!==-1?'on':'')+'" data-action="day" data-value="'+i+'">'+d+'</button>';}).join('')+'</div><p class="muted small" style="margin:9px 0 0">Ты выбираешь конкретные дни — не их количество.</p></div>'+
+'</div>'+
+'<div class="card"><h3>Ограничения и самочувствие</h3><p class="muted">Своими словами: что болит или что важно учитывать при тренировках. Можно оставить пустым.</p><textarea class="control" id="restrictions" placeholder="Например: иногда болит левое колено после бега...">'+esc(state.restrictions)+'</textarea>'+
+'<label class="check"><input type="checkbox" id="consent" '+(state.consent?'checked':'')+'><span>Согласен передать описание ограничений ИИ для структурирования. В этом макете данные никуда не передаются.</span></label>'+
+'<button class="btn alt" data-action="analyse">Разобрать описание</button>'+
+(analysis.length?'<div class="callout"><strong>Предварительный разбор (демо, без AI)</strong><p style="margin:8px 0">'+analysis.map(esc).join(' · ')+'</p><p class="small secondary" style="margin:0 0 10px">Проверь результат. Он будет учтён в демонстрационном плане после подтверждения.</p><div class="pills"><button class="btn tiny" data-action="confirm">Подтвердить</button><button class="btn tiny outline" data-action="clear-analysis">Изменить текст</button></div></div>':'')+
+(confirmed?'<div class="callout">✓ Ограничения подтверждены и будут учтены в плане.</div>':'')+
+'</div>'+(error?'<p class="error">'+esc(error)+'</p>':'')+
+'<button class="btn" data-action="save-profile">Сохранить и посмотреть план →</button><p class="muted small" style="margin-top:13px;text-align:center">Здесь нет подключения к Telegram, базе данных или Yandex AI.</p>';
+}
+function iso(d){var y=d.getFullYear(),m=('0'+(d.getMonth()+1)).slice(-2),day=('0'+d.getDate()).slice(-2);return y+'-'+m+'-'+day;}
+function readable(d){return d.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});}
+function mondayNum(date){return (date.getDay()+6)%7;}
+function baseExercises(){if(state.place==='gym')return [
+['Жим ногами','3 × 12','knee'],['Тяга верхнего блока','3 × 12','none'],['Жим от груди в тренажёре','3 × 12','shoulder'],['Горизонтальная тяга','3 × 12','back'],['Планка','3 × 30 сек','back']];
+return [['Приседания к стулу','3 × 12','knee'],['Отжимания от опоры','3 × 10','shoulder'],['Ягодичный мост','3 × 15','none'],['Наклон с отведением таза','3 × 12','back'],['Планка у стены','3 × 30 сек','back']];}
+function exerciseList(){
+var flags=state.approved||[],base=baseExercises();
+return base.map(function(ex){
+if(flags.indexOf('knee')>=0&&ex[2]==='knee')return ['Ягодичный мост','3 × 12','Адаптация для коленей'];
+if(flags.indexOf('shoulder')>=0&&ex[2]==='shoulder')return ['Лёгкая ходьба','8 мин','Адаптация для плеч'];
+if(flags.indexOf('back')>=0&&ex[2]==='back')return ['Ходьба на месте','6 мин','Адаптация для спины'];
+return [ex[0],ex[1],''];});}
+function calendar(){
+var first=new Date(calYear,calMonth,1),start=(first.getDay()+6)%7,last=new Date(calYear,calMonth+1,0).getDate(),cells='';
+for(var i=0;i<42;i++){var num=i-start+1,d=new Date(calYear,calMonth,num),inMonth=num>0&&num<=last;cells+='<button class="cal-day '+(!inMonth?'dim ':'')+(iso(d)===iso(selected)?'selected ':'')+(iso(d)===iso(new Date())?'today':'')+'" data-action="date" data-value="'+iso(d)+'">'+d.getDate()+'</button>';}
+return '<div class="calendar fade"><div class="cal-top"><button class="arrow" data-action="month" data-value="-1" aria-label="Предыдущий месяц">‹</button><span>'+first.toLocaleDateString('ru-RU',{month:'long',year:'numeric'})+'</span><button class="arrow" data-action="month" data-value="1" aria-label="Следующий месяц">›</button></div><div class="cal-grid">'+dayNames.map(function(d){return '<span class="cal-head">'+d+'</span>';}).join('')+cells+'</div></div>';
+}
+function workoutsForDate(date){return state.days.indexOf(mondayNum(date))>=0;}
+function numberByDay(date){var monday=new Date(date);monday.setHours(12,0,0,0);monday.setDate(monday.getDate()-mondayNum(monday));var w=Math.floor((monday.getTime()-new Date(2026,0,5,12).getTime())/(7*864e5));return Math.abs(w)%2===0?'A':'Б';}
+function doneToday(){return (state.history||[]).indexOf(iso(selected))>=0;}
+function renderHome(){var active=workoutsForDate(selected),arr=exerciseList();
+return head('ДЕМО ПРЕДПРОСМОТР')+'<h1>Твой день.</h1><p class="secondary">План учитывает выбранные дни, время и подтверждённые ограничения.</p>'+
+'<div class="card"><div class="label">Дата тренировки</div><button class="datebutton" data-action="calendar" aria-expanded="'+calOpen+'"><span>'+esc(readable(selected))+'</span><span>'+ (calOpen?'⌃':'⌄')+'</span></button>'+(calOpen?calendar():'')+'</div>'+
+(active?'<div class="card"><div class="flex"><span class="badge">ТРЕНИРОВКА '+numberByDay(selected)+'</span><span class="muted">'+state.minutes+' мин</span></div><div class="workout-title">'+(doneToday()?'Тренировка выполнена':'Силовая тренировка')+'</div><p class="muted">Разминка 5 минут · упражнения · заминка 3 минуты</p><div class="divider"></div>'+arr.map(function(e){return '<div class="exercise"><div><div class="ex-name">'+esc(e[0])+'</div>'+(e[2]?'<div class="muted small">'+esc(e[2])+'</div>':'')+'</div><span class="muted">'+esc(e[1])+'</span></div>';}).join('')+'<div class="space"></div><button class="btn '+(doneToday()?'alt':'')+'" data-action="complete">'+(doneToday()?'✓ Выполнено · отменить отметку':'Отметить тренировку выполненной')+'</button></div>':
+'<div class="card"><span class="badge">ВОССТАНОВЛЕНИЕ</span><div class="workout-title">Сегодня день отдыха</div><p class="secondary">На эту дату тренировка не назначена. Выбери другой день выше или измени расписание в профиле.</p><button class="btn alt" data-action="go" data-value="plan">Посмотреть 4 недели</button></div>')+
+'<div class="card"><div class="flex"><div><div class="stat">'+(state.history||[]).length+'</div><div class="statcap">Отмечено тренировок в этом браузере</div></div><button class="btn tiny alt" data-action="go" data-value="plan">Весь план →</button></div></div>'+nav();}
+function renderPlan(){
+var today=new Date(),monday=new Date(today);monday.setDate(today.getDate()-mondayNum(today));monday.setHours(12,0,0,0);monday.setDate(monday.getDate()+(activeWeek-1)*7);
+var list=[];for(var i=0;i<7;i++){var dt=new Date(monday);dt.setDate(monday.getDate()+i);if(state.days.indexOf(i)>=0)list.push({dt:dt,name:dayNames[i]});}
+return head('4 НЕДЕЛИ')+'<h1>План тренировок.</h1><p class="secondary">Четыре недели без повторяющихся экранов. Выбирай неделю, чтобы увидеть расписание.</p>'+
+'<div class="weeks">'+[1,2,3,4].map(function(w){return '<button class="week '+(w===activeWeek?'on':'')+'" data-action="week" data-value="'+w+'">'+w+' нед.</button>';}).join('')+'</div>'+
+'<div class="card"><div class="flex"><h3>Неделя '+activeWeek+'</h3><span class="badge">'+state.days.length+' дн. · '+state.minutes+' мин</span></div><p class="small secondary">'+monday.toLocaleDateString('ru-RU',{day:'numeric',month:'long'})+' — '+new Date(monday.getFullYear(),monday.getMonth(),monday.getDate()+6).toLocaleDateString('ru-RU',{day:'numeric',month:'long'})+'</p>'+
+list.map(function(v,i){return '<div class="plan-day"><div><strong>'+v.dt.toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'})+'</strong><div class="muted small">Тренировка '+(i%2===0?'A':'Б')+' · '+state.minutes+' мин</div></div><button class="btn tiny alt" data-action="pick-date" data-value="'+iso(v.dt)+'">Открыть →</button></div>';}).join('')+'</div>'+
+'<div class="card"><h3>Как план подстраивается</h3><p class="muted">Цель: '+esc(goals[state.goal])+'. Место: '+esc(places[state.place])+'. Подтверждённые ограничения: '+(state.approved.length?state.approved.map(function(v){return ({knee:'колени',shoulder:'плечи',back:'спина',other:'другое'})[v];}).join(', '):'не указаны')+'.</p><p class="small secondary" style="margin:0">Это пример логики, а не медицинская оценка и не готовая индивидуальная программа.</p></div>'+nav();}
+function renderProfile(){return head('ТВОИ НАСТРОЙКИ')+'<h1>Профиль.</h1>'+
+'<div class="card"><div class="flex"><div><h3>Анкета</h3><p class="muted" style="margin:0">'+esc(state.age)+' лет · '+esc(state.height)+' см · '+esc(state.weight)+' кг</p></div><button class="btn tiny alt" data-action="edit">Изменить</button></div><div class="divider"></div><div class="small secondary">'+esc(goals[state.goal])+' · '+esc(places[state.place])+' · '+state.minutes+' минут</div><div class="small secondary" style="margin-top:6px">'+state.days.map(function(x){return dayNames[x];}).join(' · ')+'</div></div>'+
+'<div class="card"><h3>Ограничения</h3><p class="muted">'+(state.restrictions?esc(state.restrictions):'Описание не добавлено')+'</p><button class="btn alt" data-action="edit">Отредактировать анкету</button></div>'+
+'<div class="card"><h3>История тренировок</h3><p class="muted">'+((state.history||[]).length?(state.history.slice().sort().reverse().map(function(x){return x.split('-').reverse().join('.');}).join(' · ')):'Пока нет отмеченных тренировок')+'</p></div>'+
+'<button class="btn outline" data-action="reset">Сбросить только демо-данные</button><p class="small secondary" style="margin-top:15px">Реальные учётные записи, база FORMIQ, Garmin и Yandex AI не используются.</p>'+nav();}
+function render(){app.innerHTML=(screen==='welcome'?renderWelcome():screen==='onboarding'?renderOnboarding():screen==='plan'?renderPlan():screen==='profile'?renderProfile():renderHome());}
+function readForm(){['age','sex','height','weight','restrictions'].forEach(function(id){var e=document.getElementById(id);if(e)state[id]=e.value.trim();});var c=document.getElementById('consent');if(c)state.consent=c.checked;var m=document.getElementById('minutes');if(m)state.minutes=Number(m.value);}
+function extract(s){var r=[];if(/колен|сустав|мениск/i.test(s))r.push('knee');if(/плеч|рук|локт|запяст/i.test(s))r.push('shoulder');if(/спин|поясниц|позвон|ше[яи]/i.test(s))r.push('back');if(s.trim()&&r.length===0)r.push('other');return r;}
+function labelFlag(v){return ({knee:'Дискомфорт в коленях',shoulder:'Дискомфорт в плечах или руках',back:'Дискомфорт в спине или шее',other:'Ограничение требует уточнения'})[v];}
+app.addEventListener('input',function(e){
+if(e.target.id==='minutes'){var el=document.getElementById('minutesLabel');if(el)el.textContent=e.target.value+' мин';}
+if(e.target.id==='restrictions'){analysis=[];confirmed=false;}
+});
+app.addEventListener('click',function(e){
+var btn=e.target.closest('[data-action]');if(!btn)return;
+var action=btn.dataset.action,v=btn.dataset.value;
+if(action==='go'){go(v);return;}
+if(action==='set'){readForm();state[btn.dataset.key]=v;render();return;}
+if(action==='day'){readForm();var n=Number(v),arr=state.days.slice();if(arr.indexOf(n)>=0){if(arr.length>1)arr=arr.filter(function(x){return x!==n;});}else arr.push(n);state.days=arr.sort(function(a,b){return a-b;});render();return;}
+if(action==='analyse'){readForm();if(!state.restrictions){error='Сначала опиши ограничения своими словами.';render();return;}if(!state.consent){error='Для обработки описания нужно отдельное согласие.';render();return;}analysis=extract(state.restrictions).map(labelFlag);confirmed=false;error='';render();return;}
+if(action==='confirm'){var keys=extract(state.restrictions);state.approved=keys;analysis=[];confirmed=true;persist();render();return;}
+if(action==='clear-analysis'){analysis=[];confirmed=false;render();return;}
+if(action==='save-profile'){readForm();if(!(Number(state.age)>=18&&Number(state.age)<=100&&Number(state.height)>=120&&Number(state.height)<=230&&Number(state.weight)>=30&&Number(state.weight)<=300&&state.sex)){error='Заполни возраст (18+), пол, рост и вес корректно.';render();return;}if(state.restrictions.trim()&&!confirmed&&!state.approved.length){error='При наличии ограничений проверь и подтверди разбор, чтобы он учитывался в плане. Это демонстрационная проверка.';render();return;}state.done=true;persist();go('home');return;}
+if(action==='calendar'){calOpen=!calOpen;render();return;}
+if(action==='month'){calMonth+=Number(v);if(calMonth>11){calYear++;calMonth=0;}if(calMonth<0){calYear--;calMonth=11;}render();return;}
+if(action==='date'||action==='pick-date'){var parts=v.split('-');selected=new Date(Number(parts[0]),Number(parts[1])-1,Number(parts[2]));calOpen=false;go('home');return;}
+if(action==='week'){activeWeek=Number(v);render();return;}
+if(action==='complete'){var key=iso(selected),idx=state.history.indexOf(key);if(idx>=0)state.history.splice(idx,1);else state.history.push(key);persist();render();return;}
+if(action==='edit'){analysis=[];confirmed=state.approved.length>0;go('onboarding');return;}
+if(action==='reset'){if(confirm('Стереть только данные демонстрации в этом браузере?')){state=fresh();persist();analysis=[];confirmed=false;go('welcome');}return;}
+});
+render();
+})();
+</script>
+</body></html>
