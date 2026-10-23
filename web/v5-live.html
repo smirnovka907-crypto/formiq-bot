@@ -264,4 +264,12 @@ input,select,textarea{max-width:100%}
 .fq-onboard-areas input{width:17px;height:17px;flex:none;accent-color:#667771}
 .fq-onboard-actions{display:grid;gap:9px;margin-top:23px}
 @media(max-width:360px){.fq-onboard-areas{grid-template-columns:1fr}.form-row{gap:6px}}
+
+/* Release-gate layout fixes: three items must share one exercise row. */
+.exercise{grid-template-columns:31px minmax(0,1fr) auto}
+.exercise-index{grid-column:1}
+.exercise-name{grid-column:2;overflow-wrap:anywhere;min-width:0}
+.exercise-reps{grid-column:3}
+.profile-open{top:calc(19px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
+@media(min-width:750px){.profile-open{top:calc(43px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
