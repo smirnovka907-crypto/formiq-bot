@@ -11,6 +11,114 @@ const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
 let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false,nutritionAnswer='',nutritionBusy=false;
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
+
+let onboardOpen=false,onboard=null;
+const onboardChoices={
+ goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
+ level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
+ days:Array.from({length:7},(_,i)=>[String(i+1)+' дн.',String(i+1)]),
+ equipment:[['Дома','home'],['Дома с инвентарём','homegear'],['В зале','gym']],
+ minutes:Array.from({length:15},(_,i)=>[String(20+5*i)+' мин',String(20+5*i)]),
+ limitation:[['Нет известных ограничений','none'],['Есть ограничения','yes']],
+ course:[['Выбери характер симптомов',''],['Давно, без изменений','stable'],['Недавно появились','recent'],['Усиливаются','worsening']]
+};
+const onboardRegions=[['hip','Тазобедренный сустав'],['knee','Колени'],['back','Поясница и спина'],['shoulder','Плечи'],['wrist','Запястья'],['ankle','Голеностоп'],['neck','Шея'],['heart','Сердечно-сосудистая система'],['breathing','Дыхательная система'],['other','Другое']];
+function initOnboard(){
+ if(onboard)return;
+ const p=state?.profile_raw||{},m=state?.metrics||{},h=state?.health_profile||{};
+ const areas=Array.isArray(h.affected)?h.affected.filter(k=>onboardRegions.some(([id])=>k===id)):[];
+ onboard={goal:p.goal||'general',level:p.level||'beginner',days:String(p.days||2),
+  equipment:p.equipment||'home',minutes:String(p.minutes||45),
+  age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
+  equipment_description:state?.equipment_description||'',
+  limitation:areas.length?'yes':'none',areas,pain:String(h.pain_score??0),
+  course:areas.length?(h.symptom_course||''):'',
+  danger:h.danger_signs===true,cleared:h.activity_cleared===true,
+  description:'',aiConsent:false,aiResult:null,adult:false,terms:false,privacy:false,health:false};
+}
+function onboardChoice(key,label,options){
+ return '<label class="field"><span>'+esc(label)+'</span><select data-onboard="'+key+'">'+
+  options.map(pair=>'<option value="'+esc(pair[1])+'"'+(String(onboard[key])===String(pair[1])?' selected':'')+'>'+esc(pair[0])+'</option>').join('')+'</select></label>';
+}
+function onboardInput(key,label,min,max,step){
+ return '<label class="field"><span>'+esc(label)+'</span><input data-onboard="'+key+'" type="number" inputmode="decimal" min="'+min+'" max="'+max+'" step="'+step+'" value="'+esc(onboard[key])+'"></label>';
+}
+function onboardCheckbox(key,label){
+ return '<label class="fq-onboard-check"><input type="checkbox" data-onboard="'+key+'"'+(onboard[key]?' checked':'')+'><span>'+label+'</span></label>';
+}
+function onboardForm(){
+ initOnboard();
+ const d=onboard;
+ let limits='';
+ if(d.limitation==='yes'){
+  limits='<p class="input-note">Укажи области ограничений. Они учитываются при составлении плана.</p>'+
+  '<div class="fq-onboard-areas">'+onboardRegions.map(pair=>'<label><input type="checkbox" data-area="'+pair[0]+'"'+(d.areas.includes(pair[0])?' checked':'')+'><span>'+esc(pair[1])+'</span></label>').join('')+'</div>'+
+  '<div class="fq-live-grid">'+onboardInput('pain','Боль от 0 до 10',0,10,1)+onboardChoice('course','Симптомы',onboardChoices.course)+'</div>'+
+  onboardCheckbox('cleared','Специалист подтвердил допустимость нагрузки (только если получено разрешение)')+
+  '<label class="field"><span>Описание ограничений своими словами · необязательно</span><textarea maxlength="800" rows="3" data-onboard="description">'+esc(d.description)+'</textarea></label>'+
+  onboardCheckbox('aiConsent','Разрешаю отправить описание в Yandex AI · отдельно и необязательно')+
+  button('Разобрать текст с ИИ','onboard-ai')+
+  (d.aiResult?'<p class="fq-live-banner" role="status"><strong>Проверь разбор ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+' '+esc(d.aiResult.clarification_question||'')+'</p>':'');
+ }else limits='<p class="input-note">Если появятся ограничения, их можно добавить позже.</p>';
+ const intro='<p class="intro">Единая анкета FORMIQ. Изменение параметров не удалит твою историю.</p>';
+ const personal=block('<h2>Основные параметры</h2><div class="form-row">'+
+  onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
+  onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Подтверждаю, что мне исполнилось 18 лет'));
+ const training=block('<h2>Тренировки</h2>'+onboardChoice('goal','Цель',onboardChoices.goal)+
+  onboardChoice('level','Опыт',onboardChoices.level)+'<div class="fq-live-grid">'+
+  onboardChoice('days','Тренировок в неделю',onboardChoices.days)+
+  onboardChoice('minutes','Время занятия',onboardChoices.minutes)+'</div>'+
+  onboardChoice('equipment','Где тренируешься',onboardChoices.equipment)+
+  (d.equipment==='homegear'?'<label class="field"><span>Домашний инвентарь</span><textarea data-onboard="equipment_description" rows="2" maxlength="400">'+esc(d.equipment_description)+'</textarea></label>':''));
+ const health=block('<h2>Самочувствие и ограничения</h2>'+
+  onboardChoice('limitation','Есть боль, травмы или ограничения?',onboardChoices.limitation)+limits+
+  onboardCheckbox('danger','Есть тревожные симптомы: боль в груди, обмороки или сильная необычная одышка')+
+  '<p class="input-note">При тревожных симптомах или сильной боли не начинай тренировку: обратись за медицинской оценкой.</p>');
+ const legal=block('<h2>Подтверждения</h2>'+
+  onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
+  onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
+  onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
+  '<div class="fq-onboard-actions">'+button('Сохранить анкету','onboard-save',true)+
+  (ready()?button('Отмена','onboard-cancel'):'')+'</div>');
+ return page('Твой профиль',intro+personal+training+health+legal);
+}
+function onboardingPayload(){
+ const d=onboard,m=state?.metrics||{};
+ if(!d.adult||!d.terms||!d.privacy||!d.health)throw Error('Подтверди возраст 18+ и три согласия.');
+ const mm={};
+ for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
+  const raw=String(d[key]??'').trim(),val=Number(raw.replace(',','.'));
+  if(!raw||!Number.isFinite(val)||val<min||val>max||(whole&&!Number.isInteger(val)))throw Error('Проверь возраст, рост и вес.');
+  mm[key]=val;
+ }
+ const affected=d.limitation==='yes'?[...new Set(d.areas)]:[];
+ if(d.limitation==='yes'&&!affected.length)throw Error('Укажи область ограничения.');
+ if(affected.length&&!['stable','recent','worsening'].includes(d.course))throw Error('Укажи характер симптомов.');
+ const score=affected.length?Number(d.pain):0;
+ if(!Number.isInteger(score)||score<0||score>10)throw Error('Укажи боль от 0 до 10.');
+ const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
+ return {answers:{goal:d.goal,level:d.level,days:d.days,equipment:d.equipment,age_group:'adult',minutes:d.minutes},
+  metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),...(['male','female','other'].includes(m.sex)?{sex:m.sex}:{})},
+  timezone,health_profile:{affected,pain_score:score,
+   symptom_course:affected.length?d.course:'none',danger_signs:d.danger===true,
+   activity_cleared:affected.length&&d.cleared===true},
+  equipment_description:d.equipment==='homegear'?String(d.equipment_description).trim():'',
+  terms:true,privacy:true,health:true};
+}
+function onboardChanged(e){
+ const target=e.target;if(!onboard||!target)return;
+ const area=target.dataset?.area;
+ if(area){
+  if(target.checked&&!onboard.areas.includes(area))onboard.areas.push(area);
+  if(!target.checked)onboard.areas=onboard.areas.filter(x=>x!==area);
+  onboard.aiResult=null;return;
+ }
+ const field=target.dataset?.onboard;
+ if(!field)return;
+ onboard[field]=target.type==='checkbox'?target.checked:target.value;
+ if(field==='limitation'||field==='equipment')draw();
+}
+
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:'';};
 const REST_TIMER_KEY='formiq_v5_rest_countdown';
@@ -100,7 +208,7 @@ function workout(){
  return page('Тренировка',`<p class="fq-live-banner">Результаты сохраняются в PostgreSQL через защищённый API FORMIQ.</p>${block(`<span class="eyebrow">${esc(w.title||'Занятие')}</span><h2>${w.done||0} из ${w.total||0} подходов</h2>`)}${content}`);
 }
 function training(){
- if(!ready())return page('Тренировки',block(`<h2>Нужно заполнить анкету</h2><p>Проверь ограничения и согласия в основном FORMIQ.</p><a class="button-main fq-live-onboarding-link" href="/mini/legacy" data-legacy>Открыть анкету</a>${state?.error?`<p class="fq-live-error">${esc(state.error)}</p>`:''}`));
+ if(!ready()){onboardOpen=true;return onboardForm()}
  if(active())return workout();
  const idx='ABCDEFG'.indexOf(state.next_day||''),list=state.plan?.[idx]||[],upcoming=(state.calendar||[]).find(x=>x.status==='planned'&&x.day===state.next_day);
  return page('Тренировки',block(`<span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span><h2>${esc(state.plan_names?.[idx]||state.goal||'Тренировка')}</h2><p class="subtitle">${esc(upcoming?.date_ru||'По плану')}</p>
@@ -187,9 +295,9 @@ function profile(){
  const measure=metricEdit?`<div class="fq-live-grid">${fields.map(([key,label,min,max])=>`<label class="field"><span>${label}</span><input id="profile-${key}" data-metric="${key}" type="number" inputmode="${key==='age'?'numeric':'decimal'}" min="${min}" max="${max}" step="${key==='age'?'1':'0.1'}" autocomplete="off" placeholder="—" value="${esc(profileDraft?.[key]??'')}"></label>`).join('')}</div>
  <p class="input-note">Изменятся только исправленные значения. История тренировок сохраняется.</p><div class="fq-live-actions" style="margin-top:12px">${button('Сохранить','profile-metrics-save',true)}${button('Отмена','profile-metrics-cancel')}</div>`:
  `<div class="fq-live-list">${fields.map(([key,label])=>`<div class="fq-live-row"><span>${label}</span><strong>${data[key]===null||data[key]===undefined?'—':esc(data[key])}</strong></div>`).join('')}</div>${button('Изменить параметры','profile-metrics-edit')}`;
- return page('Твой профиль',block(`<h2>Анкета</h2>${labels}<a class="button-main fq-live-onboarding-link" href="/mini/legacy" data-legacy>Редактировать цели, расписание и ограничения</a>`)+
+ return page('Твой профиль',block(`<h2>Анкета</h2>${labels}${button('Редактировать анкету','onboard-open',true)}`)+
  block(`<h2>Параметры</h2>${profileNotice?`<p role="status" class="fq-live-muted">${esc(profileNotice)}</p>`:''}${measure}`)+
- block('<h2>Самочувствие и ограничения</h2><p>Ограничения учитываются программой на сервере. Для их изменения и подтверждения открой анкету.</p>')+
+ block('<h2>Самочувствие и ограничения</h2><p>Ограничения учитываются программой на сервере. Изменить их можно в анкете FORMIQ.</p>')+
  block(`<h2>Тарифы</h2><p>${esc(state.tier_name||'Тестовый доступ')}</p><p>Оплата не подключена.</p>`)+
  block('<h2>Подключения</h2><p>Garmin Connect · не подключено</p><p>FatSecret · не подключено</p>'));
 }
@@ -206,11 +314,13 @@ function modalHTML(){
 function draw(){
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
- app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${view==='home'?training():view==='plan'?planPage():view==='progress'?progress():view==='food'?food():profile()}</main>${(view==='profile'||!active())?nav():''}${modalHTML()}`;
+ app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${onboardOpen?onboardForm():view==='home'?training():view==='plan'?planPage():view==='progress'?progress():view==='food'?food():profile()}</main>${!onboardOpen&&(view==='profile'||!active())?nav():''}${modalHTML()}`;
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
+app.addEventListener('change',onboardChanged);
+app.addEventListener('input',onboardChanged);
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  const field=e.target,card=e.target.closest('.surface');
@@ -228,9 +338,32 @@ app.addEventListener('click',async e=>{
   return;
  }
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
+ if(element.dataset.nav){onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
+ if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
+ if(cmd==='onboard-ai'){
+  if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
+  const txt=String(onboard.description||'').trim();
+  if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
+  const result=await send('health_analyze',{adult:true,privacy_ack:true,text:txt});
+  if(result?.analysis){
+   const a=result.analysis;onboard.limitation='yes';
+   onboard.areas=Array.isArray(a.affected)?a.affected.filter(k=>onboardRegions.some(([id])=>id===k)):[];
+   onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
+   onboard.course=['stable','recent','worsening'].includes(a.symptom_course)?a.symptom_course:'';
+   onboard.danger=a.danger_signs===true;onboard.cleared=false;
+   onboard.aiResult=a;draw();
+  }return;
+ }
+ if(cmd==='onboard-save'){
+  if(!onboard)return;let payload;
+  try{payload=onboardingPayload()}catch(e){fail(e.message);return}
+  const saved=await send('onboarding',payload);
+  if(saved){onboardOpen=false;onboard=null;view='home';draw();window.scrollTo(0,0)}
+  return;
+ }
  if(cmd==='profile-metrics-edit'){
   profileNotice='';
   profileDraft={};
