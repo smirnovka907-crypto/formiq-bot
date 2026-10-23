@@ -2828,18 +2828,32 @@ def mini_ai(chat,question):
     return {'answer':answer,'left':ai_quota(chat)}
 
 
+# Only these public activity labels may be persisted in cardio_sessions.equipment.
+# Legacy rows with the default 'elliptical' are not reinterpreted.
+CARDIO_TYPES = {
+    'Ходьба': 'walking',
+    'Бег': 'running',
+    'Велосипед': 'cycling',
+    'Плавание': 'swimming',
+    'Другое': 'other',
+}
+CARDIO_LABELS = {v: k for k, v in CARDIO_TYPES.items()}
+
+
 def mini_history_detail(chat,wid):
     if wid < 0:
         with db() as conn:
-            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr FROM cardio_sessions
+            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment FROM cardio_sessions
                 WHERE id=%s AND chat_id=%s''',(-wid,chat)).fetchone()
         if not cardio:
             raise ValueError('Запись кардио не найдена')
-        dt,minutes,hr=cardio
-        items=[{'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
+        dt,minutes,hr,equipment=cardio
+        display_type=CARDIO_LABELS.get(equipment, 'Кардио')
+        items=[{'name':'Вид кардио','key':None,'result':display_type},
+               {'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
         if hr is not None:
             items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
-        return {'date':dt.strftime('%d.%m.%Y'),'title':'Кардио','items':items}
+        return {'date':dt.strftime('%d.%m.%Y'),'title':display_type,'items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
@@ -2878,13 +2892,13 @@ def mini_history_page(chat, body):
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
-        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes FROM ("
+        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment FROM ("
         "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
-        "plan_day, manual_title, NULL::integer AS minutes FROM workouts "
+        "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment FROM workouts "
         "WHERE chat_id=%s AND status='finished' " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
-        "NULL::text AS manual_title, minutes FROM cardio_sessions "
+        "NULL::text AS manual_title, minutes, equipment FROM cardio_sessions "
         "WHERE chat_id=%s " + filter_c +
         ") AS entries ORDER BY occurred_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -2892,13 +2906,13 @@ def mini_history_page(chat, body):
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
     page = []
-    for ident, timestamp, kind, day, custom, minutes in rows[:limit]:
+    for ident, timestamp, kind, day, custom, minutes, equipment in rows[:limit]:
         page.append({
             'id': ident,
             'date': timestamp.strftime('%d.%m.%Y'),
             'type': kind,
             'title': (custom or day_title(p, day)) if kind == 'workout'
-                     else f'Кардио · {minutes} мин',
+                     else f'{CARDIO_LABELS.get(equipment, "Кардио")} · {minutes} мин',
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
 
@@ -3022,7 +3036,7 @@ def mini_state(chat, just_finished=False):
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
-        cardio_rows=c.execute('''SELECT id,performed_at,minutes FROM cardio_sessions
+        cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment FROM cardio_sessions
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     combined=[{'id':wid,'date':dt.strftime('%d.%m.%Y'),
         'sort_at':dt.isoformat(),'type':'workout',
@@ -3030,7 +3044,8 @@ def mini_state(chat, just_finished=False):
         for wid,day,dt,manual_title in history_rows]
     combined.extend({'id':-cid,'date':dt.strftime('%d.%m.%Y'),
         'sort_at':dt.isoformat(),'type':'cardio',
-        'title':f'Кардио · {mins} мин'} for cid,dt,mins in cardio_rows)
+        'title':f'{CARDIO_LABELS.get(equipment, "Кардио")} · {mins} мин'}
+        for cid,dt,mins,equipment in cardio_rows)
     combined.sort(key=lambda row:row['sort_at'],reverse=True)
     for entry in combined:
         entry.pop('sort_at')
@@ -3121,12 +3136,16 @@ def mini_aux(chat,action,body):
     if action=='cardio':
         require_tier(chat,'comfort')
         mins=body.get('minutes');hr=body.get('avg_hr')
+        activity=body.get('type')
+        if activity is not None and activity not in CARDIO_TYPES:
+            raise ValueError('Неизвестный вид кардио')
+        stored_type=CARDIO_TYPES[activity] if activity else 'elliptical'
         if type(mins) is not int or not 1<=mins<=300:raise ValueError('Минуты: от 1 до 300')
         if hr not in (None,'') and (type(hr) is not int or not 40<=hr<=220):
             raise ValueError('Пульс: от 40 до 220')
         with db() as conn:
-            conn.execute('INSERT INTO cardio_sessions(chat_id,minutes,avg_hr) VALUES(%s,%s,%s)',
-              (chat,mins,hr or None))
+            conn.execute('INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment) VALUES(%s,%s,%s,%s)',
+              (chat,mins,hr or None,stored_type))
         return True
     if action=='ai_consent':
         require_tier(chat,'comfort')
