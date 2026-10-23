@@ -83,11 +83,22 @@ function history(){
  return `<section class="surface" id="history-root"><div class="fq-live-history-head"><h2>История тренировок</h2>${button('По датам','calendar',false,`aria-expanded="${calendarOpen}"`)}</div>${calendarOpen?calendar():''}
  ${date?`<div class="fq-live-history-head"><strong>${prettyDate(date)}</strong>${button('Сбросить','reset-date')}</div>`:''}${filtered().slice(0,3).map(historyRow).join('')||'<p>За эту дату записей нет.</p>'}${button('Вся история','history-all')}</section>`;
 }
+function periodLabel(n){
+ const start=state?.cycle_start;
+ if(start&&/^\d{4}-\d{2}-\d{2}$/.test(start)){
+  const d=new Date(start+'T12:00:00Z');
+  if(!Number.isNaN(d.getTime())){
+   const a=new Date(d.getTime()+(n-1)*7*86400000),b=new Date(a.getTime()+6*86400000);
+   return `${prettyDate(a.toISOString().slice(0,10))} — ${prettyDate(b.toISOString().slice(0,10))}`;
+  }
+ }
+ return `Период ${n}`;
+}
 function progress(){
  const stats=state.stats||{},plan=state.calendar||[];
  return page('Прогресс',block(`<h2>Результаты</h2><div class="fq-live-grid"><div><span class="eyebrow">ТРЕНИРОВОК</span><h2>${stats.total||0}</h2></div><div><span class="eyebrow">ПОДХОДОВ</span><h2>${stats.sets||0}</h2></div></div>`)+
  block('<h2>Garmin Connect</h2><p>Синхронизация пока не подключена.</p>')+
- block(`<h2>Тренировочный план</h2><div class="fq-live-plan-grid">${[1,2,3,4].map(i=>{const dates=plan.filter(x=>x.week===i).map(x=>x.date).sort();const label=dates.length?`${prettyDate(dates[0])} — ${prettyDate(dates[dates.length-1])}`:`Период ${i}`;return button(label,'week',false,`data-week="${i}"`)}).join('')}</div>
+ block(`<h2>Тренировочный план</h2><div class="fq-live-plan-grid">${[1,2,3,4].map(i=>button(periodLabel(i),'week',false,`data-week="${i}"`)).join('')}</div>
  ${week?`<div class="fq-live-list">${plan.filter(x=>x.week===week).map(x=>`<div class="fq-live-row"><span>${esc(x.date_ru)} · ${esc(x.title)}</span><small>${x.status==='done'?'Выполнено':'По плану'}</small></div>`).join('')}</div>`:''}`)+history());
 }
 function food(){return page('Питание',block('<h2>Питание</h2><p>Пока доступно через прежний серверный модуль.</p><a class="button-main fq-live-onboarding-link" href="/mini">Открыть питание FORMIQ</a>'))}
@@ -110,7 +121,7 @@ function modalHTML(){
 function draw(){
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
- app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${view==='home'?training():view==='progress'?progress():view==='food'?food():profile()}</main>${view!=='profile'&&!active()?nav():''}${modalHTML()}`;
+ app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${view==='home'?training():view==='progress'?progress():view==='food'?food():profile()}</main>${(view==='profile'||!active())?nav():''}${modalHTML()}`;
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
