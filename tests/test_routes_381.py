@@ -93,7 +93,10 @@ class RouteTests(unittest.TestCase):
 
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
-        self.assertIn(b'38.2.0', self.app.test_client().get('/').data)
+        version = importlib.import_module('main').VERSION
+        self.assertIn(version.encode('ascii'), self.app.test_client().get('/').data)
+        self.assertIn(f'name="formiq-version" content="{version}"'.encode('ascii'), self.app.test_client().get('/mini').data)
+        self.assertIn(f'/mini/ux-382.js?v={version}'.encode('ascii'), self.app.test_client().get('/mini').data)
 
 
 if __name__ == '__main__':

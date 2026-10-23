@@ -3338,10 +3338,11 @@ def mini_report():
 @APP.get('/mini')
 def mini_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-382.css?v=38.2.0"></head>', 1)
-    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script><script src="/mini/ux-382.js?v=38.2.0"></script></body>', 1)
+    markup = markup.replace('</head>', f'<meta name="formiq-version" content="{html.escape(VERSION)}"></head>', 1)
+    markup = markup.replace('</head>', f'<link rel="stylesheet" href="/mini/ux-381.css?v={VERSION}"></head>', 1)
+    markup = markup.replace('</head>', f'<link rel="stylesheet" href="/mini/ux-3811.css?v={VERSION}"></head>', 1)
+    markup = markup.replace('</head>', f'<link rel="stylesheet" href="/mini/ux-382.css?v={VERSION}"></head>', 1)
+    markup = markup.replace('</body>', f'<script src="/mini/ux-381.js?v={VERSION}"></script><script src="/mini/ux-3811.js?v={VERSION}"></script><script src="/mini/ux-382.js?v={VERSION}"></script></body>', 1)
     response = make_response(markup)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     response.headers['Cache-Control'] = 'no-store'

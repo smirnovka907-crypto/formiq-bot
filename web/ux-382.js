@@ -124,6 +124,21 @@ renderCoach=function(){
 show=function(markup){
   previousShow382(markup);
   const foot=$('fq-version-footer');
-  if(foot)foot.textContent='FORMIQ 38.2.0';
+  if(foot)foot.textContent='FORMIQ '+(document.querySelector('meta[name="formiq-version"]')?.getAttribute('content') || '—');
 };
+
+/* Approved Telegram Mini App fullscreen startup (Bot API 8.0+).
+   Expand on older clients; no changes to workouts, navigation or user data. */
+(function requestApprovedFullscreen(){
+  const webApp = (typeof window !== 'undefined' && window.Telegram) ? window.Telegram.WebApp : null;
+  if(!webApp || !webApp.initData) return; // Never request fullscreen in a normal browser preview.
+  try{ if(typeof webApp.expand === 'function') webApp.expand(); }catch(_error){}
+  try{
+    const supported = typeof webApp.isVersionAtLeast === 'function'
+      ? webApp.isVersionAtLeast('8.0') : false;
+    if(supported && typeof webApp.requestFullscreen === 'function' && !webApp.isFullscreen){
+      webApp.requestFullscreen();
+    }
+  }catch(_error){ /* Keep the expanded non-fullscreen fallback. */ }
+})();
 })();
