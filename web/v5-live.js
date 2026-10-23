@@ -53,7 +53,7 @@ function onboardButtons(key,label,options){
  '" data-onboard-pick="'+esc(key)+'" data-value="'+esc(val)+'" aria-pressed="'+(String(onboard[key])===String(val))+'">'+esc(name)+'</button>').join('')+'</div></div>';
 }
 function onboardDuration(){
- return '<div class="fq-onboard-duration"><label for="onboard-duration" class="range-row"><span>Длительность занятия</span><strong>'+esc(onboard.minutes)+' мин</strong></label>'+
+ return '<div class="fq-onboard-duration"><label for="onboard-duration" class="range-row"><span>Длительность занятия</span><strong id="onboard-duration-value">'+esc(onboard.minutes)+' мин</strong></label>'+
  '<input class="range" id="onboard-duration" data-onboard="minutes" type="range" min="20" max="90" step="5" value="'+esc(onboard.minutes)+'">'+
  '<div class="range-labels"><span>20 мин</span><span>90 мин</span></div></div>';
 }
@@ -122,14 +122,17 @@ function onboardChanged(e){
  if(area){
   if(target.checked&&!onboard.areas.includes(area))onboard.areas.push(area);
   if(!target.checked)onboard.areas=onboard.areas.filter(x=>x!==area);
-  onboard.aiReviewed=false;return;
+  onboard.aiReviewed=false;
+  const confirm=app.querySelector?.('input[data-onboard="aiReviewed"]');if(confirm)confirm.checked=false;
+  return;
  }
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
  if(field==='description'){onboard.aiResult=null;onboard.aiReviewed=false;}
- if(field==='limitation')onboard.aiReviewed=false;
- if(field==='limitation'||field==='equipment'||field==='minutes')draw();
+ if(['limitation','pain','course','danger','cleared'].includes(field)){onboard.aiReviewed=false;const confirm=app.querySelector?.('input[data-onboard="aiReviewed"]');if(confirm)confirm.checked=false;}
+ if(field==='minutes'){const label=document.getElementById('onboard-duration-value');if(label)label.textContent=onboard.minutes+' мин';return;}
+ if(field==='limitation'||field==='equipment')draw();
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
