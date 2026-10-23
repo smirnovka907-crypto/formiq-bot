@@ -30,11 +30,11 @@ function initOnboard(){
  onboard={goal:p.goal||'general',level:p.level||'beginner',days:String(p.days||2),
   equipment:p.equipment||'home',minutes:String(p.minutes||45),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
-  equipment_description:state?.equipment_description||'',
+  equipment_description:state?.equipment_description||'',sex:m.sex||'',
   limitation:areas.length?'yes':'none',areas,pain:String(h.pain_score??0),
   course:areas.length?(h.symptom_course||''):'',
   danger:h.danger_signs===true,cleared:h.activity_cleared===true,
-  description:'',aiConsent:false,aiResult:null,adult:false,terms:false,privacy:false,health:false};
+  description:'',aiConsent:false,aiResult:null,aiReviewed:false,adult:false,terms:false,privacy:false,health:false};
 }
 function onboardChoice(key,label,options){
  return '<label class="field"><span>'+esc(label)+'</span><select data-onboard="'+key+'">'+
@@ -46,6 +46,17 @@ function onboardInput(key,label,min,max,step){
 function onboardCheckbox(key,label){
  return '<label class="fq-onboard-check"><input type="checkbox" data-onboard="'+key+'"'+(onboard[key]?' checked':'')+'><span>'+label+'</span></label>';
 }
+
+function onboardButtons(key,label,options){
+ return '<div class="fq-onboard-choice"><h3 class="section-label">'+esc(label)+'</h3><div class="option-grid">'+
+ options.map(([name,val])=>'<button type="button" class="choice'+(String(onboard[key])===String(val)?' on':'')+
+ '" data-onboard-pick="'+esc(key)+'" data-value="'+esc(val)+'" aria-pressed="'+(String(onboard[key])===String(val))+'">'+esc(name)+'</button>').join('')+'</div></div>';
+}
+function onboardDuration(){
+ return '<div class="fq-onboard-duration"><label for="onboard-duration" class="range-row"><span>Длительность занятия</span><strong>'+esc(onboard.minutes)+' мин</strong></label>'+
+ '<input class="range" id="onboard-duration" data-onboard="minutes" type="range" min="20" max="90" step="5" value="'+esc(onboard.minutes)+'">'+
+ '<div class="range-labels"><span>20 мин</span><span>90 мин</span></div></div>';
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
@@ -55,20 +66,19 @@ function onboardForm(){
   '<div class="fq-onboard-areas">'+onboardRegions.map(pair=>'<label><input type="checkbox" data-area="'+pair[0]+'"'+(d.areas.includes(pair[0])?' checked':'')+'><span>'+esc(pair[1])+'</span></label>').join('')+'</div>'+
   '<div class="fq-live-grid">'+onboardInput('pain','Боль от 0 до 10',0,10,1)+onboardChoice('course','Симптомы',onboardChoices.course)+'</div>'+
   onboardCheckbox('cleared','Специалист подтвердил допустимость нагрузки (только если получено разрешение)')+
-  '<label class="field"><span>Описание ограничений своими словами · необязательно</span><textarea maxlength="800" rows="3" data-onboard="description">'+esc(d.description)+'</textarea></label>'+
+  '<label class="field"><span>Описание ограничений своими словами</span><textarea maxlength="800" rows="3" data-onboard="description" placeholder="Например: колено беспокоит при приседаниях">'+esc(d.description)+'</textarea></label>'+  '<p class="input-note">Текст не сохраняется как медицинская запись. Для его использования нужен отдельный анализ ИИ и твоё подтверждение результата. Без ИИ выбери области ограничений вручную и оставь текст пустым.</p>'+
   onboardCheckbox('aiConsent','Разрешаю отправить описание в Yandex AI · отдельно и необязательно')+
   button('Разобрать текст с ИИ','onboard-ai')+
-  (d.aiResult?'<p class="fq-live-banner" role="status"><strong>Проверь разбор ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+' '+esc(d.aiResult.clarification_question||'')+'</p>':'');
+  (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь разбор ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+' '+esc(d.aiResult.clarification_question||'')+'</div>'+onboardCheckbox('aiReviewed','Проверил предложенные области, характер симптомов и тревожные признаки; подтверждаю результат'):'' );
  }else limits='<p class="input-note">Если появятся ограничения, их можно добавить позже.</p>';
  const intro='<p class="intro">Единая анкета FORMIQ. Изменение параметров не удалит твою историю.</p>';
- const personal=block('<h2>Основные параметры</h2><div class="form-row">'+
+ const personal=block('<h2>Основные параметры</h2>'+onboardButtons('sex','Пол (необязательно)',[['Мужской','male'],['Женский','female'],['Не указывать','']])+'<div class="form-row">'+
   onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
   onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Подтверждаю, что мне исполнилось 18 лет'));
- const training=block('<h2>Тренировки</h2>'+onboardChoice('goal','Цель',onboardChoices.goal)+
+ const training=block('<h2>Тренировки</h2>'+onboardButtons('goal','Цель',onboardChoices.goal)+
   onboardChoice('level','Опыт',onboardChoices.level)+'<div class="fq-live-grid">'+
-  onboardChoice('days','Тренировок в неделю',onboardChoices.days)+
-  onboardChoice('minutes','Время занятия',onboardChoices.minutes)+'</div>'+
-  onboardChoice('equipment','Где тренируешься',onboardChoices.equipment)+
+  onboardChoice('days','Тренировок в неделю',onboardChoices.days)+'</div>'+onboardDuration()+
+  onboardButtons('equipment','Где тренируешься',onboardChoices.equipment)+
   (d.equipment==='homegear'?'<label class="field"><span>Домашний инвентарь</span><textarea data-onboard="equipment_description" rows="2" maxlength="400">'+esc(d.equipment_description)+'</textarea></label>':''));
  const health=block('<h2>Самочувствие и ограничения</h2>'+
   onboardChoice('limitation','Есть боль, травмы или ограничения?',onboardChoices.limitation)+limits+
@@ -84,6 +94,7 @@ function onboardForm(){
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{};
+ if(String(d.description||'').trim()&&(!d.aiResult||!d.aiReviewed))throw Error('Описание не подтверждено: разбери текст с ИИ и проверь результат или очисти текст и отметь области вручную.');
  if(!d.adult||!d.terms||!d.privacy||!d.health)throw Error('Подтверди возраст 18+ и три согласия.');
  const mm={};
  for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
@@ -98,7 +109,7 @@ function onboardingPayload(){
  if(!Number.isInteger(score)||score<0||score>10)throw Error('Укажи боль от 0 до 10.');
  const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
  return {answers:{goal:d.goal,level:d.level,days:d.days,equipment:d.equipment,age_group:'adult',minutes:d.minutes},
-  metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),...(['male','female','other'].includes(m.sex)?{sex:m.sex}:{})},
+  metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),{sex:['male','female','other'].includes(d.sex)?d.sex:null}},
   timezone,health_profile:{affected,pain_score:score,
    symptom_course:affected.length?d.course:'none',danger_signs:d.danger===true,
    activity_cleared:affected.length&&d.cleared===true},
@@ -111,12 +122,14 @@ function onboardChanged(e){
  if(area){
   if(target.checked&&!onboard.areas.includes(area))onboard.areas.push(area);
   if(!target.checked)onboard.areas=onboard.areas.filter(x=>x!==area);
-  onboard.aiResult=null;return;
+  onboard.aiReviewed=false;return;
  }
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
- if(field==='limitation'||field==='equipment')draw();
+ if(field==='description'){onboard.aiResult=null;onboard.aiReviewed=false;}
+ if(field==='limitation')onboard.aiReviewed=false;
+ if(field==='limitation'||field==='equipment'||field==='minutes')draw();
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -353,6 +366,13 @@ app.addEventListener('click',async e=>{
  if(element.dataset.nav){onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(element.dataset.onboardPick){
+  if(!onboardOpen||!onboard)return;
+  const key=element.dataset.onboardPick,value=element.dataset.value;
+  if(!['goal','equipment','sex'].includes(key))return;
+  onboard[key]=value;
+  draw();return;
+ }
  if(cmd==='plan-open'||cmd==='plan-back'){view=cmd==='plan-open'?'plan':'home';error='';draw();window.scrollTo(0,0);return}
   if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
@@ -367,7 +387,7 @@ app.addEventListener('click',async e=>{
    onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
    onboard.course=['stable','recent','worsening'].includes(a.symptom_course)?a.symptom_course:'';
    onboard.danger=a.danger_signs===true;onboard.cleared=false;
-   onboard.aiResult=a;draw();
+   onboard.aiResult=a;onboard.aiReviewed=false;draw();
   }return;
  }
  if(cmd==='onboard-save'){
