@@ -3500,7 +3500,7 @@ def mini_report():
         return jsonify(ok=False,error='Не удалось обработать отчёт'),500
 
 
-@APP.get('/mini')
+@APP.get('/mini/legacy')
 def mini_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
@@ -3514,6 +3514,15 @@ def mini_page():
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
+
+
+@APP.get('/mini')
+def mini_page_v5_default():
+    """The approved Aluminium v5 is the default Mini App entry.
+    Legacy /mini/legacy remains available for nutrition and full onboarding.
+    Signed /mini/api endpoints and the PostgreSQL data model are unchanged.
+    """
+    return mini_v5_staging()
 
 
 @APP.get('/mini/v5')
