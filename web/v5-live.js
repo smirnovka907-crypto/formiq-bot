@@ -25,7 +25,7 @@ async function request(action,more={}){
 async function send(action,more={}){
  if(busy)return null;busy=true;
  try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;error='';return response}
- catch(e){error=e.name==='AbortError'?'Сервер не отвечает. Попробуй позже.':e.message;return null}
+ catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
 }
 function workout(){
@@ -146,7 +146,8 @@ app.addEventListener('click',async e=>{
   if(kg&&!/^\d+(?:[.,]\d{1,2})?$/.test(kg)){fail('Укажи вес в килограммах.');return}
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
   const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
-  if(success&&state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
+  if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
+  if(state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
  }
  if(cmd==='rest-skip'){restUntil=0;restFor='';draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
@@ -160,7 +161,10 @@ app.addEventListener('click',async e=>{
   const m=document.getElementById('cardio-min')?.value.trim()||'',p=document.getElementById('cardio-hr')?.value.trim()||'';
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
-  if(await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType})){cardioType='';typesOpen=false}return;
+  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
+  if(saved){cardioType='';typesOpen=false}
+  else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
+  return;
  }
  if(cmd==='week'){week=week===Number(element.dataset.week)?0:Number(element.dataset.week);draw();return}
  if(cmd==='calendar'){calendarOpen=!calendarOpen;month=date.slice(0,7)||new Date().toISOString().slice(0,7);monthMarks=new Set();partialHistory();if(calendarOpen)await fetchMonthMarks();return}
