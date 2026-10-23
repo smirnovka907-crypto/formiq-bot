@@ -7,7 +7,7 @@ const js=fs.readFileSync('web/v5-live.js','utf8');
 function createClient(auth=true){
  const requests=[],handlers={},fields=new Map(),failActions=new Set();
  let html='';
- const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values())field.value=''},addEventListener(name,fn){handlers[name]=fn}};
+ const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values()){const after=html.split('id="'+field.id+'"')[1];const input=after?.split('>')[0];field.value=input?.match(/\\bvalue="([^"]*)"/)?.[1]??''}},addEventListener(name,fn){handlers[name]=fn}};
  const doc={
   getElementById(id){return id==='app'?root:fields.get(id)||null},
   querySelector(){return null},
