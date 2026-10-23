@@ -3500,8 +3500,8 @@ def mini_report():
         return jsonify(ok=False,error='Не удалось обработать отчёт'),500
 
 
-@APP.get('/mini')
-def mini_page():
+@APP.get('/mini/legacy')
+def mini_legacy_page():
     markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
     markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
@@ -3514,6 +3514,12 @@ def mini_page():
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
+
+
+@APP.get('/mini')
+def mini_page():
+    """Public Aluminium v5 launcher. Legacy Mini App stays at /mini/legacy for safe fallback."""
+    return mini_v5_staging()
 
 
 @APP.get('/mini/v5')
