@@ -21,17 +21,22 @@ class V5StagingContract(unittest.TestCase):
             cls.mod = importlib.import_module('main')
         cls.client = cls.mod.APP.test_client()
 
-    def test_v5_is_separate_and_does_not_override_stable_route(self):
-        stable = self.client.get('/mini')
+    def test_v5_is_default_and_legacy_is_available(self):
+        default = self.client.get('/mini')
         v5 = self.client.get('/mini/v5')
-        self.assertEqual(stable.status_code, 200)
+        legacy = self.client.get('/mini/legacy')
+        self.assertEqual(default.status_code, 200)
         self.assertEqual(v5.status_code, 200)
-        self.assertIn(b'/mini/ux-381.css', stable.data)
-        self.assertNotIn(b'v5-live.js', stable.data)
+        self.assertEqual(legacy.status_code, 200)
+        self.assertIn(b'v5-live.js', default.data)
         self.assertIn(b'v5-live.js', v5.data)
-        self.assertEqual(v5.headers.get('Cache-Control'), 'no-store')
-        self.assertEqual(v5.headers.get('X-Content-Type-Options'), 'nosniff')
-        self.assertEqual(v5.headers.get('Referrer-Policy'), 'no-referrer')
+        self.assertIn(b'/mini/ux-381.css', legacy.data)
+        self.assertNotIn(b'v5-live.js', legacy.data)
+        self.assertEqual(default.headers.get('Cache-Control'), 'no-store')
+        self.assertEqual(default.headers.get('X-Content-Type-Options'), 'nosniff')
+        self.assertEqual(default.headers.get('Referrer-Policy'), 'no-referrer')
+        js = self.client.get('/mini/v5-live.js').data
+        self.assertIn(b'/mini/legacy', js)
 
     def test_v5_bridge_uses_only_authenticated_server_api(self):
         response = self.client.get('/mini/v5-live.js')
