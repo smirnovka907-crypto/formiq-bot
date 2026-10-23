@@ -62,7 +62,7 @@ function createClient(auth=true){
   const target={closest(sel){return sel==='button'?{dataset}:null}};
   await handlers.click({target});
  };
- client.input=(id,value)=>fields.set(id,{id,value});
+ client.input=(id,value)=>{const field={id,value};fields.set(id,field);handlers.input?.({target:field})};
  return client;
 }
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
@@ -81,6 +81,10 @@ async function run(){
  assert.match(app.root.innerHTML,/Жим ногами/);
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
  app.input('reps','12');app.input('weight','60');
+ await app.click({nav:'profile'});
+ await app.click({nav:'home'});
+ assert.match(app.root.innerHTML,/id="reps"[^>]*value="12"/);
+ assert.match(app.root.innerHTML,/id="weight"[^>]*value="60"/);
  app.failOnce('record');
  await app.click({cmd:'record'});
  assert.equal(app.fields.get('reps').value,'12','unsaved repetitions retained after error');
@@ -91,16 +95,26 @@ async function run(){
  assert.match(app.root.innerHTML,/rest-count/);
  await app.click({cmd:'rest-skip'});
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
+ assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
+ assert.match(app.root.innerHTML,/id="weight"[^>]*value=""/);
  await app.click({nav:'home'});
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.input('cardio-min','60');app.input('cardio-hr','120');
+ await app.click({cmd:'cardio-types'});
+ await app.click({cmd:'cardio-type',type:'Бег'});
+ assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value="60"/);
+ assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value="120"/);
+ await app.click({cmd:'cardio-types'});
+ await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.failOnce('cardio');
  await app.click({cmd:'cardio'});
  assert.equal(app.fields.get('cardio-min').value,'60','unsaved cardio duration retained');
  assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
  await app.click({cmd:'cardio'});
  assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
+ assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
+ assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
  await app.click({nav:'progress'});
  assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Period button must show all 7 days, not just workout days');
  await app.click({nav:'profile'});
