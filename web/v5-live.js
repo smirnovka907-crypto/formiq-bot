@@ -164,6 +164,7 @@ function food(){
  <label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>
  <label class="field" style="display:flex;align-items:flex-start;gap:12px;margin-top:12px"><input id="nutrition-consent" type="checkbox" style="width:22px;min-width:22px;height:22px;margin:0"><span>Разрешаю отправить выбранный отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>
  <p class="input-note">Отдельное согласие на использование ИИ требуется в профиле. Автоматическая синхронизация FatSecret пока не подключена.</p>
+ <p id="nutrition-error" class="fq-live-error" role="alert"></p>
  ${button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')}
  ${nutritionAnswer?`<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">${esc(nutritionAnswer)}</p>`:''}`)
  +block(`<h2>Настройки питания и согласия</h2><p class="fq-live-muted">Остальные функции доступны в прежнем интерфейсе FORMIQ.</p><a href="/mini/legacy" data-legacy class="button-subtle fq-live-onboarding-link">Открыть прежнюю версию</a>`));
@@ -252,9 +253,10 @@ app.addEventListener('click',async e=>{
   if(nutritionBusy)return;
   const file=document.getElementById('nutrition-file')?.files?.[0];
   const consent=document.getElementById('nutrition-consent')?.checked===true;
-  if(!file){fail('Выбери JPG, PNG или CSV-отчёт.');return}
-  if(file.size<24||file.size>1500000){fail('Отчёт должен быть не больше 1,5 МБ.');return}
-  if(!consent){fail('Подтверди согласие на отправку выбранного отчёта в Yandex AI.');return}
+  const alert=document.getElementById('nutrition-error');
+  if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
+  if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
+  if(!consent){if(alert)alert.textContent='Подтверди согласие на отправку выбранного отчёта в Yandex AI.';return}
   nutritionBusy=true;error='';draw();
   const data=new FormData();data.append('report',file);data.append('consent','yes');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
