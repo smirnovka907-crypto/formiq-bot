@@ -97,6 +97,9 @@ async function run(){
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="weight"[^>]*value=""/);
+ await app.click({cmd:'finish-confirm'});
+ await app.click({cmd:'finish'});
+ assert.ok(app.requests.find(x=>x.action==='finish'),'Finish saves workout before cardio can be logged');
  await app.click({nav:'home'});
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
