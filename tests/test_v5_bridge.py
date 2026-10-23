@@ -221,5 +221,57 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(self.mod.workout_rest_remaining(c, 91, p), 0)
 
 
+    def test_v5_stale_record_or_skip_cannot_advance_next_set(self):
+        from unittest.mock import MagicMock
+        for action in ('record', 'skip'):
+            with self.subTest(action=action):
+                conn = MagicMock()
+                conn.__enter__.return_value = conn
+                conn.execute.return_value.fetchone.side_effect = [
+                    (9,), (0, 2, 'reps', 'pending')]
+                payload = {'expected': {'workout_id': 9, 'position': 0,
+                                        'set_no': 1}, 'reps': 12}
+                with patch.object(self.mod, 'db', return_value=conn), \
+                     patch.object(self.mod, 'has_agreement', return_value=True):
+                    result = self.mod.mini_write(777, action, payload)
+                self.assertEqual(result, 'stale_set')
+                sql = ' '.join(c.args[0] for c in conn.execute.call_args_list)
+                self.assertNotIn('UPDATE workout_sets', sql)
+                self.assertNotIn('DELETE FROM pending_inputs', sql)
+
+    def test_v5_expected_set_rejects_bad_identifiers(self):
+        invalid = [
+            {'workout_id': True, 'position': 0, 'set_no': 1},
+            {'workout_id': 9, 'position': -1, 'set_no': 1},
+            {'workout_id': 9, 'position': 0, 'set_no': 0},
+            {'workout_id': '9', 'position': 0, 'set_no': 1},
+            {'workout_id': 9, 'position': 0, 'set_no': 1, 'extra': 2},
+        ]
+        with patch.object(self.mod, 'has_agreement', return_value=True), \
+             patch.object(self.mod, 'db') as database:
+            for expected in invalid:
+                with self.subTest(expected=expected), self.assertRaises(ValueError):
+                    self.mod.mini_write(777, 'record',
+                                        {'reps': 12, 'expected': expected})
+            database.assert_not_called()
+
+    def test_v5_duplicate_reply_returns_fresh_workout_patch(self):
+        with patch.object(self.mod, 'mini_auth', return_value=777), \
+             patch.object(self.mod, 'mini_write', return_value='stale_set') as write, \
+             patch.object(self.mod, 'mini_workout_delta',
+                          return_value={'workout': {'id': 9, 'done': 1}}) as delta:
+            response = self.client.post('/mini/api',
+                json={'action': 'record', 'reps': 12,
+                      'expected': {'workout_id': 9, 'position': 0, 'set_no': 1}},
+                headers={'X-Formiq-Init': 'signed-for-test'})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data['ok'])
+        self.assertTrue(data['stale_set'])
+        self.assertEqual(data['patch']['workout']['done'], 1)
+        write.assert_called_once()
+        delta.assert_called_once_with(777)
+
+
 if __name__ == '__main__':
     unittest.main()
