@@ -2865,7 +2865,7 @@ def mini_history_page(chat, body):
     params_workout = (chat,)
     params_cardio = (chat,)
     if raw_day not in (None, ''):
-        if not isinstance(raw_day, str) or not re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}', raw_day):
+        if not isinstance(raw_day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw_day):
             raise ValueError('Неверная дата истории')
         try:
             start_day = date.fromisoformat(raw_day)
@@ -2906,7 +2906,7 @@ def mini_history_page(chat, body):
 def mini_history_month(chat, body):
     """Return actual dates in a month, not simulated history markers."""
     raw = body.get('month')
-    if not isinstance(raw, str) or not re.fullmatch(r'\\d{4}-\\d{2}', raw):
+    if not isinstance(raw, str) or not re.fullmatch(r'\d{4}-\d{2}', raw):
         raise ValueError('Неверный месяц')
     year, month = map(int, raw.split('-'))
     if not 2000 <= year <= 2100 or not 1 <= month <= 12:
