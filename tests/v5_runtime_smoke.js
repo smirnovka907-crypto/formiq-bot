@@ -5,8 +5,9 @@ const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
 
 function createClient(auth=true){
- const requests=[],handlers={},fields=new Map();
- const root={innerHTML:'',addEventListener(name,fn){handlers[name]=fn}};
+ const requests=[],handlers={},fields=new Map(),failActions=new Set();
+ let html='';
+ const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values())field.value=''},addEventListener(name,fn){handlers[name]=fn}};
  const doc={
   getElementById(id){return id==='app'?root:fields.get(id)||null},
   querySelector(){return null},
@@ -15,11 +16,13 @@ function createClient(auth=true){
  let workout=null;
  const client={
   root,handlers,fields,requests,
+  failOnce(action){failActions.add(action)},
   async fetch(url,opts){
    assert.equal(url,'/mini/api');
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
    const p=JSON.parse(opts.body);requests.push(p);
+   if(failActions.delete(p.action))return {ok:false,status:503,async json(){return {ok:false,error:'Временная ошибка API'}}};
    let response;
    const state=()=>({
     agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
@@ -78,6 +81,11 @@ async function run(){
  assert.match(app.root.innerHTML,/Жим ногами/);
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
  app.input('reps','12');app.input('weight','60');
+ app.failOnce('record');
+ await app.click({cmd:'record'});
+ assert.equal(app.fields.get('reps').value,'12','unsaved repetitions retained after error');
+ assert.equal(app.fields.get('weight').value,'60','unsaved weight retained after error');
+ assert.match(app.root.innerHTML,/Временная ошибка API/);
  await app.click({cmd:'record'});
  assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60));
  assert.match(app.root.innerHTML,/rest-count/);
@@ -87,6 +95,10 @@ async function run(){
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.input('cardio-min','60');app.input('cardio-hr','120');
+ app.failOnce('cardio');
+ await app.click({cmd:'cardio'});
+ assert.equal(app.fields.get('cardio-min').value,'60','unsaved cardio duration retained');
+ assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
  await app.click({cmd:'cardio'});
  assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
  await app.click({nav:'progress'});
@@ -106,6 +118,6 @@ async function run(){
  await app.click({cmd:'detail',id:'8'});
  assert.ok(app.requests.some(x=>x.action==='detail'&&x.id===8));
  assert.match(app.root.innerHTML,/12 повт/);
- console.log('PASS v5 signed API, start, sets, recommended rest, calendar, pagination and owned detail');
+ console.log('PASS v5 signed API, start, sets, retry-preserved fields, rest, history/calendar and cardio');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
