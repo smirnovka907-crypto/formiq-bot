@@ -318,9 +318,8 @@ function draw(){
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
-app.addEventListener('input',e=>{if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
+app.addEventListener('input',e=>{onboardChanged(e);if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
 app.addEventListener('change',onboardChanged);
-app.addEventListener('input',onboardChanged);
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  const field=e.target,card=e.target.closest('.surface');
