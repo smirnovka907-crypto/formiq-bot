@@ -167,6 +167,7 @@ async function run(){
  await app.click({cmd:'finish'});
  assert.ok(app.requests.some(x=>x.action==='finish'));
  await app.click({nav:'home'});
+ await app.click({cmd:'cardio-add'});
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.input('cardio-min','60');app.input('cardio-hr','120');
@@ -182,10 +183,14 @@ async function run(){
  assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
  await app.click({cmd:'cardio'});
  assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
+ assert.doesNotMatch(app.root.innerHTML,/id="cardio-min"/,"Cardio form closes after save");
+ await app.click({cmd:'cardio-add'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
+ await app.click({cmd:'close'});
+ await app.click({nav:'plan'});
+ assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Plan period must show all 7 days');
  await app.click({nav:'progress'});
- assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Period button must show all 7 days, not just workout days');
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
  assert.match(app.root.innerHTML,/Изменить параметры/);
