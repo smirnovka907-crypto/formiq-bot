@@ -109,7 +109,7 @@ function onboardingPayload(){
  if(!Number.isInteger(score)||score<0||score>10)throw Error('Укажи боль от 0 до 10.');
  const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
  return {answers:{goal:d.goal,level:d.level,days:d.days,equipment:d.equipment,age_group:'adult',minutes:d.minutes},
-  metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),{sex:['male','female','other'].includes(d.sex)?d.sex:null}},
+  metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),sex:['male','female','other'].includes(d.sex)?d.sex:null},
   timezone,health_profile:{affected,pain_score:score,
    symptom_course:affected.length?d.course:'none',danger_signs:d.danger===true,
    activity_cleared:affected.length&&d.cleared===true},
