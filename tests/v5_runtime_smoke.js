@@ -25,7 +25,7 @@ function createClient(auth=true){
     agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},tier_name:'Тестовый доступ',
     workout,history:[{id:8,date:'23.10.2026',title:'Силовая'}],
-    plan_names:['Ноги и пресс'],next_day:'A',
+    plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
     stats:{total:1,sets:6}});
@@ -90,6 +90,11 @@ async function run(){
  await app.click({cmd:'cardio'});
  assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
  await app.click({nav:'progress'});
+ assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Period button must show all 7 days, not just workout days');
+ await app.click({nav:'profile'});
+ assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
+ await app.click({nav:'progress'});
+ assert.match(app.root.innerHTML,/История тренировок/);
  await app.click({cmd:'calendar'});
  assert.ok(app.requests.find(x=>x.action==='history_month'&&/^\d{4}-\d{2}$/.test(x.month)));
  const selected=app.root.innerHTML;
