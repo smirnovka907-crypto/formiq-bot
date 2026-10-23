@@ -69,7 +69,11 @@ function createClient(auth=true,shared={}){
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
-   else if(p.action==='onboarding'){
+   else if(p.action==='health_analyze'){
+     assert.equal(p.adult,true);assert.equal(p.privacy_ack,true);
+     response={ok:true,analysis:{affected:['knee'],pain_score:3,symptom_course:'stable',danger_signs:false,short_summary:'Беспокоит колено'}};
+    }
+    else if(p.action==='onboarding'){
      assert.equal(p.terms,true);assert.equal(p.privacy,true);assert.equal(p.health,true);
      assert.equal(p.answers.age_group,'adult');
      assert.ok(p.metrics.age>=18);
@@ -262,18 +266,52 @@ async function run(){
   assert.match(ux.root.innerHTML,/week-range/);
   await ux.click({nav:'profile'});
   await ux.click({cmd:'onboard-open'});
-  assert.match(ux.root.innerHTML,/data-onboard="goal"/);
-  assert.doesNotMatch(ux.root.innerHTML,/href="\/mini\/legacy"/,'Profile editing stays in v5');
-  await ux.click({cmd:'onboard-save'});
-  assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
-  for(const key of ['adult','terms','privacy','health']){
-   ux.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
-  }
-  await ux.click({cmd:'onboard-save'});
-  const edits=ux.requests.filter(x=>x.action==='onboarding');
-  assert.equal(edits.length,1,'Signed onboard edit is saved via API');
-  assert.equal(edits[0].metrics.weight_kg,82);
-  assert.match(ux.root.innerHTML,/Тренировки/,'Returns to v5 after profile save');
-  console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
+  assert.match(ux.root.innerHTML,/data-onboard-pick="goal"/,'Goal uses approved choice buttons');
+   assert.match(ux.root.innerHTML,/data-onboard-pick="equipment"/,'Equipment uses approved choice buttons');
+   assert.match(ux.root.innerHTML,/id="onboard-duration"/,'Duration uses approved slider');
+   assert.doesNotMatch(ux.root.innerHTML,/href="\/mini\/legacy"/,'Editing stays in v5');
+   await ux.click({cmd:'onboard-save'});
+   assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
+   for(const key of ['adult','terms','privacy','health'])
+     ux.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   ux.handlers.change({target:{dataset:{onboard:'limitation'},type:'select-one',value:'yes'}});
+   ux.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено при приседаниях'}});
+   await ux.click({cmd:'onboard-save'});
+   assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'Never silently discard unprocessed health description');
+   assert.match(ux.root.innerHTML,/Описание не подтверждено/);
+   ux.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:''}});
+   ux.handlers.change({target:{dataset:{area:'knee'},type:'checkbox',checked:true}});
+   ux.handlers.change({target:{dataset:{onboard:'course'},type:'select-one',value:'stable'}});
+   ux.handlers.input({target:{dataset:{onboard:'minutes'},type:'range',value:'50'}});
+   await ux.click({onboardPick:'sex',value:'female'});
+   await ux.click({cmd:'onboard-save'});
+   const edits=ux.requests.filter(x=>x.action==='onboarding');
+   assert.equal(edits.length,1,'Manual health restrictions sent through authenticated onboarding');
+   assert.equal(edits[0].metrics.weight_kg,82);
+   assert.equal(edits[0].metrics.sex,'female');
+   assert.equal(edits[0].answers.minutes,'50');
+   assert.deepEqual(Array.from(edits[0].health_profile.affected),['knee']);
+   assert.match(ux.root.innerHTML,/Тренировки/,'Returns to v5 after profile save');
+  
+   const ai=createClient(true,{storage:new Map()});await settle();
+   await ai.click({nav:'profile'});await ai.click({cmd:'onboard-open'});
+   for(const key of ['adult','terms','privacy','health'])
+     ai.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   ai.handlers.change({target:{dataset:{onboard:'limitation'},type:'select-one',value:'yes'}});
+   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
+   await ai.click({cmd:'onboard-ai'});
+   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'AI requires separate opt-in');
+   ai.handlers.change({target:{dataset:{onboard:'aiConsent'},type:'checkbox',checked:true}});
+   await ai.click({cmd:'onboard-ai'});
+   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,1);
+   assert.match(ai.root.innerHTML,/Проверь разбор ИИ/);
+   await ai.click({cmd:'onboard-save'});
+   assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
+   ai.handlers.change({target:{dataset:{onboard:'aiReviewed'},type:'checkbox',checked:true}});
+   await ai.click({cmd:'onboard-save'});
+   const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
+   assert.equal(aiSaves.length,1,'Reviewed AI result can be saved');
+   assert.equal(aiSaves[0].health_profile.pain_score,3);
+   console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
