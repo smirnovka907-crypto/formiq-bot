@@ -64,20 +64,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
       - name: Install runtime and CSS validator
+        id: runtime_dependencies
+        if: ${{ !cancelled() }}
         run: pip install -r requirements.txt tinycss2
       - name: Compile bot
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
         run: python -m py_compile main.py welcome_art.py
       - name: Run full static smoke and UX tests
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
         run: |
           python tests/test_static.py
-          python -m unittest discover -s tests -p test_ux_381.py -v
-          python -m unittest discover -s tests -p test_routes_381.py -v
-          python -m unittest discover -s tests -p test_telegram_3813.py -v
-          python -m unittest discover -s tests -p test_382.py -v
-          python -m unittest discover -s tests -p test_v5_bridge.py -v
-          python -m unittest discover -s tests -p test_v5_local_dates.py -v
-          python -m unittest discover -s tests -p test_v5_owner_preview.py -v
-          python -m unittest discover -s tests -p test_v5_set_guard.py -v
-          python -m unittest discover -s tests -p 'test_v5_schedule*.py' -v
-      - name: Run integration tests
-        run: python -m unittest discover -s tests -p test_integrations.py -v
+          python -m unittest discover -s tests -p 'test_*.py' -v

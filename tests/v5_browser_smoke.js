@@ -190,7 +190,11 @@ async function run(){
    await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    await page.getByRole('button',{name:'Записать кардио',exact:true}).click();
-   await page.getByRole('button',{name:'Выбрать вид кардио',exact:true}).click();
+   // The enclosing field label is part of the button's accessible name in Chromium.
+   const cardioTypes=page.locator('.fq-live-dialog [data-cmd="cardio-types"]');
+   await cardioTypes.waitFor();
+   assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');
+   await cardioTypes.click();
    await page.getByRole('button',{name:'Велосипед',exact:true}).click();
    await page.locator('#cardio-min').fill('60');await page.locator('#cardio-hr').fill('120');
    rejectCardioOnce=true;
