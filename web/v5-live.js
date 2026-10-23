@@ -9,7 +9,7 @@ const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false;
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false,nutritionAnswer='',nutritionBusy=false;
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:'';};
@@ -100,7 +100,7 @@ function workout(){
  return page('Тренировка',`<p class="fq-live-banner">Результаты сохраняются в PostgreSQL через защищённый API FORMIQ.</p>${block(`<span class="eyebrow">${esc(w.title||'Занятие')}</span><h2>${w.done||0} из ${w.total||0} подходов</h2>`)}${content}`);
 }
 function training(){
- if(!ready())return page('Тренировки',block(`<h2>Нужно заполнить анкету</h2><p>Проверь ограничения и согласия в основном FORMIQ.</p><a class="button-main fq-live-onboarding-link" href="/mini">Открыть анкету</a>${state?.error?`<p class="fq-live-error">${esc(state.error)}</p>`:''}`));
+ if(!ready())return page('Тренировки',block(`<h2>Нужно заполнить анкету</h2><p>Проверь ограничения и согласия в основном FORMIQ.</p><a class="button-main fq-live-onboarding-link" href="/mini/legacy" data-legacy>Открыть анкету</a>${state?.error?`<p class="fq-live-error">${esc(state.error)}</p>`:''}`));
  if(active())return workout();
  const idx='ABCDEFG'.indexOf(state.next_day||''),list=state.plan?.[idx]||[],upcoming=(state.calendar||[]).find(x=>x.status==='planned'&&x.day===state.next_day);
  return page('Тренировки',block(`<span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span><h2>${esc(state.plan_names?.[idx]||state.goal||'Тренировка')}</h2><p class="subtitle">${esc(upcoming?.date_ru||'По плану')}</p>
@@ -158,7 +158,17 @@ function progress(){
  block(`<h2>Тренировочный план</h2><div class="fq-live-plan-grid">${[1,2,3,4].map(i=>button(periodLabel(i),'week',false,`data-week="${i}"`)).join('')}</div>
  ${week?`<div class="fq-live-list">${plan.filter(x=>x.week===week).map(x=>`<div class="fq-live-row"><span>${esc(x.date_ru)} · ${esc(x.title)}</span><small>${x.status==='done'?'Выполнено':'По плану'}</small></div>`).join('')}</div>`:''}`)+history());
 }
-function food(){return page('Питание',block('<h2>Питание</h2><p>Пока доступно через прежний серверный модуль.</p><a class="button-main fq-live-onboarding-link" href="/mini">Открыть питание FORMIQ</a>'))}
+function food(){
+ return page('Питание',
+ block(`<h2>Анализ питания</h2><p class="fq-live-muted">Добавь скриншот JPG/PNG или CSV-отчёт из FatSecret. ИИ покажет показатели только если они присутствуют в отчёте.</p>
+ <label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>
+ <label class="field" style="display:flex;align-items:flex-start;gap:12px;margin-top:12px"><input id="nutrition-consent" type="checkbox" style="width:22px;min-width:22px;height:22px;margin:0"><span>Разрешаю отправить выбранный отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>
+ <p class="input-note">Отдельное согласие на использование ИИ требуется в профиле. Автоматическая синхронизация FatSecret пока не подключена.</p>
+ <p id="nutrition-error" class="fq-live-error" role="alert"></p>
+ ${button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')}
+ ${nutritionAnswer?`<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">${esc(nutritionAnswer)}</p>`:''}`)
+ +block(`<h2>Настройки питания и согласия</h2><p class="fq-live-muted">Остальные функции доступны в прежнем интерфейсе FORMIQ.</p><a href="/mini/legacy" data-legacy class="button-subtle fq-live-onboarding-link">Открыть прежнюю версию</a>`));
+}
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
  const names={'goal':'Цель тренировок','level':'Опыт','days':'Дни в неделю','equipment':'Место тренировок','age_group':'Возрастная группа','minutes':'Длительность','clearance':'Ограничения'};
@@ -167,7 +177,7 @@ function profile(){
  const measure=metricEdit?`<div class="fq-live-grid">${fields.map(([key,label,min,max])=>`<label class="field"><span>${label}</span><input id="profile-${key}" data-metric="${key}" type="number" inputmode="${key==='age'?'numeric':'decimal'}" min="${min}" max="${max}" step="${key==='age'?'1':'0.1'}" autocomplete="off" placeholder="—" value="${esc(profileDraft?.[key]??'')}"></label>`).join('')}</div>
  <p class="input-note">Изменятся только исправленные значения. История тренировок сохраняется.</p><div class="fq-live-actions" style="margin-top:12px">${button('Сохранить','profile-metrics-save',true)}${button('Отмена','profile-metrics-cancel')}</div>`:
  `<div class="fq-live-list">${fields.map(([key,label])=>`<div class="fq-live-row"><span>${label}</span><strong>${data[key]===null||data[key]===undefined?'—':esc(data[key])}</strong></div>`).join('')}</div>${button('Изменить параметры','profile-metrics-edit')}`;
- return page('Твой профиль',block(`<h2>Анкета</h2>${labels}<a class="button-main fq-live-onboarding-link" href="/mini">Редактировать цели, расписание и ограничения</a>`)+
+ return page('Твой профиль',block(`<h2>Анкета</h2>${labels}<a class="button-main fq-live-onboarding-link" href="/mini/legacy" data-legacy>Редактировать цели, расписание и ограничения</a>`)+
  block(`<h2>Параметры</h2>${profileNotice?`<p role="status" class="fq-live-muted">${esc(profileNotice)}</p>`:''}${measure}`)+
  block('<h2>Самочувствие и ограничения</h2><p>Ограничения учитываются программой на сервере. Для их изменения и подтверждения открой анкету.</p>')+
  block(`<h2>Тарифы</h2><p>${esc(state.tier_name||'Тестовый доступ')}</p><p>Оплата не подключена.</p>`)+
@@ -201,6 +211,12 @@ app.addEventListener('focusin',e=>{
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
+ const legacy=e.target.closest('a[data-legacy]');
+ if(legacy){
+  e.preventDefault();
+  window.location.assign('/mini/legacy'+(window.location.hash||''));
+  return;
+ }
  const element=e.target.closest('button');if(!element||busy)return;
  if(element.dataset.nav){view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
@@ -231,6 +247,28 @@ app.addEventListener('click',async e=>{
   if(!Object.keys(changes).length){metricEdit=false;profileDraft=null;draw();return}
   const response=await send('save_metrics',{metrics:changes});
   if(response){metricEdit=false;profileDraft=null;profileNotice='Изменения сохранены в профиле FORMIQ.';draw()}
+  return;
+ }
+ if(cmd==='nutrition-analyze'){
+  if(nutritionBusy)return;
+  const file=document.getElementById('nutrition-file')?.files?.[0];
+  const consent=document.getElementById('nutrition-consent')?.checked===true;
+  const alert=document.getElementById('nutrition-error');
+  if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
+  if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
+  if(!consent){if(alert)alert.textContent='Подтверди согласие на отправку выбранного отчёта в Yandex AI.';return}
+  nutritionBusy=true;error='';draw();
+  const data=new FormData();data.append('report',file);data.append('consent','yes');
+  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
+  try{
+   const response=await fetch('/mini/report',{method:'POST',headers:{'X-Formiq-Init':token},
+       credentials:'same-origin',cache:'no-store',body:data,signal:abort.signal});
+   const result=await response.json();
+   if(!response.ok||!result.ok)throw Error(result.error||'Не удалось прочитать отчёт.');
+   nutritionAnswer=String(result.answer||'').slice(0,3200);
+  }catch(ex){
+   error=ex.name==='AbortError'?'Анализ занимает слишком много времени. Попробуй позже.':ex.message;
+  }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
  }
  if(cmd==='close'){modal='';draw();return}

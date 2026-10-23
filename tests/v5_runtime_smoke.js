@@ -3,6 +3,11 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
+class FakeFormData{
+ constructor(){this.data=new Map()}
+ append(name,value){this.data.set(name,value)}
+}
+
 
 function createClient(auth=true,shared={}){
  const requests=[],handlers={},fields=new Map(),failActions=new Set(),staleActions=new Set();
@@ -23,6 +28,14 @@ function createClient(auth=true,shared={}){
   failOnce(action){failActions.add(action)},
   staleOnce(action){staleActions.add(action)},
   async fetch(url,opts){
+   if(url==='/mini/report'){
+    assert.equal(opts.method,'POST');
+    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
+    assert.equal(opts.body.data.get('consent'),'yes','No upload without consent');
+    assert.equal(opts.body.data.get('report')?.name,'report.csv');
+    requests.push({action:'nutrition-report'});
+    return {ok:true,status:200,async json(){return {ok:true,answer:'В отчёте указано 1900 ккал.'}}};
+   }
    assert.equal(url,'/mini/api');
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
@@ -71,7 +84,7 @@ function createClient(auth=true,shared={}){
   window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){}}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
   fetch:client.fetch,
   setTimeout(fn){return 1},clearTimeout(){},setInterval(fn){return 1},
-  AbortController,Date,Set,Number,String,Array,Map,Object,RegExp,Math,
+  AbortController,Date,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
  };
  vm.runInNewContext(js,context,{filename:'web/v5-live.js',timeout:2000});
  client.click=async(dataset)=>{
@@ -207,6 +220,23 @@ async function run(){
  await app.click({cmd:'detail',id:'8'});
  assert.ok(app.requests.some(x=>x.action==='detail'&&x.id===8));
  assert.match(app.root.innerHTML,/12 повт/);
- console.log('PASS v5 signed API, start, sets, retry-preserved fields, rest, history/calendar and cardio');
+ await app.click({nav:'food'});
+ assert.match(app.root.innerHTML,/nutrition-file/);
+ assert.match(app.root.innerHTML,/nutrition-consent/);
+ const reportCount=()=>app.requests.filter(x=>x.action==='nutrition-report').length;
+ app.fields.set('nutrition-error',{id:'nutrition-error',textContent:''});
+ await app.click({cmd:'nutrition-analyze'});
+ assert.equal(reportCount(),0,'No file means no API call');
+ assert.match(app.fields.get('nutrition-error').textContent,/Выбери/);
+ app.fields.set('nutrition-file',{id:'nutrition-file',files:[{name:'report.csv',size:500,type:'text/csv'}]});
+ app.fields.set('nutrition-consent',{id:'nutrition-consent',checked:false});
+ await app.click({cmd:'nutrition-analyze'});
+ assert.equal(reportCount(),0,'No consent means no API call');
+ assert.match(app.fields.get('nutrition-error').textContent,/Подтверди согласие/);
+ app.fields.get('nutrition-consent').checked=true;
+ await app.click({cmd:'nutrition-analyze'});
+ assert.equal(reportCount(),1,'One report uploaded with consent');
+ assert.match(app.root.innerHTML,/1900 ккал/);
+ console.log('PASS v5 signed API, start, sets, retry-preserved fields, rest, history/calendar cardio and nutrition consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});

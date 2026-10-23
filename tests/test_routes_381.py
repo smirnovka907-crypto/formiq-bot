@@ -18,7 +18,7 @@ class RouteTests(unittest.TestCase):
 
     def test_page_and_assets(self):
         client = self.app.test_client()
-        page = client.get('/mini')
+        page = client.get('/mini/legacy')
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'ux-381.css', page.data)
         self.assertIn(b'ux-381.js', page.data)
@@ -64,7 +64,7 @@ class RouteTests(unittest.TestCase):
 
     def test_feedback_and_version_assets(self):
         client=self.app.test_client()
-        res=client.get('/mini')
+        res=client.get('/mini/legacy')
         self.assertEqual(res.status_code,200)
         self.assertIn(b'ux-3811.js',res.data)
         self.assertIn(b'ux-3811.css',res.data)
