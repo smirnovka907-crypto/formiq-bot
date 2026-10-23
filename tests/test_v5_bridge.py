@@ -56,7 +56,7 @@ class V5StagingContract(unittest.TestCase):
         with patch.object(self.mod, 'mini_auth', return_value=123):
             missing_consent = client.post('/mini/report', data={})
             self.assertEqual(missing_consent.status_code, 400)
-            self.assertIn('согласие', missing_consent.json.get('error', ''))
+            self.assertIn('Подтверди отправку отчёта', missing_consent.json.get('error', ''))
             no_file = client.post('/mini/report', data={'consent':'yes'})
             self.assertEqual(no_file.status_code, 400)
             self.assertIn('файл', no_file.json.get('error', ''))
