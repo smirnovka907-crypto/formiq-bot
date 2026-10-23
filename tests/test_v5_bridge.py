@@ -71,9 +71,9 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchall.return_value = [
-            (35, dt, 'workout', 'A', 'Зал', None),
-            (-12, dt, 'cardio', None, None, 60),
-            (34, dt, 'workout', 'B', 'Другая тренировка', None),
+            (35, dt, 'workout', 'A', 'Зал', None, None),
+            (-12, dt, 'cardio', None, None, 60, 'cycling'),
+            (34, dt, 'workout', 'B', 'Другая тренировка', None, None),
         ]
         with patch.object(self.mod, 'db', return_value=conn), \
              patch.object(self.mod, 'profile', return_value={'goal':'general'}):
@@ -85,7 +85,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(query.count('chat_id=%s'), 2)
         self.assertEqual(result['next_offset'], 2)
         self.assertEqual([row['id'] for row in result['history']], [35, -12])
-        self.assertEqual(result['history'][1]['title'], 'Кардио · 60 мин')
+        self.assertEqual(result['history'][1]['title'], 'Велосипед · 60 мин')
 
     def test_history_month_uses_owner_and_month_boundaries(self):
         from datetime import date
@@ -113,6 +113,24 @@ class V5StagingContract(unittest.TestCase):
         for value in ['2026-13', 'x', '2026-2', '', None, '1900-01']:
             with self.assertRaises(ValueError):
                 self.mod.mini_history_month(777, {'month': value})
+
+    def test_cardio_activity_saved_as_validated_existing_equipment(self):
+        from unittest.mock import MagicMock
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        with patch.object(self.mod, 'db', return_value=conn), \
+             patch.object(self.mod, 'require_tier'):
+            self.mod.mini_aux(777, 'cardio', {
+                'minutes': 60, 'avg_hr': 120, 'type': 'Велосипед'})
+        sql, params = conn.execute.call_args.args
+        self.assertIn('cardio_sessions', sql)
+        self.assertIn('equipment', sql)
+        self.assertEqual(params, (777, 60, 120, 'cycling'))
+        with patch.object(self.mod, 'require_tier'), \
+             patch.object(self.mod, 'db', return_value=conn):
+            with self.assertRaises(ValueError):
+                self.mod.mini_aux(777, 'cardio', {
+                    'minutes': 30, 'avg_hr': None, 'type': 'Неизвестно'})
 
 
 if __name__ == '__main__':
