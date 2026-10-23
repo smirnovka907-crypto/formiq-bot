@@ -23,7 +23,7 @@ jobs:
       - name: Compile integration modules
         run: python -m py_compile integrations/fatsecret.py integrations/garmin.py tests/test_integrations.py
       - name: Check UX JavaScript
-        run: node --check web/ux-381.js && node --check web/ux-3811.js && node --check web/ux-382.js
+        run: node --check web/ux-381.js && node --check web/ux-3811.js && node --check web/ux-382.js && node --check web/v5-live.js
       - name: Install runtime and CSS validator
         run: pip install -r requirements.txt tinycss2
       - name: Compile bot
@@ -35,5 +35,6 @@ jobs:
           python -m unittest discover -s tests -p test_routes_381.py -v
           python -m unittest discover -s tests -p test_telegram_3813.py -v
           python -m unittest discover -s tests -p test_382.py -v
+          python -m unittest discover -s tests -p test_v5_bridge.py -v
       - name: Run integration tests
         run: python -m unittest discover -s tests -p test_integrations.py -v
