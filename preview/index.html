@@ -294,8 +294,8 @@ case 'strength-save':{
   const minText=document.getElementById('strength-minutes')?.value.trim()||'';
   const hrText=document.getElementById('strength-hr')?.value.trim()||'';
   const minutes=Number(minText),avgHr=hrText?Number(hrText):null;
-  if(!/^\\d+$/.test(minText)||!Number.isSafeInteger(minutes)||minutes<=0){toast('Укажи фактическое время в минутах.');break;}
-  if(hrText&&(!/^\\d+$/.test(hrText)||!Number.isInteger(avgHr)||avgHr<40||avgHr>220)){toast('Средний пульс: 40–220 уд/мин либо пустое поле.');break;}
+  if(!/^[0-9]+$/.test(minText)||!Number.isSafeInteger(minutes)||minutes<=0){toast('Укажи фактическое время в минутах.');break;}
+  if(hrText&&(!/^[0-9]+$/.test(hrText)||!Number.isInteger(avgHr)||avgHr<40||avgHr>220)){toast('Средний пульс: 40–220 уд/мин либо пустое поле.');break;}
   const item={isoDate:selectedDate,date:dateObj(selectedDate).toLocaleDateString('ru-RU'),
     title:sessionName(selectedDate),minutes,avgHr,estimatedKcal:approximateKcal(minutes,3.5),
     weightKgAtRecord:demoWeightKg()};
