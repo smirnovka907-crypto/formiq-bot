@@ -3194,6 +3194,19 @@ def mini_write(chat, action, body):
     if action not in ('record','skip','replace','finish','cancel','rate'):
         raise ValueError('Неизвестная операция')
 
+    # Aluminium v5 supplies the set it displayed. The check is optional so the
+    # existing /mini client stays compatible; the server still owns all writes.
+    expected_set = body.get('expected') if action in ('record', 'skip') else None
+    if expected_set is not None:
+        if (not isinstance(expected_set, dict)
+                or set(expected_set) != {'workout_id', 'position', 'set_no'}
+                or any(type(expected_set[key]) is not int
+                       for key in ('workout_id', 'position', 'set_no'))
+                or expected_set['workout_id'] <= 0
+                or expected_set['position'] < 0
+                or expected_set['set_no'] <= 0):
+            raise ValueError('Неверный идентификатор подхода')
+
     with db() as c:
         if action == 'rate':
             grade = body.get('grade')
@@ -3206,6 +3219,8 @@ def mini_write(chat, action, body):
             return False
         wid = mini_current(c,chat)
         if not wid:
+            if expected_set is not None:
+                return 'stale_set'
             raise ValueError('Активной тренировки нет')
         if action == 'cancel':
             c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
@@ -3228,8 +3243,16 @@ def mini_write(chat, action, body):
             FROM workout_sets s WHERE s.workout_id=%s AND s.state='pending'
             ORDER BY s.position,s.set_no LIMIT 1''',(wid,)).fetchone()
         if row is None:
+            if expected_set is not None:
+                return 'stale_set'
             raise ValueError('Все подходы уже отмечены')
         pos, num, unit, status = row
+        # Holding FOR UPDATE on workouts serializes two requests for this user.
+        # A delayed retry must never record or skip the next pending set.
+        if expected_set is not None and (
+                expected_set['workout_id'], expected_set['position'],
+                expected_set['set_no']) != (wid, pos, num):
+            return 'stale_set'
         if action == 'record':
             count = body.get('reps')
             if type(count) is not int or not (1 <= count <= 300):
@@ -3736,6 +3759,8 @@ def mini_api():
             result = mini_write(chat,action,data)
             if isinstance(result,dict):
                 payload = {'ok':True, **result}
+            elif result == 'stale_set':
+                payload = {'ok':True, 'stale_set':True, 'patch':mini_workout_delta(chat)}
             elif action in ('record','skip','replace','start'):
                 payload = {'ok':True, 'patch':mini_workout_delta(chat)}
             else:
