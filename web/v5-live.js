@@ -349,12 +349,6 @@ app.addEventListener('focusin',e=>{
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
- const legacy=e.target.closest('a[data-legacy]');
- if(legacy){
-  e.preventDefault();
-  window.location.assign('/mini/legacy'+(window.location.hash||''));
-  return;
- }
  const element=e.target.closest('button');if(!element||busy)return;
  if(element.dataset.nav){onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
