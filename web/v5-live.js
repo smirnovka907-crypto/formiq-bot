@@ -102,11 +102,23 @@ function progress(){
  ${week?`<div class="fq-live-list">${plan.filter(x=>x.week===week).map(x=>`<div class="fq-live-row"><span>${esc(x.date_ru)} · ${esc(x.title)}</span><small>${x.status==='done'?'Выполнено':'По плану'}</small></div>`).join('')}</div>`:''}`)+history());
 }
 function food(){return page('Питание',block('<h2>Питание</h2><p>Пока доступно через прежний серверный модуль.</p><a class="button-main fq-live-onboarding-link" href="/mini">Открыть питание FORMIQ</a>'))}
+function metricInput(label,id,key,min,max){
+ const m=state.metrics||{};
+ const value=drafts[id]??m[key]??'';
+ return `<label class="field"><span>${esc(label)}</span><input id="${id}" type="number" inputmode="${key==='age'?'numeric':'decimal'}" min="${min}" max="${max}" step="${key==='age'?'1':'0.1'}" placeholder="—" value="${esc(value)}"></label>`;
+}
 function profile(){
- return page('Твой профиль',block(`<h2>Анкета</h2>${Object.entries(state.profile||{}).map(([k,v])=>`<div class="fq-live-row"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('')}<a class="button-main fq-live-onboarding-link" href="/mini">Редактировать анкету</a>`)+
- block('<h2>Самочувствие и ограничения</h2><p>Учитываются серверной программой.</p>')+
- block(`<h2>Тарифы</h2><p>${esc(state.tier_name||'Тестовый доступ')}</p><p>Оплата не подключена.</p>`)+
- block('<h2>Подключения</h2><p>Garmin Connect · не подключено</p><p>FatSecret · не подключено</p>'));
+ const labels={goal:'Цель',level:'Опыт',days:'Дни тренировок',equipment:'Место занятий',age_group:'Возрастная группа',minutes:'Время занятия',clearance:'Ограничения'};
+ return page('Твой профиль',block(`<h2>Основные параметры</h2><p class="fq-live-muted">Изменения сохраняются в твоём профиле. История тренировок не затрагивается.</p>
+ <div class="fq-live-grid">${metricInput('Возраст, лет','metric-age','age',18,100)}${metricInput('Рост, см','metric-height','height_cm',100,240)}</div>
+ ${metricInput('Вес, кг','metric-weight','weight_kg',25,300)}
+ ${button('Сохранить параметры','save-metrics',true)}`)+
+ block(`<h2>Программа и анкета</h2>${Object.entries(state.profile||{}).map(([k,v])=>`<div class="fq-live-row"><span>${esc(labels[k]||k)}</span><strong>${esc(v)}</strong></div>`).join('')}
+ <a class="button-main fq-live-onboarding-link" href="/mini">Изменить программу и ограничения</a>
+ <p class="input-note">При изменении ограничений снова проверь ответы и подтверди их в основной анкете.</p>`)+
+ block('<h2>Самочувствие и ограничения</h2><p class="fq-live-muted">Учитываются серверной программой; ИИ не ставит диагноз.</p>')+
+ block(`<h2>Тарифы</h2><p>${esc(state.tier_name||'Тестовый доступ')}</p><p class="fq-live-muted">Оплата не подключена.</p>`)+
+ block('<h2>Подключения</h2><div class="fq-live-row"><span>Garmin Connect</span><small>Не подключено</small></div><div class="fq-live-row"><span>FatSecret</span><small>Не подключено</small></div>'));
 }
 function modalHTML(){
  if(!modal)return '';
@@ -125,7 +137,7 @@ function draw(){
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
-app.addEventListener('input',e=>{if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
+app.addEventListener('input',e=>{if(['reps','weight','cardio-min','cardio-hr','metric-age','metric-height','metric-weight'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))return;
  const field=e.target,card=e.target.closest('.surface');
@@ -139,6 +151,19 @@ app.addEventListener('click',async e=>{
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(cmd==='close'){modal='';draw();return}
+ if(cmd==='save-metrics'){
+  const fields=[['metric-age','age'],['metric-height','height_cm'],['metric-weight','weight_kg']];
+  const changes={};
+  for(const [id,key] of fields){
+   const input=document.getElementById(id);if(!input)continue;
+   const val=input.value.trim(),current=state.metrics?.[key];
+   if(val&&Number(val)!==Number(current))changes[key]=val;
+  }
+  if(!Object.keys(changes).length){fail('Изменений нет.');return}
+  const ok=await send('save_metrics',{metrics:changes});
+  if(ok){delete drafts['metric-age'];delete drafts['metric-height'];delete drafts['metric-weight'];draw()}
+  return;
+ }
  if(cmd==='mood'){modal='mood';draw();return}
  if(cmd==='start-normal'||cmd==='start-tired'){modal='';await send('start',{mood:cmd==='start-normal'?'normal':'tired'});return}
  if(cmd==='record'){
