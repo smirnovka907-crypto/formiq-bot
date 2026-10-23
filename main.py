@@ -3351,6 +3351,28 @@ def mini_page():
 
 
 
+@APP.get('/mini/v5')
+def mini_v5_staging():
+    """Opt-in Aluminium v5 bridge preview. Existing /mini and bot menus stay unchanged."""
+    response = make_response(send_file(
+        os.path.join(os.path.dirname(__file__), 'web', 'v5-live.html'),
+        mimetype='text/html', max_age=0))
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
+@APP.get('/mini/v5-live.js')
+def mini_v5_script():
+    response = make_response(send_file(
+        os.path.join(os.path.dirname(__file__), 'web', 'v5-live.js'),
+        mimetype='text/javascript', max_age=0))
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
 @APP.get('/mini/ux-381.css')
 def mini_ux_381_css():
     response = make_response(send_file(os.path.join(os.path.dirname(__file__), 'web', 'ux-381.css'), mimetype='text/css', max_age=3600))
