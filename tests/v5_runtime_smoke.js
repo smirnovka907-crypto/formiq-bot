@@ -188,8 +188,11 @@ async function run(){
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
  await app.click({cmd:'close'});
- await app.click({nav:'plan'});
+ assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
+  await app.click({cmd:'plan-open'});
  assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Plan period must show all 7 days');
+  await app.click({cmd:'plan-back'});
+  assert.match(app.root.innerHTML,/Начать тренировку/,'Return from plan to workouts');
  await app.click({nav:'progress'});
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
@@ -252,8 +255,9 @@ async function run(){
  const polished={fullscreen:true};
   const ux=createClient(true,polished);await settle();
   assert.equal(polished.fullscreenCalls,1,'Supported Telegram clients request true fullscreen');
-  assert.match(ux.root.innerHTML,/Главная/);
-  await ux.click({nav:'plan'});
+  assert.match(ux.root.innerHTML,/Тренировки/);
+   assert.equal((ux.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Fullscreen has three bottom buttons');
+  await ux.click({cmd:'plan-open'});
   assert.match(ux.root.innerHTML,/Твой план/);
   assert.match(ux.root.innerHTML,/week-range/);
   await ux.click({nav:'profile'});
@@ -269,7 +273,7 @@ async function run(){
   const edits=ux.requests.filter(x=>x.action==='onboarding');
   assert.equal(edits.length,1,'Signed onboard edit is saved via API');
   assert.equal(edits[0].metrics.weight_kg,82);
-  assert.match(ux.root.innerHTML,/Главная/,'Returns to v5 after profile save');
-  console.log('PASS v5 signed API, four tabs, native onboarding, fullscreen fallback, workout, history and consent');
+  assert.match(ux.root.innerHTML,/Тренировки/,'Returns to v5 after profile save');
+  console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
