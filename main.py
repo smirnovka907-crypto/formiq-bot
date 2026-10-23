@@ -2852,6 +2852,80 @@ def mini_history_detail(chat,wid):
        {'name':visible_exercise_name(name),'key':key if key in EX else None,'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
        f' · {kg} кг' if kg is not None else '')} for name,count,kg,unit,key in rows]}
 
+def mini_history_page(chat, body):
+    """Read-only, authenticated, owner-scoped history pagination for Aluminium v5."""
+    limit = body.get('limit', 30)
+    offset = body.get('offset', 0)
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise ValueError('История: допустимо от 1 до 50 записей')
+    if type(offset) is not int or not 0 <= offset <= 10000:
+        raise ValueError('Неверная страница истории')
+    raw_day = body.get('date')
+    suffix = ''
+    params_workout = (chat,)
+    params_cardio = (chat,)
+    if raw_day not in (None, ''):
+        if not isinstance(raw_day, str) or not re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}', raw_day):
+            raise ValueError('Неверная дата истории')
+        try:
+            start_day = date.fromisoformat(raw_day)
+        except ValueError:
+            raise ValueError('Неверная дата истории')
+        end_day = start_day + timedelta(days=1)
+        suffix = ' AND {column} >= %s AND {column} < %s '
+        params_workout = (chat, start_day, end_day)
+        params_cardio = (chat, start_day, end_day)
+    filter_w = suffix.format(column='started_at') if suffix else ''
+    filter_c = suffix.format(column='performed_at') if suffix else ''
+    query = (
+        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes FROM ("
+        "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
+        "plan_day, manual_title, NULL::integer AS minutes FROM workouts "
+        "WHERE chat_id=%s AND status='finished' " + filter_w +
+        " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
+        "'cardio'::text AS entry_type, NULL::text AS plan_day,"
+        "NULL::text AS manual_title, minutes FROM cardio_sessions "
+        "WHERE chat_id=%s " + filter_c +
+        ") AS entries ORDER BY occurred_at DESC, entry_id DESC LIMIT %s OFFSET %s"
+    )
+    with db() as conn:
+        rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
+    p = profile(chat)
+    page = []
+    for ident, timestamp, kind, day, custom, minutes in rows[:limit]:
+        page.append({
+            'id': ident,
+            'date': timestamp.strftime('%d.%m.%Y'),
+            'type': kind,
+            'title': (custom or day_title(p, day)) if kind == 'workout'
+                     else f'Кардио · {minutes} мин',
+        })
+    return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
+
+
+def mini_history_month(chat, body):
+    """Return actual dates in a month, not simulated history markers."""
+    raw = body.get('month')
+    if not isinstance(raw, str) or not re.fullmatch(r'\\d{4}-\\d{2}', raw):
+        raise ValueError('Неверный месяц')
+    year, month = map(int, raw.split('-'))
+    if not 2000 <= year <= 2100 or not 1 <= month <= 12:
+        raise ValueError('Неверный месяц')
+    start = date(year, month, 1)
+    end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    with db() as conn:
+        dates_workout = conn.execute(
+            "SELECT DISTINCT started_at::date FROM workouts WHERE chat_id=%s "
+            "AND status='finished' AND started_at >= %s AND started_at < %s",
+            (chat, start, end)).fetchall()
+        dates_cardio = conn.execute(
+            "SELECT DISTINCT performed_at::date FROM cardio_sessions WHERE chat_id=%s "
+            "AND performed_at >= %s AND performed_at < %s",
+            (chat, start, end)).fetchall()
+    marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
+    return {'month': raw, 'dates': marked}
+
+
 def mini_state(chat, just_finished=False):
     p = profile(chat)
     h = health_profile(chat)
@@ -3594,6 +3668,10 @@ def mini_api():
     try:
         if action == 'state':
             payload = {'ok':True, 'data':mini_state(chat)}
+        elif action == 'history_page':
+            payload = {'ok': True, **mini_history_page(chat, data)}
+        elif action == 'history_month':
+            payload = {'ok': True, **mini_history_month(chat, data)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'equipment_analyze':
