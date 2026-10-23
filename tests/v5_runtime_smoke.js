@@ -40,7 +40,7 @@ function createClient(auth=true){
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
-   else if(p.action==='cardio')response={ok:true,data:state()};
+   else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
    else if(p.action==='finish'){workout=null;response={ok:true,data:state()}}
    else if(p.action==='skip')response={ok:true,patch:{workout}};
    else throw Error('Unexpected action: '+p.action);
@@ -83,6 +83,12 @@ async function run(){
  assert.match(app.root.innerHTML,/rest-count/);
  await app.click({cmd:'rest-skip'});
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
+ await app.click({nav:'home'});
+ await app.click({cmd:'cardio-types'});
+ await app.click({cmd:'cardio-type',type:'Велосипед'});
+ app.input('cardio-min','60');app.input('cardio-hr','120');
+ await app.click({cmd:'cardio'});
+ assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
  await app.click({nav:'progress'});
  await app.click({cmd:'calendar'});
  assert.ok(app.requests.find(x=>x.action==='history_month'&&/^\d{4}-\d{2}$/.test(x.month)));
