@@ -36,11 +36,12 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(public.headers.get('X-Content-Type-Options'), 'nosniff')
         self.assertEqual(public.headers.get('Referrer-Policy'), 'no-referrer')
 
-    def test_public_v5_keeps_legacy_onboarding_and_safe_nutrition_consent(self):
+    def test_public_v5_has_native_onboarding_and_safe_nutrition_consent(self):
         js = self.client.get('/mini/v5-live.js').data.decode('utf-8')
-        self.assertIn('href="/mini/legacy" data-legacy', js)
-        self.assertIn("window.location.assign('/mini/legacy'", js)
-        self.assertIn("window.location.hash||''", js)
+        self.assertIn("function onboardForm()", js)
+        self.assertIn("await send('onboarding'", js)
+        self.assertNotIn('href="/mini/legacy" data-legacy', js)
+        self.assertNotIn("window.location.assign('/mini/legacy'", js)
         self.assertIn("fetch('/mini/report'", js)
         self.assertIn("data.append('consent','yes')", js)
         self.assertIn("if(!consent)", js)
