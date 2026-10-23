@@ -120,7 +120,7 @@ async function run(){
  await settle();
  assert.match(resumed.root.innerHTML,/rest-count/,'rest restored when Mini App reloads');
  await resumed.click({cmd:'rest-skip'});
- assert.equal(shared.storage.has('formiq_v5_rest_countdown'),false,'rest timer removed after skip');
+ assert.equal(JSON.parse(shared.storage.get('formiq_v5_rest_countdown')).skippedFor,'9:0:2','rest skip persisted for current set');
  await app.click({cmd:'rest-skip'});
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
