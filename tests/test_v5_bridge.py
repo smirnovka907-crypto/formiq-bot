@@ -166,7 +166,11 @@ class V5StagingContract(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, action)
                 data = response.get_json()
                 self.assertTrue(data.get('ok'), action)
-                self.assertIn(expected, data, action)
+                if expected == 'workout':
+                    self.assertIn('patch', data, action)
+                    self.assertIn('workout', data['patch'], action)
+                else:
+                    self.assertIn(expected, data, action)
                 auth.assert_called_once_with('signed-for-test')
                 if dispatcher == 'mini_write':
                     write.assert_called_once_with(777, action, payload)
