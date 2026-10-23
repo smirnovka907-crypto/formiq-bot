@@ -2940,6 +2940,8 @@ def mini_history_page(chat, body):
         suffix = ' AND {column} >= %s AND {column} < %s '
         params_workout = (chat, utc_start, utc_end)
         params_cardio = (chat, utc_start, utc_end)
+    if raw_day in (None, ''):
+        zone = history_local_zone(chat)
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
@@ -2956,7 +2958,6 @@ def mini_history_page(chat, body):
     with db() as conn:
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
-    zone = zone if raw_day not in (None, '') else history_local_zone(chat)
     page = []
     for ident, timestamp, kind, day, custom, minutes, equipment in rows[:limit]:
         page.append({
