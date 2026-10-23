@@ -194,6 +194,57 @@ class V5StagingContract(unittest.TestCase):
             self.assertEqual(result.status_code, 415)
             write.assert_not_called()
 
+    def test_profile_weight_patch_updates_only_owned_metric_column(self):
+        from decimal import Decimal
+        from unittest.mock import MagicMock
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.execute.return_value.rowcount = 1
+        with patch.object(self.mod, 'db', return_value=conn):
+            self.mod.save_metrics(777, {'metrics': {'weight_kg': '84,5'}})
+        sql, params = conn.execute.call_args.args
+        self.assertIn('UPDATE profile_metrics SET weight_kg=%s', sql)
+        self.assertIn('WHERE chat_id=%s', sql)
+        self.assertNotIn('height_cm=', sql)
+        self.assertNotIn('age=', sql)
+        self.assertNotIn('resting_hr=', sql)
+        self.assertNotIn('DELETE', sql)
+        self.assertEqual(params, (Decimal('84.5'), 777))
+        self.assertEqual(conn.execute.call_count, 1)
+
+    def test_profile_metrics_validation_rejects_unsafe_values_before_database(self):
+        for metrics in ({'age': 10}, {'weight_kg': 999},
+                        {'height_cm': 'NaN'}, {'weight_kg': '85', 'workouts': 1},
+                        {}):
+            with patch.object(self.mod, 'db') as conn:
+                with self.assertRaises(ValueError):
+                    self.mod.save_metrics(777, {'metrics': metrics})
+                conn.assert_not_called()
+
+    def test_signed_profile_metric_api_response_keeps_history_unchanged(self):
+        with patch.object(self.mod, 'mini_auth', return_value=777), \
+             patch.object(self.mod, 'mini_aux') as aux, \
+             patch.object(self.mod, 'metrics', return_value={
+                 'age': 34, 'height_cm': 181, 'weight_kg': 84.5
+             }) as metrics, \
+             patch.object(self.mod, 'health_profile', return_value=None), \
+             patch.object(self.mod, 'heart_zones', return_value=[]) as zones, \
+             patch.object(self.mod, 'mini_state') as state:
+            payload = {'action': 'save_metrics', 'metrics': {'weight_kg': 84.5}}
+            response = self.client.post('/mini/api', json=payload,
+                headers={'X-Formiq-Init':'signed-for-test'})
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertTrue(data['ok'])
+            self.assertEqual(data['patch']['metrics']['weight_kg'], 84.5)
+            self.assertNotIn('history', data['patch'])
+            aux.assert_called_once_with(777, 'save_metrics', payload)
+            metrics.assert_called_once_with(777)
+            zones.assert_called_once()
+            state.assert_not_called()
+
+
+
 
 if __name__ == '__main__':
     unittest.main()
