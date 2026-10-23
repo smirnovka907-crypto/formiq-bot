@@ -6,6 +6,7 @@ on:
       - release/formiq-38.1.2
       - release/formiq-38.1.3
       - main
+      - fix/v5-set-idempotency-20261023
       - release/formiq-v5-integration-20261023
       - release/v5-server-rest-20261023
       - fix/v5-form-drafts-20261023
@@ -40,5 +41,6 @@ jobs:
           python -m unittest discover -s tests -p test_telegram_3813.py -v
           python -m unittest discover -s tests -p test_382.py -v
           python -m unittest discover -s tests -p test_v5_bridge.py -v
+          python -m unittest discover -s tests -p test_v5_set_guard.py -v
       - name: Run integration tests
         run: python -m unittest discover -s tests -p test_integrations.py -v

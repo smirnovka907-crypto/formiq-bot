@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
 
 function createClient(auth=true,shared={}){
- const requests=[],handlers={},fields=new Map(),failActions=new Set();
+ const requests=[],handlers={},fields=new Map(),failActions=new Set(),staleActions=new Set();
  let html='';
  const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values()){const tail=html.split('id="'+field.id+'"')[1];const tag=tail?.split('>')[0];field.value=tag?.match(/value="([^"]*)"/)?.[1]??''}},addEventListener(name,fn){handlers[name]=fn}};
  const doc={
@@ -21,12 +21,18 @@ function createClient(auth=true,shared={}){
  const client={
   root,handlers,fields,requests,scrollMoves,viewportHandlers,
   failOnce(action){failActions.add(action)},
+  staleOnce(action){staleActions.add(action)},
   async fetch(url,opts){
    assert.equal(url,'/mini/api');
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
    const p=JSON.parse(opts.body);requests.push(p);
    if(failActions.delete(p.action))return {ok:false,status:503,async json(){return {ok:false,error:'Временная ошибка API'}}};
+   if(staleActions.delete(p.action)){
+    workout={...workout,done:1,rest_remaining_seconds:0,current:{...workout.current,set_no:2}};
+    shared.workout=workout;
+    return {ok:false,status:400,async json(){return {ok:false,error:'Этот подход уже изменился. Обнови тренировку'}}};
+   }
    let response;
    const state=()=>({
     agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
@@ -92,6 +98,18 @@ async function run(){
  const reopened=createClient(true,restored);
  await settle();
  assert.doesNotMatch(reopened.root.innerHTML,/rest-count/,'Skipped rest persists across reload');
+ const staleCase=createClient(true,{storage:new Map()});
+ await settle();
+ await staleCase.click({cmd:'mood'});
+ await staleCase.click({cmd:'start-normal'});
+ staleCase.input('reps','12');staleCase.input('weight','60');
+ staleCase.staleOnce('record');
+ await staleCase.click({cmd:'record'});
+ assert.match(staleCase.root.innerHTML,/Дневник обновлён/);
+ assert.match(staleCase.root.innerHTML,/Подход 2 из 2/);
+ assert.match(staleCase.root.innerHTML,/id="reps"[^>]*value=""/);
+ assert.match(staleCase.root.innerHTML,/id="weight"[^>]*value=""/);
+ assert.equal(staleCase.requests.filter(x=>x.action==='record').length,1,'Retry error does not auto-submit next approach');
  const shared={storage:new Map()};
  const app=createClient(true,shared);
  await settle();
@@ -113,7 +131,7 @@ async function run(){
  assert.equal(app.fields.get('weight').value,'60','unsaved weight retained after error');
  assert.match(app.root.innerHTML,/Временная ошибка API/);
  await app.click({cmd:'record'});
- assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60));
+ assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60&&x.expected_workout===9&&x.expected_position===0&&x.expected_set===1));
  assert.match(app.root.innerHTML,/rest-count/);
  assert.ok(shared.storage.has('formiq_v5_rest_countdown'),'rest countdown stored temporarily');
  const resumed=createClient(true,shared);

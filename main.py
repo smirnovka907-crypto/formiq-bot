@@ -3231,6 +3231,18 @@ def mini_write(chat, action, body):
             raise ValueError('Все подходы уже отмечены')
         pos, num, unit, status = row
         if action == 'record':
+            # Aluminium v5 passes an identity guard for the approach that was
+            # visible when the user pressed "done". Check the active row but
+            # never trust client identifiers when constructing the SQL update.
+            # This prevents delayed/retried requests from consuming the NEXT
+            # pending set after a lost response, without changing old clients.
+            guard_keys = ('expected_workout', 'expected_position', 'expected_set')
+            if any(key in body for key in guard_keys):
+                expected = tuple(body.get(key) for key in guard_keys)
+                if any(type(value) is not int for value in expected):
+                    raise ValueError('Обнови тренировку перед повторной записью подхода')
+                if expected != (wid, pos, num):
+                    raise ValueError('Этот подход уже изменился. Обнови тренировку')
             count = body.get('reps')
             if type(count) is not int or not (1 <= count <= 300):
                 raise ValueError('Повторений/секунд: от 1 до 300')

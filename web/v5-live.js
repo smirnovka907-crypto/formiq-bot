@@ -9,7 +9,7 @@ const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='';
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false;
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:'';};
@@ -69,7 +69,20 @@ async function send(action,more={}){
   if(action==='state')restoreRestTimer();
   if(originalSet!==nextKey()){drafts.reps='';drafts.weight='';restSkippedKey=''}
   error='';return response}
- catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
+ catch(e){
+  const stale=action==='record'&&/Обнови тренировку|Этот подход уже изменился/i.test(String(e.message));
+  if(stale){
+   try{
+    const previous=nextKey();
+    state=(await request('state')).data;
+    restoreRestTimer();
+    if(previous!==nextKey()){drafts.reps='';drafts.weight=''}
+    staleSetRefresh=true;
+    error='Дневник обновлён. Проверь текущий подход, прежде чем записывать его.';
+   }catch(_refreshError){error='Подход изменился. Перезапусти FORMIQ для обновления.'}
+  }else error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;
+  return null
+ }
  finally{busy=false;draw()}
 }
 function workout(){
@@ -228,8 +241,16 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(val)||Number(val)<1||Number(val)>300){fail('Введи от 1 до 300 повторений или секунд.');return}
   if(kg&&!/^\d+(?:[.,]\d{1,2})?$/.test(kg)){fail('Укажи вес в килограммах.');return}
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
-  const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
-  if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
+  const prev=state.workout.current,workoutId=state.workout.id;
+  staleSetRefresh=false;
+  const success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{}),
+   expected_workout:workoutId,expected_position:prev.position,expected_set:prev.set_no});
+  if(!success){
+   if(staleSetRefresh){staleSetRefresh=false;return}
+   const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');
+   if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;
+   return
+  }
   const remaining=Number(state.workout?.rest_remaining_seconds??prev.rest_seconds??0);
   if(state.workout?.current&&remaining>0){restUntil=Date.now()+remaining*1000;restFor=nextKey();storeRestTimer();draw()}
   else{restUntil=0;restFor='';storeRestTimer()}return;
