@@ -9,7 +9,7 @@ const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null);
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null);
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:''};
@@ -22,9 +22,21 @@ async function request(action,more={}){
  return data;
  }finally{clearTimeout(timeout)}
 }
+function restoreRecommendedRest(){
+ const key=nextKey();
+ const remaining=Number(state?.workout?.rest_remaining_seconds||0);
+ if(!key){restUntil=0;restFor='';restSkippedKey='';return}
+ if(restSkippedKey&&restSkippedKey!==key)restSkippedKey='';
+ if(restSkippedKey===key){restUntil=0;restFor='';return}
+ if(remaining>0&&Number.isFinite(remaining)){
+  const due=Date.now()+remaining*1000;
+  if(restFor!==key||restUntil<=Date.now()){restFor=key;restUntil=due}
+  else restUntil=Math.min(restUntil,due);
+ }else if(restFor===key){restUntil=0;restFor=''}
+}
 async function send(action,more={}){
  if(busy)return null;busy=true;const beforeSet=nextKey();
- try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;if(beforeSet!==nextKey()){drafts.reps='';drafts.weight=''}error='';return response}
+ try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;if(beforeSet!==nextKey()){drafts.reps='';drafts.weight=''}restoreRecommendedRest();error='';return response}
  catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
 }
@@ -173,9 +185,9 @@ app.addEventListener('click',async e=>{
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
   const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
   if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
-  if(state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
+  if(state.workout?.current&&!Object.prototype.hasOwnProperty.call(state.workout,'rest_remaining_seconds')&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
  }
- if(cmd==='rest-skip'){restUntil=0;restFor='';draw();return}
+ if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
  if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor=''}draw();return}
