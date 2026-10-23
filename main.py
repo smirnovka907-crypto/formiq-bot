@@ -2073,6 +2073,27 @@ def upload_exercise_photo(m):
     send(m.chat.id, f'🖼 Картинка для {EX[key][0]} сохранена.')
 
 
+@BOT.message_handler(commands=['v5'])
+def owner_v5_preview(m):
+    """Private opt-in Aluminium V5 launch; never alter the public bot menu."""
+    if not ADMIN_ID or m.chat.type != 'private':
+        return
+    sender = getattr(m, 'from_user', None)
+    if sender is None or sender.id != ADMIN_ID or m.chat.id != ADMIN_ID:
+        return
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(
+        'Открыть Aluminium v5',
+        web_app=types.WebAppInfo(url=BASE_URL + '/mini/v5')))
+    BOT.send_message(
+        m.chat.id,
+        'FORMIQ Aluminium v5 · проверка владельцем.\n'
+        'Это не демо: тренировки, подходы и кардио здесь записываются '
+        'в настоящий дневник. Остальные пользователи продолжают '
+        'открывать прежний интерфейс.',
+        reply_markup=markup)
+
+
 @BOT.message_handler(commands=['image_keys'])
 def image_keys(m):
     if not ADMIN_ID or m.from_user.id != ADMIN_ID or m.chat.type != 'private':
