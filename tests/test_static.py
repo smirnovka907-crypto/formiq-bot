@@ -6,7 +6,9 @@ source = Path(__file__).resolve().parents[1] / 'main.py'
 text = source.read_text(encoding='utf-8')
 module = ast.parse(text)
 assert re.search(r"(?m)^VERSION = '[0-9]+\.[0-9]+\.[0-9]+'$", text)
-assert 'FormIQ' in text and "InlineKeyboardButton('⚡ Разбудить'" in text
+assert 'def formiq_chat_keyboard():' in text
+assert "InlineKeyboardButton('FormIQ'" in text
+assert "InlineKeyboardButton('Разбудить'" in text
 assert 'welcome_jpeg()' in text
 
 assignment = next(node for node in module.body if isinstance(node, ast.Assign)
