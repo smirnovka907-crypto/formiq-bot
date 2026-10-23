@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f2f4f3">
+<title>FORMIQ — новый предпросмотр</title>
+<style>
+:root{color-scheme:light;--ink:#242c2d;--secondary:#586366;--faint:#6b7779;--line:rgba(101,113,117,.20);--silver:#dfe4e3;--silver-dark:#c9d1d0;--ivory:#f7f9f8;--pistachio:#91a98c;--orange:#bc7b52;--shadow:0 13px 34px rgba(55,68,69,.055);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",Inter,"Segoe UI",Arial,sans-serif}
+*{box-sizing:border-box}html{min-height:100%;-webkit-text-size-adjust:100%}body{margin:0;color:var(--ink);-webkit-font-smoothing:antialiased;background:#d9dedd;font-size:15px}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;-webkit-tap-highlight-color:transparent}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #53605f;outline-offset:2px}input,textarea{font-size:16px}p{line-height:1.5}.app{width:100%;max-width:460px;min-height:100dvh;margin:auto;position:relative;overflow-x:hidden;background:repeating-linear-gradient(92deg,rgba(255,255,255,.19) 0px,rgba(255,255,255,.19) 1px,rgba(76,87,90,.010) 1px,rgba(76,87,90,.010) 3px),linear-gradient(122deg,#fafbfa 2%,#e9eeed 48%,#f7f8f7 99%);box-shadow:0 0 42px rgba(36,44,43,.11)}.view{padding:calc(18px + env(safe-area-inset-top)) 20px calc(108px + env(safe-area-inset-bottom));min-height:100dvh}.view.no-bottom{padding-bottom:calc(125px + env(safe-area-inset-bottom))}.header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:32px;min-height:42px}.brand{display:inline-flex;align-items:center;gap:0;font-size:23px;font-weight:840;letter-spacing:-1.25px;white-space:nowrap;color:#515e61;line-height:1.2;border:.6px solid rgba(188,123,82,.32);border-radius:7px;padding:3px 6px 4px;text-shadow:0 1px rgba(255,255,255,.8),0 -1px rgba(90,106,104,.12)}.brand em{font-style:normal;color:var(--pistachio)}.head-actions{display:flex;align-items:center;gap:7px}.profile-open,.back{border:1px solid var(--line);background:linear-gradient(145deg,#fff9,#e7ebea);height:41px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;padding:0 12px;color:#394547;font-size:13px;font-weight:720}.profile-open svg{width:20px;height:20px}.back{gap:7px;padding:0 12px}.back svg{width:17px;height:17px}.kicker{font-size:11px;font-weight:760;letter-spacing:.13em;color:#677375;text-transform:uppercase}.title{font-size:35px;letter-spacing:-1.4px;line-height:1.07;font-weight:810;margin:9px 0 10px}.intro{font-size:15px;line-height:1.52;color:var(--secondary);margin:0 0 25px}.section-h{font-size:18px;font-weight:780;letter-spacing:-.4px;margin:24px 0 13px}.surface{background:rgba(255,255,255,.38);border:1px solid rgba(120,133,136,.20);border-radius:21px;padding:19px;margin-bottom:13px;box-shadow:var(--shadow),inset 0 1px rgba(255,255,255,.6)}.surface.tight{padding:14px 18px}.surface.soft{background:rgba(255,255,255,.18);box-shadow:none}.muted{color:var(--secondary)}.eyebrow{font-size:11px;letter-spacing:.12em;color:#637073;font-weight:760}.heading-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.heading-row h2{font-size:23px;font-weight:780;letter-spacing:-.75px;margin:7px 0 5px}.badge{font-size:11px;font-weight:700;border:1px solid var(--line);padding:7px 10px;border-radius:99px;color:#455456;background:rgba(250,252,251,.45);white-space:nowrap}.subtitle{font-size:14px;color:#596568;margin:0}.divider{height:1px;background:var(--line);margin:17px 0 5px}.exercise{display:grid;grid-template-columns:31px minmax(0,1fr) auto;gap:9px;align-items:center;padding:15px 0;border-bottom:1px solid rgba(101,113,117,.12)}.exercise:last-of-type{border-bottom:none}.exercise-index{font-size:13px;font-weight:700;color:#566367}.exercise-name{font-size:16px;font-weight:735;line-height:1.25;letter-spacing:-.12px}.exercise-reps{font-size:14px;font-weight:700;white-space:nowrap;color:#3f4a4d}.button-main,.button-subtle{min-height:51px;width:100%;border-radius:14px;font-size:15px;font-weight:760;padding:12px 16px;display:inline-flex;align-items:center;justify-content:center;gap:10px}.button-main{border:1px solid #73817e;color:#f8f9f8;background:linear-gradient(130deg,#63716e,#394746);box-shadow:0 5px 10px #49575518,inset 0 1px #ffffff4d}.button-subtle{border:1px solid #b9c3c1;background:linear-gradient(155deg,#fdfefe,#e6ebea);color:#344143}.workout-cta{margin-top:21px}.plain-link{border:none;background:transparent;color:#364648;font-size:15px;font-weight:700;text-decoration:underline;text-underline-offset:4px;padding:13px 3px;display:inline-flex;align-items:center}.summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:16px;border:1px solid var(--line);border-radius:17px;background:rgba(255,255,255,.28)}.metric strong{display:block;font-size:25px;line-height:1.25;letter-spacing:-.8px;margin:6px 0 4px}.metric span{color:var(--secondary);font-size:13px;line-height:1.4}.footline{border-top:1px solid var(--line);margin-top:30px;padding:15px 1px 0;display:flex;flex-direction:column;gap:5px;align-items:flex-start}.footline small{font-size:12px;color:#6b7779}.bottom-nav{position:fixed;z-index:40;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:460px;padding:10px 11px max(12px,env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;background:rgba(237,241,240,.96);border-top:1px solid rgba(107,121,122,.22);box-shadow:0 -8px 24px #53605e0c;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.nav-item{height:57px;border:1px solid transparent;border-radius:12px;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:#697678;font-size:12px;font-weight:720;white-space:nowrap;min-width:0}.nav-item svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.nav-item.active{color:#283537;background:linear-gradient(135deg,#f6f8f7,#d8dfdd);box-shadow:inset 0 2px 5px #5767642a,inset 0 1px 1px #fff;border-color:#b2bfbc}.week-selector{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:5px 0 19px}.week-selector button{height:49px;border:1px solid #c0c9c7;border-radius:13px;background:rgba(255,255,255,.34);font-size:14px;font-weight:750}.week-selector button.on,.choice.on,.weekday.on{background:linear-gradient(135deg,#d7dedc,#e8eeec);border-color:#8c9b98;box-shadow:inset 0 2px 5px #55656026;color:#243033}.date-toggle{border:0;background:transparent;width:100%;min-height:43px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;font-size:17px;font-weight:780;text-align:left}.date-toggle .chevron{font-size:22px;color:#5c6969;font-weight:400}.calendar{border-top:1px solid var(--line);padding:14px 0 5px;margin-top:10px}.cal-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:3px 0 13px}.cal-head strong{font-size:15px}.cal-arrow{width:33px;height:33px;border:1px solid #c4cecc;border-radius:9px;background:#edf1f0;color:#465454;font-size:18px}.cal-days,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}.cal-days span{font-size:11px;color:#5f6d6e;padding:7px 0}.cal-grid button{aspect-ratio:1/1;min-height:36px;border:1px solid transparent;border-radius:9px;background:transparent;font-size:13px;font-weight:650}.cal-grid button:disabled{opacity:0;pointer-events:none}.cal-grid button.workout-day{box-shadow:inset 0 -2px 0 #85928f}.cal-grid button.today{border-color:#b5c2bf}.cal-grid button.selected{background:#d4ddda;border-color:#81918e;box-shadow:inset 0 1px 3px #4b5e5922}.cal-help{font-size:12px;color:#637172;margin:11px 0 1px;line-height:1.5}.plan-list{margin-top:10px}.plan-entry{display:grid;grid-template-columns:31px minmax(0,1fr) auto;align-items:center;gap:11px;border-top:1px solid var(--line);width:100%;padding:17px 2px;text-align:left;background:transparent;min-height:70px;border-left:0;border-right:0;border-bottom:0}.plan-entry strong{display:block;font-size:16px;font-weight:735}.plan-entry small{display:block;font-size:13px;color:#657172;margin-top:4px}.plan-entry>span:last-child{font-size:21px;color:#52605f}.plan-num{font-size:14px;font-weight:750;color:#657374}.status-line{display:flex;gap:11px;align-items:flex-start;font-size:14px;color:#586567;line-height:1.45}.status-dot{display:inline-block;width:7px;height:7px;margin:6px 0 0;border-radius:50%;background:#7d928a;flex:none}.form-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.field{display:flex;flex-direction:column;gap:8px;font-size:14px;font-weight:740;color:#344244}.field input,.field textarea{width:100%;border:1px solid #b9c6c3;border-radius:12px;background:rgba(255,255,255,.56);padding:12px 13px;min-height:49px;min-width:0;color:var(--ink);font-weight:670;outline-color:#657574}.field input::placeholder,.field textarea::placeholder{color:#6d797a;opacity:.9;font-weight:480}.field textarea{min-height:107px;resize:vertical;line-height:1.5;font-size:15px}.field small{font-weight:550;color:#687577;font-size:12px}.option-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:11px 0 15px}.choice{min-height:47px;border:1px solid #c0cbc8;border-radius:12px;background:rgba(255,255,255,.30);text-align:center;padding:10px;font-size:14px;font-weight:700;color:#3f4c4f;line-height:1.22}.choice.goal{min-height:63px;text-align:left;padding:12px;display:flex;align-items:center}.weekdays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px;margin:12px 0 16px}.weekday{min-height:43px;border-radius:11px;border:1px solid #c0cbc8;background:rgba(255,255,255,.34);font-weight:750;font-size:12px;padding:0;min-width:0}.section-label{font-size:17px;letter-spacing:-.25px;font-weight:770;margin:21px 0 9px}.input-note{font-size:13px;color:#586668;margin:5px 0 0;line-height:1.45}.range-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:11px 0 10px}.range-row span{font-size:15px;font-weight:710}.range-row strong{font-size:18px}.range{width:100%;accent-color:#62706d;cursor:pointer;height:29px;margin:0}.range-labels{display:flex;justify-content:space-between;color:#617071;font-size:12px}.checkbox-line{display:flex;align-items:flex-start;gap:11px;font-size:13px;font-weight:560;line-height:1.5;color:#3c494b;margin-top:13px}.checkbox-line input{width:18px;height:18px;accent-color:#63736e;flex:none;margin:1px 0 0}.note{font-size:13px;color:#566466;line-height:1.5;padding:12px 13px;background:rgba(218,226,224,.44);border-radius:13px;margin:13px 0}.two-buttons{display:flex;gap:9px}.two-buttons>*{flex:1;min-width:0}.chart-block{margin-top:11px}.chart-caption{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px}.chart-caption strong{font-size:16px}.chart-caption small{font-size:12px;color:#627072}.chart-area{width:100%;display:block;height:auto;overflow:visible}.chart-leg{margin:7px 0 0;font-size:12px;color:#637073}.segmented{display:grid;grid-template-columns:1fr 1fr;border:1px solid #becac7;background:rgba(232,237,236,.55);padding:4px;border-radius:13px;gap:3px;margin:15px 0}.segmented button{min-height:41px;border-radius:10px;border:0;background:transparent;font-size:13px;font-weight:720}.segmented button.on{background:linear-gradient(150deg,#fcfdfc,#dbe2df);box-shadow:0 1px 5px #5a6b6630}.nutrition-ring{width:110px;height:110px;border-radius:50%;border:12px solid #cad5d0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#f8faf9,#e9eeec);flex:none}.nutrition-ring b{font-size:22px;letter-spacing:-.6px}.nutrition-ring span{font-size:12px;color:#5e6c6d}.nutrition-today{display:flex;align-items:center;gap:18px}.nutrition-today h3{font-size:21px;line-height:1.2;margin:0 0 6px;letter-spacing:-.55px}.nutrition-today p{font-size:13px;color:#596669;margin:0}.macro{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:16px 0;border-top:1px solid var(--line)}.macro strong{font-size:16px}.macro span{font-size:13px;color:#526062}.modal-wrap{position:fixed;z-index:100;inset:0;background:rgba(33,42,42,.47);display:flex;align-items:flex-end;justify-content:center}.modal-panel{background:linear-gradient(140deg,#f8faf9,#e1e7e5);padding:24px 20px max(20px,env(safe-area-inset-bottom));width:100%;max-width:460px;border-radius:24px 24px 0 0;box-shadow:0 -8px 44px #17202033;max-height:85dvh;overflow:auto}.modal-panel h2{margin:0 0 11px;font-size:23px;letter-spacing:-.5px}.modal-panel p{font-size:14px;color:#455355;line-height:1.5;margin:0 0 14px}.modal-panel textarea{width:100%;min-height:120px;border:1px solid #b6c5c1;border-radius:13px;padding:12px;font-size:15px;resize:vertical;background:#fff9}.modal-panel button{margin-top:11px}.toast{position:fixed;z-index:200;bottom:calc(100px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:426px;text-align:center;color:#f6f8f7;background:#354341;border-radius:14px;padding:14px 18px;font-size:14px;line-height:1.4;box-shadow:0 10px 25px #19232135}.sublink{font-size:13px;color:#546263;text-decoration:none;border-bottom:1px solid #9ca9a5}.empty{color:#667476;font-size:14px;line-height:1.45}.tight-title{margin-bottom:9px}@media(min-width:750px){.app{margin:24px auto;min-height:calc(100dvh - 48px);border-radius:30px;overflow:hidden}.bottom-nav{bottom:24px;border-radius:0 0 28px 28px;max-width:460px}.modal-panel{border-radius:24px 24px 0 0}.view{min-height:calc(100dvh - 48px)}}@media(prefers-reduced-motion:no-preference){button{transition:background .14s ease,box-shadow .14s ease,transform .1s ease}button:active{transform:scale(.985)}}
+
+/* Mobile Safari/Telegram preview: swipe the document and keep navigation stable. */
+html,body{height:auto;min-height:100%;overscroll-behavior-y:auto}
+.app{height:auto;min-height:100dvh;overflow-y:visible;touch-action:pan-y}
+.view{padding-bottom:calc(138px + env(safe-area-inset-bottom))}
+.view.no-bottom{padding-bottom:calc(138px + env(safe-area-inset-bottom))}
+.bottom-nav{touch-action:manipulation}
+input,select,textarea{max-width:100%}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+
+/* Approved v4: calm silver date ranges instead of numbered week tabs */
+.week-selector{display:grid;grid-template-columns:1fr;gap:9px;margin:5px 0 18px}
+.week-selector button{height:auto;min-height:66px;width:100%;padding:12px 15px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;border-radius:15px;background:rgba(255,255,255,.28);border:1px solid rgba(101,113,117,.22);box-shadow:none}
+.week-selector button.on{background:linear-gradient(130deg,#e5ebe9,#d5ddda);border-color:#8c9b98;box-shadow:inset 0 1px 3px rgba(64,75,72,.12)}
+.week-range{display:block;color:#293537;font-size:17px;line-height:1.25;font-weight:765;letter-spacing:-.2px}
+.week-meta{display:block;margin-top:5px;color:#616e70;font-size:12px;font-weight:570}
+.week-chevron{color:#617173;font-size:22px;font-weight:450;min-width:16px}
+.plan-entry:disabled{opacity:1;cursor:pointer}
+.history-detail{font-size:14px;line-height:1.5;color:#536164}
+.connection-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid var(--line)}
+.connection-row:last-child{border-bottom:0;padding-bottom:0}
+.connection-title{font-weight:750;font-size:16px}
+.connection-hint{font-size:13px;color:#607072;margin-top:5px}
+.connection-status{font-size:12px;color:#5c696a;border:1px solid #c2ccca;border-radius:99px;padding:6px 9px;white-space:nowrap}
+.home-equipment-panel{margin-top:13px;padding:16px;border:1px solid rgba(101,113,117,.20);border-radius:16px;background:rgba(255,255,255,.24)}
+.home-equipment-panel textarea{display:block;width:100%;min-height:102px;margin-top:9px}
+.home-equipment-panel .input-note{font-size:13px;line-height:1.45;margin:10px 0 0}
+
+/* Approved final plan: period and training days are separate matching silver buttons. */
+.week-selector{display:flex;flex-direction:column;gap:10px}
+.week-group{display:flex;flex-direction:column;gap:9px;border:0;background:transparent}
+.week-group > button{width:100%;min-height:68px;padding:12px 15px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(101,113,117,.20)!important;border-radius:16px!important;background:rgba(255,255,255,.19)!important;box-shadow:none!important}
+.week-group > button.on{background:linear-gradient(125deg,rgba(221,228,225,.78),rgba(245,248,247,.75))!important;border-color:#8c9b98!important}
+.week-details{padding:0 0 0 10px;border:0;background:transparent}
+.week-details .plan-list{display:grid;gap:9px;margin:0}
+.week-details .plan-entry{width:100%;min-height:68px;padding:12px 15px;display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;border:1px solid rgba(101,113,117,.20);border-radius:16px;background:rgba(255,255,255,.28);box-shadow:none}
+.week-details .plan-entry strong{display:block;color:#293537;font-size:17px;line-height:1.25;font-weight:765}
+.week-details .plan-entry small{display:block;margin-top:5px;color:#616e70;font-size:14px;line-height:1.35;font-weight:570}
+.week-details .plan-chevron{font-size:22px;font-weight:450;color:#617173;flex-shrink:0}
+
+/* Cardio follows existing monochrome style without a new bottom tab. */
+.cardio-history{margin-top:12px;border-top:1px solid var(--line)}
+.cardio-history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.cardio-history-row strong{display:block;font-size:15px;font-weight:750}
+.cardio-history-row small{display:block;margin-top:3px;color:var(--secondary);font-size:12px}
+.cardio-history-row>.muted{font-size:12px;text-align:right}
+
+/* Cardio modal — same silver buttons and radii as the rest of FormIQ. */
+.modal-panel .cardio-type-trigger{width:100%;min-height:54px;margin-top:4px;justify-content:space-between;text-align:left}
+.cardio-choices{display:grid;grid-template-columns:1fr;gap:9px;margin:14px 0 8px}
+.modal-panel .cardio-choice{margin-top:0;min-height:55px;justify-content:space-between;text-align:left;font-size:16px}
+.cardio-chevron{font-size:22px;color:#657575}
+/* Preview-only integration state buttons in Profile */
+.preview-integrations{margin:9px 0 16px}
+.preview-integrations .button-subtle{min-height:46px;font-size:13px}
+/* Fixed-in-view settings access: keep the approved header in place while scrolling. */
+.profile-open{position:fixed;top:calc(19px + env(safe-area-inset-top));right:max(20px,calc((100vw - 460px)/2 + 20px));z-index:75;background:rgba(238,243,241,.94);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 4px 18px rgba(39,50,50,.12)}
+@media(min-width:750px){.profile-open{top:calc(43px + env(safe-area-inset-top))}}
+.history-scroll{overflow-y:auto;overscroll-behavior:contain;max-height:min(490px,65dvh);scrollbar-width:thin;margin:11px 0 14px;border-top:1px solid var(--line)}
+.history-scroll .cardio-history-row{min-height:70px}
+.history-modal .button-subtle{margin-top:8px}
+</style>
+</head>
+<body>
+<div id="app" class="app" role="application" aria-label="FORMIQ — интерактивный дизайн-прототип"></div>
+<script>
+(()=>{
+'use strict';
+const app=document.getElementById('app');
+const demoToday='2026-10-23'; // фиксированная дата для согласования дизайна
+const goals=['Снижение веса','Набор мышечной массы','Развитие силы и выносливости','Поддержание формы'];
+const dayLabels=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const dayLong=['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'];
+const icon={home:'<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>',plan:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/>',progress:'<path d="M4 20h16M5 17l5-6 4 3 5-8"/>',food:'<path d="M6 3v7a3 3 0 0 0 6 0V3M9 3v18M18 3v18M16 3c4 2 4 8 2 9"/>',user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3-7 8-7s8 3 8 7"/>',arrow:'<path d="m14 5-7 7 7 7"/>'};
+const ico=n=>`<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[n]||''}</svg>`;
+const EMPTY={sex:'',age:'',height:'',weight:'',goal:'',days:[],duration:45,place:'gym',homeEquipment:'',limits:'',consent:false,confirmedLimits:''};
+function loadProfile(){try{const t=localStorage.getItem('formiq_design_profile_v3');if(t){const v=JSON.parse(t);return {...EMPTY,...v,days:Array.isArray(v.days)?v.days:[]};}}catch(e){}return {...EMPTY,days:[]}}
+let profile=loadProfile();
+let cardioEntries=loadDemoCardio();
+let previewIntegrations=loadPreviewIntegrationViews();
+let strengthEntries=loadDemoStrength();
+let demoWorkoutActiveDate='';
+let cardioDraft={type:'',other:'',minutes:'',hr:''};
+let screen='home', previous='home', aiResultOpen=false, planWeek=0, selectedDate='', modal='', chartExercise='legs', promptMode='', nutritionSaved=false, toastTimer;
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function dow(s){let d=new Date(s+'T12:00:00');return (d.getDay()+6)%7;}
+function iso(date){const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`;}
+function dateObj(s){return new Date(s+'T12:00:00')}
+function addDays(s,d){const v=dateObj(s);v.setDate(v.getDate()+d);return iso(v)}
+function readable(s){const d=dateObj(s);return `${d.getDate()} ${['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'][d.getMonth()]}`}
+function weekStart(i){return addDays('2026-10-19',(i-1)*7)}
+function weeksDay(i,n){return addDays(weekStart(i),n)}
+function spanDate(i){const a=dateObj(weekStart(i)),b=dateObj(weeksDay(i,6));if(a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear())return `${a.getDate()}–${b.getDate()} ${readable(weeksDay(i,6)).split(' ')[1]}`;return `${readable(weekStart(i))} — ${readable(weeksDay(i,6))}`;}
+function schedule(){return profile.days.length?[...profile.days].sort((a,b)=>a-b):[0,2,4]}
+function isWorkout(date){return schedule().includes(dow(date))}
+/* Demo only: a session title is inferred from the exercises shown for that date.
+   Production must use its actual generated/user-edited routine, never a weekday label. */
+function demoWorkout(date){
+  const gym=[
+    [['Жим ногами','3 × 12','legs'],['Сгибание ног в тренажёре','3 × 12','legs'],['Разгибание ног в тренажёре','3 × 12','legs']],
+    [['Тяга верхнего блока','3 × 12','back'],['Горизонтальная тяга','3 × 12','back'],['Жим гантелей сидя','3 × 10','shoulders']],
+    [['Жим от груди','3 × 12','chest'],['Разведение рук в тренажёре','3 × 12','chest'],['Сгибание рук с гантелями','3 × 12','arms']]
+  ];
+  const home=[
+    [['Приседания к стулу','3 × 12','legs'],['Ягодичный мост','3 × 12','legs'],['Подъём на носки','3 × 15','legs']],
+    [['Отжимания от стены','3 × 12','chest'],['Подъём рук перед собой','3 × 12','shoulders'],['Отведение рук в стороны','3 × 12','shoulders']],
+    [['Приседания к стулу','3 × 12','legs'],['Отжимания от стены','3 × 12','chest'],['Подъём руки и ноги на четвереньках','3 × 10','back']]
+  ];
+  const i=Math.max(0,schedule().indexOf(dow(date)));
+  const w=Math.max(0,Math.floor((dateObj(date)-dateObj('2026-10-19'))/604800000));
+  let options=profile.place==='home'?home:gym;
+  // Demonstration only: select exercise examples for explicitly listed equipment.
+  if(profile.place==='home'){
+    const inventory=String(profile.homeEquipment||'').toLowerCase().trim();
+    if(/гантел|dumbbell/.test(inventory)){
+      options=[
+        [['Приседания с гантелями','3 × 12','legs'],['Выпады с гантелями','3 × 10','legs'],['Подъём на носки с гантелями','3 × 15','legs']],
+        [['Тяга гантели в наклоне','3 × 12','back'],['Жим гантелей сидя','3 × 10','shoulders'],['Разведение гантелей в стороны','3 × 12','shoulders']],
+        [['Жим гантелей лёжа на полу','3 × 12','chest'],['Сгибание рук с гантелями','3 × 12','arms'],['Разгибание рук с гантелью','3 × 12','arms']]
+      ];
+    }else if(/эспандер|резин|эластичн|фитнес.лент|band/.test(inventory)){
+      options=[
+        [['Приседания с эспандером','3 × 12','legs'],['Ягодичный мост с эспандером','3 × 12','legs'],['Шаги в сторону с эспандером','3 × 12','legs']],
+        [['Тяга эспандера к поясу','3 × 12','back'],['Разведение рук с эспандером','3 × 12','back'],['Жим эспандера вверх','3 × 10','shoulders']],
+        [['Жим эспандера от груди','3 × 12','chest'],['Сгибание рук с эспандером','3 × 12','arms'],['Разгибание рук с эспандером','3 × 12','arms']]
+      ];
+    }else if(/гир[яиюь]|kettlebell/.test(inventory)){
+      options=[
+        [['Приседания с гирей у груди','3 × 12','legs'],['Подъём на носки','3 × 15','legs'],['Ягодичный мост','3 × 12','legs']],
+        [['Тяга гири одной рукой','3 × 12','back'],['Подъём гири от пола','3 × 10','legs'],['Разведение рук без веса','3 × 12','shoulders']],
+        [['Отжимания от стены','3 × 12','chest'],['Сгибание рук с гирей','3 × 10','arms'],['Ягодичный мост','3 × 12','legs']]
+      ];
+    }
+  }
+  return options[(w*schedule().length+i)%options.length];
+}
+function sessionName(date){
+  const areas=[...new Set(demoWorkout(date).map(row=>row[2]))];
+  if(areas.length===1) return ({legs:'Ноги',back:'Спина',shoulders:'Плечи',chest:'Грудь',arms:'Руки'})[areas[0]]||'Силовая тренировка';
+  if(areas.length===2){
+    const order=['legs','back','chest','shoulders','arms'];
+    const names={legs:'Ноги',back:'Спина',chest:'Грудь',shoulders:'плечи',arms:'руки'};
+    areas.sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+    return names[areas[0]]+' и '+names[areas[1]];
+  }
+  return 'Всё тело';
+}
+function demoCardio(date){
+  if(!isWorkout(date))return null;
+  const trainingDays=schedule();
+  if(dow(date)!==trainingDays[Math.floor((trainingDays.length-1)/2)])return null;
+  return {title:'Кардио',activity:profile.place==='gym'?'Велотренажёр':'Быстрая ходьба',
+    minutes:Math.max(8,Math.min(15,Math.round(profile.duration/4)))};
+}
+function cardioDayForPeriod(i){
+  const days=schedule(), middle=days[Math.floor((days.length-1)/2)];
+  return weeksDay(i,middle);
+}
+/* Energy is an approximate MET calculation, NOT a Garmin measurement. */
+function demoWeightKg(){
+  const kg=Number(String(profile.weight||'').replace(',', '.'));
+  return Number.isFinite(kg)&&kg>0?kg:null;
+}
+function approximateKcal(minutes,met,weight=demoWeightKg()){
+  if(!Number.isSafeInteger(minutes)||minutes<1||!Number.isFinite(met)||met<=0||weight===null)return null;
+  const kcal=Math.round(met*weight*minutes/60);
+  return Number.isSafeInteger(kcal)&&kcal>=0?kcal:null;
+}
+function cardioMet(type){
+  const t=String(type||'').toLowerCase().trim();
+  if(t==='ходьба')return 3.5;
+  if(t==='бег')return 8.3;
+  if(t==='велосипед')return 6.8;
+  if(t==='плавание')return 6.0;
+  return 4.0; // Unknown activity: coarse estimate, not a measurement.
+}
+function cardioCalories(entry){
+  if(Number.isSafeInteger(entry.estimatedKcal)&&entry.estimatedKcal>=0)return entry.estimatedKcal;
+  return approximateKcal(entry.minutes,cardioMet(entry.type));
+}
+function caloriesDisplay(kcal){
+  return kcal===null?'ккал: — (укажи вес в анкете)':'≈ '+kcal.toLocaleString('ru-RU')+' ккал';
+}
+function loadDemoCardio(){
+  try{
+    const items=JSON.parse(localStorage.getItem('formiq_preview_cardio_v1')||'[]');
+    if(Array.isArray(items))return items.filter(x=>x&&Number.isSafeInteger(x.minutes)&&x.minutes>=1
+      &&(!x.avgHr||(Number.isInteger(x.avgHr)&&x.avgHr>=40&&x.avgHr<=220))&&typeof x.date==='string');
+  }catch(_error){}
+  return [];
+}
+function cardioDateKey(item){
+  if(typeof item.isoDate==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(item.isoDate))return item.isoDate;
+  const m=String(item.date||'').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  return m?m[3]+'-'+m[2]+'-'+m[1]:null;
+}
+function loadDemoStrength(){
+  try{
+    const items=JSON.parse(localStorage.getItem('formiq_preview_strength_v1')||'[]');
+    if(Array.isArray(items))return items.filter(x=>x&&/^\d{4}-\d{2}-\d{2}$/.test(x.isoDate||'')
+      &&typeof x.title==='string'&&x.title.length<=100&&Number.isSafeInteger(x.minutes)&&x.minutes>0
+      &&(x.avgHr===null||(Number.isInteger(x.avgHr)&&x.avgHr>=40&&x.avgHr<=220)));
+  }catch(_error){}
+  return [];
+}
+function completedStrength(date){return strengthEntries.find(x=>x.isoDate===date)||null}
+function demoHistoryItems(){
+  const strength=strengthEntries.map(x=>({...x,kind:'strength'}));
+  const cardio=cardioEntries.map(x=>({...x,kind:'cardio',isoDate:cardioDateKey(x)}));
+  return strength.concat(cardio).sort((a,b)=>String(b.isoDate||'').localeCompare(String(a.isoDate||'')));
+}
+function demoHistoryExamples(){
+  // Static view-only examples: never stored as real user workouts.
+  const sample=[
+    ['22.10.2026','Силовая · Спина и плечи','52'],
+    ['21.10.2026','Кардио · Ходьба','42'],
+    ['19.10.2026','Силовая · Ноги','48'],
+    ['17.10.2026','Кардио · Велосипед','65'],
+    ['16.10.2026','Силовая · Грудь и руки','45'],
+    ['14.10.2026','Кардио · Плавание','40'],
+    ['12.10.2026','Силовая · Ноги','51'],
+    ['10.10.2026','Кардио · Бег','32'],
+    ['09.10.2026','Силовая · Спина и плечи','56'],
+    ['07.10.2026','Кардио · Ходьба','38']
+  ];
+  return sample.map(([date,title,minutes])=>({
+    date,kind:'example',type:title,minutes:Number(minutes),avgHr:null,previewExample:true
+  }));
+}
+function historyForPreview(){
+  const saved=demoHistoryItems();
+  return saved.length?saved:demoHistoryExamples();
+}
+function historyRows(items){
+  return items.map(item=>`<div class="cardio-history-row"><span><strong>${esc(item.kind==='strength'?'Силовая · '+item.title:(item.type||'Кардио'))} · ${item.minutes} мин</strong><small>${esc(item.date)}${item.previewExample?'':' · '+(previewIntegrations.garmin?'':caloriesDisplay(historyEnergy(item)))}</small></span><span class="muted">${item.previewExample?'Демо':item.avgHr?item.avgHr+' уд/мин':'Пульс не указан'}</span></div>`).join('');
+}
+function historyEnergy(entry){
+  return Number.isSafeInteger(entry.estimatedKcal)&&entry.estimatedKcal>=0
+    ?entry.estimatedKcal
+    :approximateKcal(entry.minutes,entry.kind==='strength'?3.5:cardioMet(entry.type));
+}
+function demoRecentCardioLoad(workoutDate){
+  if(workoutDate<demoToday)return false; // Never revise history.
+  return cardioEntries.some(item=>{
+    const key=cardioDateKey(item);
+    if(!key||!Number.isInteger(item.minutes))return false;
+    const delta=Math.round((dateObj(workoutDate)-dateObj(key))/86400000);
+    if(delta<0||delta>2)return false;
+    // Only illustrative: time and entered heart rate; not personalized recovery advice.
+    return (item.minutes>=60&&delta<=1)
+      ||(item.minutes>=35&&Number.isInteger(item.avgHr)&&item.avgHr>=130);
+  });
+}
+function demoAdjustedWorkout(date){
+  const rows=demoWorkout(date);
+  if(!demoRecentCardioLoad(date))return rows;
+  // Illustrative reduced set count only; this is NOT a medical or AI prescription.
+  return rows.map(row=>[row[0],row[1].replace(/^3\s*×/,'2 ×'),row[2]]);
+}
+function isDemoSchedule(){return !profile.days.length}
+function trainingWord(n){return n%10===1 && n%100!==11?"тренировка":([2,3,4].includes(n%10) && (n%100<12 || n%100>14)?"тренировки":"тренировок")}
+function header(back=false){return `<header class="header"><span class="brand" aria-label="FORMIQ"><span>FORM</span><em>IQ</em></span>${back==='none'?'':back?`<button class="back" data-act="back">${ico('arrow')} Назад</button>`:`<button class="profile-open" data-act="profile" aria-label="Профиль">${ico('user')}</button>`}</header>`}
+function foot(){return `<nav class="bottom-nav" aria-label="Главное меню">${[['home','Главная'],['plan','План'],['progress','Прогресс'],['food','Питание']].map(([name,label])=>`<button class="nav-item ${screen===name?'active':''}" data-nav="${name}" ${screen===name?'aria-current="page"':''}>${ico(name)}<span>${label}</span></button>`).join('')}</nav>`}
+function nextTraining(){for(let i=0;i<14;i++){let d=addDays(demoToday,i);if(isWorkout(d))return d}return demoToday}
+function home(){return `${header()}<span class="kicker">Пятница · 23 октября</span><h1 class="title">Сегодня</h1><p class="intro">Главное на сегодня — без лишнего.</p><section class="surface"><div class="heading-row"><span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span></div><div class="heading-row"><h2>Тренировка в зале</h2></div><p class="subtitle">${readable(nextTraining())} · демо-пример</p><div class="divider"></div>${(demoRecentCardioLoad(nextTraining())?demoAdjustedWorkout(nextTraining()).map(([name,target],i)=>[String(i+1).padStart(2,'0'),name,target]):[['01','Жим ногами','3 × 12'],['02','Тяга верхнего блока','3 × 12'],['03','Жим от груди','3 × 12']]).map(([n,t,v])=>`<div class="exercise"><span class="exercise-index">${n}</span><span class="exercise-name">${t}</span><span class="exercise-reps">${v}</span></div>`).join('')}${demoRecentCardioLoad(nextTraining())?'<p class="input-note" style="margin-top:12px">Демо: число подходов изменено после кардио. Для реальной адаптации нужна персональная оценка восстановления.</p>':''}<button class="button-main workout-cta" data-act="open-today">Открыть тренировку →</button></section><section class="surface"><div class="heading-row"><h2 style="margin:0;font-size:21px">Кардио</h2></div><p class="subtitle" style="margin-top:10px">Если сделал кардио вне плана, запиши нагрузку — она должна учитываться при следующей тренировке.</p><button class="button-subtle" data-act="cardio-add" style="margin-top:15px">Записать кардио</button><p class="input-note" style="margin-top:10px">Демо: запись сохраняется только в этом браузере, не в боте.</p></section><div class="footline"><button class="plain-link" data-act="feedback">Отзывы и предложения →</button><small>FORMIQ · НОВЫЙ ПРЕДПРОСМОТР · 23.10.2026 · без подключения к серверу</small></div>`}
+function plan(){return `${header()}<span class="kicker">Персональная программа</span><h1 class="title">Твой план</h1><p class="intro">Нажми на период — занятия раскроются прямо под ним.</p><div class="week-selector" aria-label="Периоды плана">${[1,2,3,4].map(i=>{const expanded=planWeek===i;return `<div class="week-group"><button type="button" class="${expanded?'on':''}" data-week="${i}" aria-expanded="${expanded}" aria-controls="week-details-${i}" aria-label="Период ${spanDate(i)}"><span><span class="week-range">${spanDate(i)}</span><span class="week-meta">${schedule().length} ${trainingWord(schedule().length)} · ${profile.duration} минут</span></span><span class="week-chevron" aria-hidden="true">${expanded?'⌃':'⌄'}</span></button>${expanded?`<section class="week-details" id="week-details-${i}"><div class="plan-list">${schedule().map(d=>{const dt=weeksDay(i,d),past=dt<demoToday;return `<button type="button" class="plan-entry" data-date="${dt}" aria-label="${dayLong[d]}, ${readable(dt)}. ${sessionName(dt)}${demoCardio(dt)?', кардио '+demoCardio(dt).minutes+' мин':''}. ${past?'История, только просмотр':'Просмотр занятия'}"><span><strong>${dayLong[d]}</strong><small>${sessionName(dt)}${demoCardio(dt)?' · Кардио '+demoCardio(dt).minutes+' мин':''}</small></span><span class="plan-chevron" aria-hidden="true">›</span></button>`}).join('')}</div></section>`:''}</div>`}).join('')}</div>`}
+function dayView(){const date=selectedDate||demoToday,workout=isWorkout(date),day=dayLong[dow(date)],past=date<demoToday,future=date>demoToday;return `${header('none')}<span class="kicker">${readable(date)} · ${day}</span><h1 class="title">${past?'История дня':workout?'Тренировка':'Восстановление'}</h1>${past?`<p class="intro">Эта дата уже прошла. Начать тренировку за прошлое число нельзя.</p><section class="surface"><span class="eyebrow">ТОЛЬКО ПРОСМОТР</span><h2 style="margin:10px 0;font-size:22px">${workout?sessionName(date):'Восстановление'}</h2><p class="history-detail">${workout?'По плану на эту дату было назначено занятие.':'В расписании это был день отдыха.'} В демонстрационном макете записи выполнения нет. После подключения дневника здесь появятся фактические результаты, если они были сохранены.</p><p class="input-note">Запустить тренировку задним числом невозможно.</p></section>`:workout?`<p class="intro">${sessionName(date)} · ${profile.duration} минут</p><section class="surface"><span class="eyebrow">${future?'ПРЕДСТОЯЩЕЕ ЗАНЯТИЕ':'СЕГОДНЯ · ПЛАН'}</span><h2 style="margin:10px 0;font-size:22px">${sessionName(date)}</h2><div class="divider"></div>${[['Разминка','5 мин'],...demoAdjustedWorkout(date).map(([name,target])=>[name,target]),...(demoCardio(date)?[[demoCardio(date).activity+' · Кардио',demoCardio(date).minutes+' мин']]:[]),['Заминка','3 мин']].map(([t,v],i)=>`<div class="exercise"><span class="exercise-index">${String(i+1).padStart(2,'0')}</span><span class="exercise-name">${t}</span><span class="exercise-reps">${v}</span></div>`).join('')}${demoRecentCardioLoad(date)?'<p class="input-note" style="margin-top:12px">Демо: уменьшено количество подходов с учётом самостоятельного кардио; решение о реальной нагрузке должно учитывать самочувствие.</p>':''}${future?'<p class="input-note" style="margin-top:16px">Это будущее занятие. Его можно посмотреть, но начать раньше выбранной даты нельзя.</p>':completedStrength(date)?'<p class="input-note" style="margin-top:16px">Тренировка завершена. Результат сохранён в истории предпросмотра.</p>':demoWorkoutActiveDate===date?'<button class="button-main workout-cta" data-act="demo-finish">Завершить тренировку</button>':'<button class="button-main workout-cta" data-act="demo-start">Начать тренировку</button>'}</section>`:`<p class="intro">На этот день тренировка не запланирована.</p><section class="surface"><h2 style="margin:0 0 10px;font-size:22px">День восстановления</h2><p class="muted">Отдых, прогулка или лёгкая активность по самочувствию.</p></section>`}<button class="button-subtle" data-act="return-home">Вернуться</button>`}
+function graph(values,unit,ylab,tick=5){const w=340,h=177,left=48,right=11,top=11,bottom=37,high=Math.max(...values),low=Math.min(...values),min=Math.floor((low-tick)/tick)*tick,max=Math.ceil((high+tick)/tick)*tick,scale=v=>top+((max-v)/(max-min))*(h-top-bottom),x=i=>left+i*((w-left-right)/(values.length-1));let svg='';for(let val=min;val<=max+.0001;val+=tick){let yy=scale(val);svg+=`<line x1="${left}" y1="${yy}" x2="${w-right}" y2="${yy}" stroke="#b3c0bc" stroke-opacity=".62" stroke-width="1"/><text x="${left-10}" y="${yy+4}" fill="#556568" font-size="11" text-anchor="end">${Number(val.toFixed(1)).toLocaleString('ru-RU')}</text>`}let pts=values.map((v,i)=>`${x(i)},${scale(v)}`).join(' ');svg+=`<polyline points="${pts}" fill="none" stroke="#526762" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`;values.forEach((v,i)=>{svg+=`<circle cx="${x(i)}" cy="${scale(v)}" r="4.1" fill="#526762" stroke="#f1f5f2" stroke-width="2"/><text x="${x(i)}" y="${h-12}" text-anchor="middle" font-size="11" fill="#556467">Н${i+1}</text>`});return `<svg class="chart-area" viewBox="0 0 ${w} ${h}" role="img" aria-label="${ylab}: ${values.map((v,i)=>`неделя ${i+1} — ${v} ${unit}`).join(', ')}"><text x="6" y="9" font-size="10" fill="#556568">${unit}</text>${svg}</svg>`}
+function loadPreviewIntegrationViews(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('formiq_preview_integration_views_v1')||'{}');
+    if(saved&&typeof saved==='object')
+      return {garmin:saved.garmin===true,fatsecret:saved.fatsecret===true};
+  }catch(_err){}
+  return {garmin:false,fatsecret:false};
+}
+function demoActiveKcal(){
+  const day=demoHistoryItems().filter(entry=>entry.isoDate===demoToday);
+  let sum=0,amount=0;
+  for(const entry of day){
+    const kcal=historyEnergy(entry);
+    if(Number.isSafeInteger(kcal)&&kcal>=0){sum+=kcal;amount++;}
+  }
+  return amount?{kcal:sum,activities:amount}:{kcal:null,activities:0};
+}
+function progressActiveCalories(){
+  if(previewIntegrations.garmin){
+    return `<section class="surface"><div class="heading-row"><h2 style="font-size:20px;margin:0">Garmin Connect</h2><span class="badge">Демо</span></div><div class="metric" style="margin-top:14px"><span>Активные калории Garmin</span><strong>—</strong><span>Нет данных синхронизации</span></div><p class="input-note" style="margin-top:12px">Это вид после подключения. Garmin не подключён и данные не загружены. Включено только для проверки дизайна.</p></section>`;
+  }
+  const active=demoActiveKcal();
+  return `<section class="surface"><div class="heading-row"><h2 style="font-size:20px;margin:0">Активные калории</h2><span class="badge">Сегодня</span></div><div class="metric" style="margin-top:14px"><span>По твоим тренировкам</span><strong>${active.kcal===null?'—':'≈ '+active.kcal.toLocaleString('ru-RU')+' ккал'}</strong><span>${active.kcal===null?'Пока нет записей с оценкой ккал':active.activities+' '+trainingWord(active.activities)+' · ориентировочно'}</span></div><p class="input-note" style="margin-top:12px">Расчёт по записям силовых и кардио за сегодня, сохранённым в этом браузере. Не измерение устройства.</p></section>`;
+}
+function progress(){const strength=chartExercise==='legs'?[60,65,70,75]:[35,40,40,45];return `${header()}<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1><p class="intro">Каждая величина подписана. Ниже — демонстрационные данные, а не твои результаты.</p><section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>килограммы · 4 недели</small></div><div class="segmented"><button class="${chartExercise==='legs'?'on':''}" data-chart="legs">Жим ногами</button><button class="${chartExercise==='pull'?'on':''}" data-chart="pull">Тяга блока</button></div><div class="chart-block">${graph(strength,'кг','Рабочий вес')}</div><p class="chart-leg">Н1–Н4 — недели программы. Значения на вертикальной оси — вес в килограммах.</p></section><section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>килограммы · 4 недели</small></div><div class="chart-block">${graph([82,81.5,81,80.5],'кг','Масса тела',1)}</div><p class="chart-leg">Пример отображения динамики веса. Реальные данные появятся после подключения дневника.</p></section>${progressActiveCalories()}<section class="surface"><div class="heading-row"><h2 style="margin:0;font-size:20px">История тренировок</h2><span class="badge">По датам</span></div><p class="input-note" style="margin-top:12px">Силовые тренировки и самостоятельное кардио — в общей истории по датам. В предпросмотре ниже показаны записи, сохранённые в этом браузере.</p>${!demoHistoryItems().length?'<p class="input-note" style="margin-top:8px">Пример истории · демонстрационные занятия, не твои записи.</p>':''}<div class="cardio-history">${historyRows(historyForPreview().slice(0,3))}</div><button type="button" class="button-subtle" data-act="history-open" style="margin-top:13px">Вся история →</button></section><section class="summary-grid"><div class="metric"><span>Тренировок за месяц</span><strong>10</strong><span>Пример</span></div><div class="metric"><span>Без пропусков</span><strong>3 нед.</strong><span>Пример</span></div></section>`}
+function food(){return `${header()}<span class="kicker">Рацион</span><h1 class="title">Питание</h1><p class="intro">Понятный дневник питания, без лишней информации.</p>${previewIntegrations.fatsecret?`<section class="surface"><span class="eyebrow">СЕГОДНЯ · FATSECRET · ДЕМО ВИДА</span><div class="nutrition-today" style="margin-top:15px"><div class="nutrition-ring"><b>—</b><span>ккал</span></div><div><h3>Из — ккал</h3><p>Съеденные калории из рекомендованной нормы. Нет данных синхронизации, поэтому значения не показаны.</p></div></div></section><section class="surface"><div class="heading-row"><h2 style="margin:0;font-size:20px">FatSecret</h2><span class="badge">Демо</span></div><div class="metric" style="margin-top:14px"><span>ккал / белки / жиры / углеводы</span><strong style="font-size:23px">— / — / — / —</strong><span>Нет синхронизированных данных</span></div><p class="input-note" style="margin-top:12px">Это вид после подключения. FatSecret не подключён. Включено только для проверки дизайна.</p></section>`:`<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПРИМЕР</span><div class="nutrition-today" style="margin-top:15px"><div class="nutrition-ring"><b>1 640</b><span>ккал</span></div><div><h3>Из 2 200 ккал</h3><p>Данные демонстрационные. После подключения дневника они будут персональными.</p></div></div></section><section class="surface"><h2 style="font-size:21px;margin:0 0 18px">Белки, жиры, углеводы</h2>${[['Белки','112 / 150 г'],['Жиры','54 / 75 г'],['Углеводы','174 / 230 г']].map(([l,n])=>`<div class="macro"><strong>${l}</strong><span>${n}</span></div>`).join('')}</section><section class="surface soft"><h2 style="font-size:20px;margin:0 0 10px">Приёмы пищи</h2><p class="muted" style="margin:0 0 14px">Завтрак · Обед · Ужин · Перекусы</p><button class="button-subtle" data-act="food-add">Добавить приём пищи</button></section>`}`}
+function choiceGroup(values,sel,attr){return `<div class="option-grid">${values.map(([val,txt])=>`<button class="choice ${sel===val?'on':''} ${attr==='goal'?'goal':''}" data-pick="${attr}" data-val="${esc(val)}" aria-pressed="${sel===val}">${esc(txt)}</button>`).join('')}</div>`}
+function equipmentPanel(){
+  if(profile.place!=='home')return '';
+  return `<div class="home-equipment-panel" id="home-equipment-panel"><label class="field" for="homeEquipment"><strong>Какой инвентарь есть дома?</strong><textarea id="homeEquipment" rows="3" maxlength="400" placeholder="Например: гантели 5 кг, эспандер, коврик">${esc(profile.homeEquipment||'')}</textarea></label><p class="input-note">Поле необязательное. Пусто — программа без инвентаря. В этом макете показаны примеры для гантелей, эспандера и гири.</p></div>`;
+}
+function profileView(){return `${header(true)}<span class="kicker">Настройки</span><h1 class="title">Твой профиль</h1><p class="intro">Одна анкета, которую можно изменить в любой момент. При первом заполнении все личные поля пустые.</p><section class="surface"><h2 class="section-label" style="margin-top:0">Основные параметры</h2><p class="input-note">Пол</p>${choiceGroup([['m','Мужской'],['f','Женский']],profile.sex,'sex')}<div class="form-row"><label class="field">Возраст<input id="age" inputmode="numeric" type="number" min="14" max="100" placeholder="лет" value="${esc(profile.age)}"></label><label class="field">Рост<input id="height" inputmode="decimal" type="number" min="100" max="250" placeholder="см" value="${esc(profile.height)}"></label><label class="field">Вес<input id="weight" inputmode="decimal" type="number" min="20" max="350" step="0.1" placeholder="кг" value="${esc(profile.weight)}"></label></div><h2 class="section-label">Цель тренировок</h2>${choiceGroup(goals.map(v=>[v,v]),profile.goal,'goal')}<h2 class="section-label">Где тренируешься</h2>${choiceGroup([['gym','Тренажёрный зал'],['home','Дома']],profile.place,'place')}${equipmentPanel()}<h2 class="section-label">Дни тренировок</h2><div class="weekdays">${dayLabels.map((d,i)=>`<button class="weekday ${profile.days.includes(i)?'on':''}" data-day="${i}" aria-pressed="${profile.days.includes(i)}">${d}</button>`).join('')}</div><h2 class="section-label">Длительность занятия</h2><div class="range-row"><span>Время тренировки</span><strong id="duration-label">${profile.duration} мин</strong></div><input class="range" type="range" id="duration" min="20" max="90" step="5" value="${profile.duration}" aria-label="Длительность тренировки"><div class="range-labels"><span>20 мин</span><span>90 мин</span></div></section><section class="surface"><h2 class="section-label" style="margin-top:0">Самочувствие и ограничения</h2><p class="input-note" style="margin-bottom:12px">Опиши своими словами, что беспокоит. Никаких лишних вариантов и диагнозов.</p><label class="field"><span>Твой текст</span><textarea id="limits" placeholder="Например: беспокоит колено при приседаниях…">${esc(profile.limits)}</textarea></label><label class="checkbox-line"><input type="checkbox" id="consent" ${profile.consent?'checked':''}><span>Согласен на обработку моего описания с помощью ИИ для подготовки параметров тренировок.</span></label><button class="button-subtle" style="margin-top:17px" data-act="ai-preview">Посмотреть результат обработки</button><p class="input-note" style="margin-top:12px">В реальном приложении сюда придёт структурированный результат от ИИ. Здесь показывается твой текст без анализа и передачи на сервер.</p>${aiResultOpen?`<div class="note health-review" role="status"><strong>Проверка перед сохранением · демо</strong><p style="white-space:pre-wrap;margin:9px 0">${esc(profile.limits)}</p><p class="input-note">Это исходное описание, а не заключение ИИ. Ты подтверждаешь текст перед сохранением.</p><button class="button-subtle" data-act="confirm-limits" style="margin-top:10px">Подтвердить описание</button></div>`:''}${profile.confirmedLimits?`<div class="note health-confirmation"><strong>Описание подтверждено</strong><p style="white-space:pre-wrap;margin:9px 0 0">${esc(profile.confirmedLimits)}</p></div>`:''}</section><section class="surface soft"><h2 class="section-label" style="margin-top:0">Подключения</h2><p class="input-note">Сервисы подключаются здесь один раз, а данные отображаются в своих разделах.</p><div class="connection-row"><div><div class="connection-title">FatSecret</div><div class="connection-hint">Дневник питания → «Питание»</div></div><span class="connection-status">Не подключено</span></div><div class="preview-integrations"><button type="button" class="button-subtle" data-act="preview-fatsecret-toggle" aria-pressed="${previewIntegrations.fatsecret}">${previewIntegrations.fatsecret?'Обычный вид «Питания»':'Посмотреть вид с FatSecret · демо'}</button></div><div class="connection-row"><div><div class="connection-title">Garmin Connect</div><div class="connection-hint">Активность и восстановление → «Прогресс»</div></div><span class="connection-status">Не подключено</span></div><div class="preview-integrations"><button type="button" class="button-subtle" data-act="preview-garmin-toggle" aria-pressed="${previewIntegrations.garmin}">${previewIntegrations.garmin?'Обычный вид «Прогресса»':'Посмотреть вид с Garmin · демо'}</button></div><p class="input-note" style="margin-top:14px">Кнопки выше переключают только внешний вид предпросмотра. Аккаунты не подключаются, данные не передаются. Реальные подключения появятся после настройки авторизации.</p></section><button class="button-main" data-act="save-profile">Сохранить анкету</button><p class="input-note" style="text-align:center;margin-top:11px">В прототипе данные сохраняются только в этом браузере. Сервер и бот не изменяются.</p>`}
+function toast(message){document.querySelector('.toast')?.remove();const p=document.createElement('div');p.className='toast';p.setAttribute('role','status');p.textContent=message;document.body.appendChild(p);clearTimeout(toastTimer);toastTimer=setTimeout(()=>p.remove(),4300)}
+function draw(){const special=['profile','day'].includes(screen);app.innerHTML=`<main class="view ${special?'no-bottom':''}">${({home,plan,progress,food,profile:profileView,day:dayView})[screen]()}</main>${foot()}${modalHtml()}`;}
+function modalHtml(){
+ if(!modal)return '';
+ if(modal==='history')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel history-modal" role="dialog" aria-modal="true" aria-label="История тренировок"><h2>История тренировок</h2><p>${demoHistoryItems().length?'Сохранённые занятия · '+demoHistoryItems().length:'Пример истории · 10 демонстрационных занятий (не твои записи)'}. Прокручивай список, чтобы увидеть все занятия.</p><div class="history-scroll" role="region" aria-label="Прокручиваемая история тренировок" tabindex="0"><div class="cardio-history">${historyRows(historyForPreview())}</div></div><button type="button" class="button-subtle" data-act="history-close">Закрыть</button></div></div>`;
+ if(modal==='cardio-type')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel" role="dialog" aria-modal="true" aria-label="Выбрать вид кардио"><h2>Вид кардио</h2><div class="cardio-choices">${['Ходьба','Бег','Велосипед','Плавание','Другое'].map(type=>`<button type="button" class="button-subtle cardio-choice" data-act="cardio-type-select" data-type="${type}"><span>${type}</span><span class="cardio-chevron" aria-hidden="true">›</span></button>`).join('')}</div><button class="button-subtle" data-act="cardio-type-back">Назад</button></div></div>`;
+ if(modal==='cardio-other')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel" role="dialog" aria-modal="true" aria-label="Другой вид кардио"><h2>Другой вид кардио</h2><label class="field">Какое кардио ты сделал?<input id="cardio-other-name" type="text" maxlength="60" placeholder="Например: гребля" value="${esc(cardioDraft.other)}"></label><button class="button-main" data-act="cardio-other-apply">Продолжить</button><button class="button-subtle" data-act="cardio-other-back">Назад к выбору</button></div></div>`;
+ if(modal==='cardio')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel" role="dialog" aria-modal="true" aria-label="Записать кардио"><h2>Записать кардио</h2><p>Запиши кардио, которое сделал самостоятельно.</p><label class="field"><span>Вид кардио</span><button class="button-subtle cardio-type-trigger" type="button" data-act="cardio-type-open" aria-haspopup="dialog"><span>${esc(cardioDraft.type==='Другое'?cardioDraft.other:cardioDraft.type)||'Выбрать вид кардио'}</span><span class="cardio-chevron" aria-hidden="true">⌄</span></button></label><label class="field" style="margin-top:15px">Время, минут<input id="cardio-minutes" type="number" inputmode="numeric" min="1" placeholder="Например, 25" value="${esc(cardioDraft.minutes)}"></label><label class="field" style="margin-top:15px">Средний пульс, уд/мин · необязательно<input id="cardio-hr" type="number" inputmode="numeric" min="40" max="220" placeholder="Если измерял" value="${esc(cardioDraft.hr)}"></label><button class="button-main" data-act="cardio-save">Сохранить кардио</button><button class="button-subtle" data-act="modal-close">Отмена</button><p class="input-note">Калории оцениваются по виду кардио, времени и весу из анкеты; пульс сохраняется отдельно. Garmin Connect пока не подключён: после настройки официальной синхронизации приложение сможет сверять данные занятия с Garmin. Демо: в настоящий FORMIQ данные не отправляются.</p></div></div>`;
+ if(modal==='strength-finish')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel" role="dialog" aria-modal="true" aria-label="Завершить силовую тренировку"><h2>Тренировка завершена</h2><p>Укажи фактическое время занятия. Средний пульс можно оставить пустым, если его не измерял.</p><label class="field">Время тренировки, минут<input id="strength-minutes" type="number" inputmode="numeric" min="1" placeholder="Фактическое время"></label><label class="field" style="margin-top:15px">Средний пульс, уд/мин · необязательно<input id="strength-hr" type="number" inputmode="numeric" min="40" max="220" placeholder="Если измерял"></label><p class="input-note" style="margin-top:12px">Garmin Connect пока не подключён. При появлении официальной синхронизации данные занятия будем искать по времени и типу активности. Расход ккал здесь ориентировочный.</p><button class="button-main" data-act="strength-save">Сохранить результат</button><button class="button-subtle" data-act="strength-finish-cancel">Продолжить тренировку</button></div></div>`;
+  if(modal==='feedback')return `<div class="modal-wrap" data-close="outside"><div class="modal-panel" role="dialog" aria-modal="true" aria-label="Отзывы и предложения"><h2>Отзывы и предложения</h2><p>Напиши, что улучшить. В этом дизайн-прототипе сообщения не отправляются и никому не приходят.</p><textarea id="feedback-msg" placeholder="Твоя идея или замечание…"></textarea><button class="button-main" data-act="feedback-confirm">Проверить отзыв (без отправки)</button><button class="button-subtle" data-act="modal-close">Закрыть</button></div></div>`;return ''}
+function setScreen(next){if(next==='profile'){previous=screen==='day'?'plan':screen}else if(next==='day'){previous='plan'}screen=next;modal='';draw();window.scrollTo({top:0,behavior:'instant'});}
+function saveInlineFields(){for(let key of ['age','height','weight','limits','homeEquipment']){const el=document.getElementById(key);if(el)profile[key]=el.value}const c=document.getElementById('consent');if(c)profile.consent=c.checked;const range=document.getElementById('duration');if(range)profile.duration=Number(range.value)}
+app.addEventListener('input',e=>{const t=e.target;if(['age','height','weight','limits','homeEquipment'].includes(t.id)){if(t.id==='limits'&&profile.limits!==t.value){profile.confirmedLimits='';aiResultOpen=false;document.querySelector('.health-review')?.remove();document.querySelector('.health-confirmation')?.remove();}profile[t.id]=t.value}if(t.id==='duration'){profile.duration=Number(t.value);document.getElementById('duration-label').textContent=`${profile.duration} мин`}});
+app.addEventListener('change',e=>{if(e.target.id==='consent'){profile.consent=e.target.checked;if(!profile.consent){profile.confirmedLimits='';aiResultOpen=false;}}});
+app.addEventListener('click',e=>{
+const nav=e.target.closest('[data-nav]');if(nav){saveInlineFields();setScreen(nav.dataset.nav);return;}
+const choose=e.target.closest('[data-pick]');if(choose){saveInlineFields();profile[choose.dataset.pick]=choose.dataset.val;draw();return;}
+const wd=e.target.closest('[data-day]');if(wd){saveInlineFields();const n=Number(wd.dataset.day);profile.days=profile.days.includes(n)?profile.days.filter(x=>x!==n):[...profile.days,n].sort((a,b)=>a-b);draw();return;}
+const wk=e.target.closest('[data-week]');if(wk){const selected=Number(wk.dataset.week);planWeek=planWeek===selected?0:selected;draw();return;}
+const chart=e.target.closest('[data-chart]');if(chart){chartExercise=chart.dataset.chart;draw();return;}
+const date=e.target.closest('[data-date]');if(date){selectedDate=date.dataset.date;setScreen('day');return;}
+const act=e.target.closest('[data-act]');if(!act){if(e.target.classList?.contains('modal-wrap')){modal='';draw()}return;}
+switch(act.dataset.act){
+case 'profile':setScreen('profile');break;
+case 'history-open':modal='history';draw();break;
+case 'history-close':modal='';draw();break;
+case 'preview-fatsecret-toggle':
+case 'preview-garmin-toggle':{
+  const key=act.dataset.act==='preview-fatsecret-toggle'?'fatsecret':'garmin';
+  const updated={...previewIntegrations,[key]:!previewIntegrations[key]};
+  try{localStorage.setItem('formiq_preview_integration_views_v1',JSON.stringify(updated));}
+  catch(_err){toast('Не удалось сохранить выбор вида в браузере.');break;}
+  previewIntegrations=updated;draw();break;
+}
+case 'back':setScreen(previous==='profile'?'home':previous);break;
+case 'return-home':setScreen('home');break;
+case 'open-today':selectedDate=nextTraining();setScreen('day');break;
+case 'demo-start':{
+  if(selectedDate!==demoToday||!isWorkout(selectedDate)||completedStrength(selectedDate)){
+    toast('Начать можно только сегодняшнюю незавершённую тренировку.');break;
+  }
+  demoWorkoutActiveDate=selectedDate;draw();
+  toast('Демо: тренировка начата. Отметки подходов здесь не записываются.');break;
+}
+case 'demo-finish':{
+  if(demoWorkoutActiveDate!==selectedDate||completedStrength(selectedDate)){toast('Нет активной тренировки.');break;}
+  modal='strength-finish';draw();break;
+}
+case 'strength-finish-cancel':modal='';draw();break;
+case 'strength-save':{
+  if(demoWorkoutActiveDate!==selectedDate||selectedDate!==demoToday||completedStrength(selectedDate)){
+    toast('Не удалось подтвердить завершение тренировки.');break;
+  }
+  const minText=document.getElementById('strength-minutes')?.value.trim()||'';
+  const hrText=document.getElementById('strength-hr')?.value.trim()||'';
+  const minutes=Number(minText),avgHr=hrText?Number(hrText):null;
+  if(!/^[0-9]+$/.test(minText)||!Number.isSafeInteger(minutes)||minutes<=0){toast('Укажи фактическое время в минутах.');break;}
+  if(hrText&&(!/^[0-9]+$/.test(hrText)||!Number.isInteger(avgHr)||avgHr<40||avgHr>220)){toast('Средний пульс: 40–220 уд/мин либо пустое поле.');break;}
+  const item={isoDate:selectedDate,date:dateObj(selectedDate).toLocaleDateString('ru-RU'),
+    title:sessionName(selectedDate),minutes,avgHr,estimatedKcal:approximateKcal(minutes,3.5),
+    weightKgAtRecord:demoWeightKg()};
+  const updated=[item,...strengthEntries];
+  try{localStorage.setItem('formiq_preview_strength_v1',JSON.stringify(updated));}
+  catch(_error){toast('Не удалось сохранить в браузере.');break;}
+  strengthEntries=updated;demoWorkoutActiveDate='';modal='';setScreen('home');
+  toast('Результат силовой записан в историю предпросмотра.');break;
+}
+case 'food-add':toast('Добавление еды появится после подключения дневника.');break;
+case 'cardio-add':cardioDraft={type:'',other:'',minutes:'',hr:''};modal='cardio';draw();break;
+case 'cardio-type-open':
+  cardioDraft.minutes=document.getElementById('cardio-minutes')?.value||'';
+  cardioDraft.hr=document.getElementById('cardio-hr')?.value||'';
+  modal='cardio-type';draw();break;
+case 'cardio-type-back':modal='cardio';draw();break;
+case 'cardio-other-back':
+  cardioDraft.other=document.getElementById('cardio-other-name')?.value||cardioDraft.other;
+  modal='cardio-type';draw();break;
+case 'cardio-type-select':{
+  const type=act.dataset.type;
+  if(type==='Другое'){cardioDraft.type='Другое';modal='cardio-other';draw();}
+  else if(['Ходьба','Бег','Велосипед','Плавание'].includes(type)){cardioDraft.type=type;modal='cardio';draw();}
+  break;
+}
+case 'cardio-other-apply':{
+  const typed=(document.getElementById('cardio-other-name')?.value||'').trim().replace(/\s+/g,' ');
+  if(!typed||typed.length>60){toast('Напиши вид кардио, до 60 символов.');break;}
+  cardioDraft.type='Другое';cardioDraft.other=typed;modal='cardio';draw();break;
+}
+case 'cardio-save':{
+  const type=cardioDraft.type==='Другое'?cardioDraft.other:cardioDraft.type;
+  const minsText=document.getElementById('cardio-minutes')?.value.trim()||'';
+  const hrText=document.getElementById('cardio-hr')?.value.trim()||'';
+  const minutes=Number(minsText),avgHr=hrText?Number(hrText):null;
+  if(!type||type.length>60){toast('Выбери вид кардио.');break;}
+  if(!/^\d+$/.test(minsText)||!Number.isSafeInteger(minutes)||minutes<1){toast('Время должно быть положительным целым числом минут.');break;}
+  if(hrText&&(!/^\d+$/.test(hrText)||avgHr<40||avgHr>220)){toast('Пульс: от 40 до 220 уд/мин или оставь поле пустым.');break;}
+  const now=new Date();
+  const entry={date:now.toLocaleDateString('ru-RU'),isoDate:iso(now),minutes,avgHr,type,estimatedKcal:approximateKcal(minutes,cardioMet(type)),weightKgAtRecord:demoWeightKg()};
+  const updated=[entry,...cardioEntries];
+  try{localStorage.setItem('formiq_preview_cardio_v1',JSON.stringify(updated));}
+  catch(_error){toast('Не удалось сохранить в браузере.');break;}
+  cardioEntries=updated;cardioDraft={type:'',other:'',minutes:'',hr:''};modal='';draw();
+  toast('Кардио сохранено в предпросмотре.');break;
+}
+case 'save-profile':{saveInlineFields();try{localStorage.setItem('formiq_design_profile_v3',JSON.stringify(profile))}catch(e){toast('Браузер запретил локальное сохранение.')}toast('Анкета сохранена локально в этом браузере. Это не данные бота.');setTimeout(()=>setScreen('home'),600);break;}
+case 'ai-preview':saveInlineFields();if(!profile.limits.trim()){toast('Сначала опиши, что беспокоит.');break;}if(!profile.consent){toast('Для анализа нужно отдельное согласие.');break;}aiResultOpen=true;draw();break;
+case 'confirm-limits':profile.confirmedLimits=profile.limits;aiResultOpen=false;draw();toast('Описание подтверждено. Демонстрация: ИИ не запускался.');break;
+case 'feedback':modal='feedback';draw();break;
+case 'feedback-confirm':{const v=document.getElementById('feedback-msg')?.value.trim();toast(v?'В прототипе отзыв не отправлен. Для реальной отправки нужно подключить сервер.':'Напиши текст отзыва. Отправка в прототипе отключена.');break;}
+case 'modal-close':modal='';draw();break;
+}}
+);
+draw();
+})();
+</script>
+</body></html>
