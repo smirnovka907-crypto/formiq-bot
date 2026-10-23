@@ -24,6 +24,8 @@ jobs:
         run: python -m py_compile integrations/fatsecret.py integrations/garmin.py tests/test_integrations.py
       - name: Check UX JavaScript
         run: node --check web/ux-381.js && node --check web/ux-3811.js && node --check web/ux-382.js && node --check web/v5-live.js
+      - name: Test signed V5 frontend interactions offline
+        run: node tests/v5_runtime_smoke.js
       - name: Install runtime and CSS validator
         run: pip install -r requirements.txt tinycss2
       - name: Compile bot
