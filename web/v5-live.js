@@ -8,8 +8,8 @@ const h=()=>`<header class="header"><span class="brand"><span>FORM</span><em>IQ<
 const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 4l-5 5M20 15l-5 5"/>',food:'<path d="M6 3v7a3 3 0 0 0 6 0V3M9 3v18M18 3v18M16 3c4 2 4 8 2 9"/>',progress:'<path d="M4 20h16M5 17l5-6 4 3 5-8"/>'};
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
-const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false;
+const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null);
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:''};
@@ -23,8 +23,8 @@ async function request(action,more={}){
  }finally{clearTimeout(timeout)}
 }
 async function send(action,more={}){
- if(busy)return null;busy=true;
- try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;error='';return response}
+ if(busy)return null;busy=true;const beforeSet=nextKey();
+ try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;if(beforeSet!==nextKey()){drafts.reps='';drafts.weight=''}error='';return response}
  catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
 }
@@ -125,6 +125,7 @@ function draw(){
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
+app.addEventListener('input',e=>{if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))return;
  const field=e.target,card=e.target.closest('.surface');
@@ -162,7 +163,7 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
   const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
-  if(saved){cardioType='';typesOpen=false}
+  if(saved){cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']=''}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
