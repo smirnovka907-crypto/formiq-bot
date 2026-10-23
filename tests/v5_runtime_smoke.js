@@ -37,9 +37,21 @@ function createClient(auth=true, initialWorkout=null){
     assert.ok(['normal','tired'].includes(p.mood));
     workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно'}};
     response={ok:true,patch:{workout}};
-   }else if(p.action==='record'){
-    workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
-    response={ok:true,patch:{workout}};
+   }else if(p.action==='record'||p.action==='skip'){
+    assert.ok(p.expected,'v5 mutations must carry the displayed set identity');
+    const current=workout?.current;
+    if(!current || p.expected.workout_id!==workout.id ||
+       p.expected.position!==current.position ||
+       p.expected.set_no!==current.set_no){
+     response={ok:true,stale_set:true,patch:{workout}};
+    }else if(p.action==='record'){
+     workout={...workout,done:1,rest_remaining_seconds:89,current:{...current,set_no:2}};
+     response={ok:true,patch:{workout}};
+    }else{
+     workout={...workout,skipped:1,rest_remaining_seconds:0,
+       current:{...current,position:1,set_no:1,name:'Тяга блока'}};
+     response={ok:true,patch:{workout}};
+    }
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
@@ -50,7 +62,6 @@ function createClient(auth=true, initialWorkout=null){
     response={ok:true,patch:{metrics:{...metrics},zones:[]}};
    }
    else if(p.action==='finish'){workout=null;response={ok:true,data:state()}}
-   else if(p.action==='skip')response={ok:true,patch:{workout}};
    else throw Error('Unexpected action: '+p.action);
    return {ok:true,status:200,async json(){return response}};
   }
@@ -84,6 +95,17 @@ async function run(){
  assert.match(resumed.root.innerHTML,/rest-count/,'Saved rest resumes on authenticated state load');
  await resumed.click({cmd:'rest-skip'});
  assert.doesNotMatch(resumed.root.innerHTML,/rest-count/,'Skipped rest disappears');
+ const skipper=createClient(true,{id:22,done:0,total:3,finished:false,title:'Зал',
+   current:{name:'Жим ногами',position:0,set_no:1,set_count:1,low:10,high:12,unit:'reps'}});
+ await settle();
+ await skipper.click({cmd:'skip-confirm'});
+ await skipper.click({cmd:'skip'});
+ const skipped=skipper.requests.find(x=>x.action==='skip');
+ assert.deepEqual(skipped.expected,{workout_id:22,position:0,set_no:1});
+ const replaySkip=await skipper.fetch('/mini/api',{method:'POST',
+   headers:{'X-Formiq-Init':'signed-for-test'},body:JSON.stringify(skipped)});
+ assert.equal((await replaySkip.json()).stale_set,true,
+   'Delayed skip must not skip the next exercise');
  const app=createClient(true);
  await settle();
  assert.match(app.root.innerHTML,/Начать тренировку/);
@@ -104,7 +126,13 @@ async function run(){
  assert.equal(app.fields.get('weight').value,'60','unsaved weight retained after error');
  assert.match(app.root.innerHTML,/Временная ошибка API/);
  await app.click({cmd:'record'});
- assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60));
+ const recorded=app.requests.find(x=>x.action==='record'&&x.reps===12&&x.weight===60);
+ assert.ok(recorded);
+ assert.deepEqual(recorded.expected,{workout_id:9,position:0,set_no:1});
+ const replay=await app.fetch('/mini/api',{method:'POST',
+   headers:{'X-Formiq-Init':'signed-for-test'},body:JSON.stringify(recorded)});
+ assert.equal((await replay.json()).stale_set,true,
+   'Delayed retry must not record the next set');
  assert.match(app.root.innerHTML,/rest-count/);
  await app.click({cmd:'rest-skip'});
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
