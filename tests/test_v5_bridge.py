@@ -135,8 +135,6 @@ class V5StagingContract(unittest.TestCase):
 
     def test_signed_v5_workout_and_history_api_contract(self):
         """Flask dispatches authenticated actions without touching real DB."""
-        from unittest.mock import call
-
         actions = [
             ('start', {'mood': 'normal'}, 'workout', 'mini_write'),
             ('record', {'reps': 12, 'weight': 60}, 'workout', 'mini_write'),
@@ -151,15 +149,15 @@ class V5StagingContract(unittest.TestCase):
             ('detail', {'id': 8}, 'detail', 'mini_aux'),
         ]
         for action, extra, expected, dispatcher in actions:
-            with self.subTest(action=action), \\
-                 patch.object(self.mod, 'mini_auth', return_value=777) as auth, \\
-                 patch.object(self.mod, 'mini_write', return_value=False) as write, \\
-                 patch.object(self.mod, 'mini_aux', return_value={'detail': {'title':'Зал'}}) as aux, \\
-                 patch.object(self.mod, 'mini_state', return_value={'history': []}) as state, \\
+            with self.subTest(action=action), \
+                 patch.object(self.mod, 'mini_auth', return_value=777) as auth, \
+                 patch.object(self.mod, 'mini_write', return_value=False) as write, \
+                 patch.object(self.mod, 'mini_aux', return_value={'detail': {'title':'Зал'}}) as aux, \
+                 patch.object(self.mod, 'mini_state', return_value={'history': []}) as state, \
                  patch.object(self.mod, 'mini_workout_delta',
-                              return_value={'workout': {'id': 4}}) as delta, \\
+                              return_value={'workout': {'id': 4}}) as delta, \
                  patch.object(self.mod, 'mini_history_page',
-                              return_value={'history': []}) as history_page, \\
+                              return_value={'history': []}) as history_page, \
                  patch.object(self.mod, 'mini_history_month',
                               return_value={'dates': ['2026-10-23']}) as history_month:
                 payload = {'action': action, **extra}
@@ -184,7 +182,7 @@ class V5StagingContract(unittest.TestCase):
                     state.assert_called_once_with(777, False)
 
     def test_signed_api_rejects_invalid_payload_without_database(self):
-        with patch.object(self.mod, 'mini_auth', return_value=777), \\
+        with patch.object(self.mod, 'mini_auth', return_value=777), \
              patch.object(self.mod, 'mini_write') as write:
             result = self.client.post('/mini/api',
                 data='not-json', headers={'X-Formiq-Init':'signed-for-test'},
