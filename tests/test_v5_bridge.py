@@ -36,6 +36,35 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(public.headers.get('X-Content-Type-Options'), 'nosniff')
         self.assertEqual(public.headers.get('Referrer-Policy'), 'no-referrer')
 
+    def test_public_v5_keeps_legacy_onboarding_and_safe_nutrition_consent(self):
+        js = self.client.get('/mini/v5-live.js').data.decode('utf-8')
+        self.assertIn('href="/mini/legacy" data-legacy', js)
+        self.assertIn("window.location.assign('/mini/legacy'", js)
+        self.assertIn("window.location.hash||''", js)
+        self.assertIn("fetch('/mini/report'", js)
+        self.assertIn("data.append('consent','yes')", js)
+        self.assertIn("if(!consent)", js)
+        self.assertIn("file.size>1500000", js)
+        self.assertIn("role=\"status\"", js)
+        self.assertNotIn("formiq_preview_cardio_v1", js)
+
+    def test_nutrition_report_requires_telegram_and_explicit_consent(self):
+        from unittest.mock import patch
+        client = self.mod.APP.test_client()
+        no_auth = client.post('/mini/report')
+        self.assertEqual(no_auth.status_code, 401)
+        with patch.object(self.mod, 'mini_auth', return_value=123):
+            missing_consent = client.post('/mini/report', data={})
+            self.assertEqual(missing_consent.status_code, 400)
+            self.assertIn('согласие', missing_consent.json.get('error', ''))
+            no_file = client.post('/mini/report', data={'consent':'yes'})
+            self.assertEqual(no_file.status_code, 400)
+            self.assertIn('файл', no_file.json.get('error', ''))
+            big = client.post('/mini/report',
+                data={'consent':'yes', 'report':(bytes(1_600_000),'large.csv')},
+                content_type='multipart/form-data')
+            self.assertIn(big.status_code, (400, 413))
+
     def test_v5_bridge_uses_only_authenticated_server_api(self):
         response = self.client.get('/mini/v5-live.js')
         self.assertEqual(response.status_code, 200)
