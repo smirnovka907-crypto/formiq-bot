@@ -99,9 +99,17 @@ class V5StagingContract(unittest.TestCase):
         with patch.object(self.mod, 'db', return_value=conn):
             result = self.mod.mini_history_month(777, {'month': '2026-10'})
         self.assertEqual(result['dates'], ['2026-10-19', '2026-10-23'])
-        for c in conn.execute.call_args_list:
-            self.assertEqual(c.args[1], (777, date(2026,10,1),date(2026,11,1)))
+        from datetime import datetime, timezone
+        month_queries = [c for c in conn.execute.call_args_list
+                         if 'SELECT DISTINCT' in c.args[0]]
+        self.assertEqual(len(month_queries), 2)
+        for c in month_queries:
+            self.assertEqual(c.args[1], (
+                'Europe/Moscow', 777,
+                datetime(2026,9,30,21,tzinfo=timezone.utc),
+                datetime(2026,10,31,21,tzinfo=timezone.utc)))
             self.assertIn('chat_id=%s', c.args[0])
+            self.assertIn('AT TIME ZONE %s', c.args[0])
 
     def test_history_validation_rejects_bad_dates_and_offsets(self):
         for payload in [
