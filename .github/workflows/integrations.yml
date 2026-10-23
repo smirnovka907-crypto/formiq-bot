@@ -33,6 +33,20 @@ jobs:
         run: node --check web/ux-381.js && node --check web/ux-3811.js && node --check web/ux-382.js && node --check web/v5-live.js
       - name: Test signed V5 frontend interactions offline
         run: node tests/v5_runtime_smoke.js
+      - name: Install headless Chromium test harness
+        run: |
+          npm install --no-save --no-package-lock --ignore-scripts playwright-core@1.56.1
+          (command -v google-chrome || command -v chromium)
+      - name: Browser layout screenshots and E2E (mobile)
+        run: node tests/v5_browser_smoke.js
+      - name: Save QA screenshots for visual review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formiq-v5-mobile-layout
+          path: browser-shots/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Install runtime and CSS validator
         run: pip install -r requirements.txt tinycss2
       - name: Compile bot
