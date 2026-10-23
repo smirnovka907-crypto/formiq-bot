@@ -2861,7 +2861,36 @@ CARDIO_TYPES = {
 CARDIO_LABELS = {v: k for k, v in CARDIO_TYPES.items()}
 
 
+def history_local_zone(chat):
+    """Resolve the stored IANA timezone; never trust client-supplied timezone."""
+    with db() as conn:
+        row = conn.execute(
+            'SELECT timezone FROM profile_metrics WHERE chat_id=%s', (chat,)
+        ).fetchone()
+    name = row[0] if row and isinstance(row[0], str) else 'Europe/Moscow'
+    try:
+        return ZoneInfo(name)
+    except (KeyError, TypeError, ValueError):
+        return ZoneInfo('Europe/Moscow')
+
+
+def history_local_date(timestamp, zone):
+    """Use a timezone-aware date consistently for the history and calendar."""
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(zone).strftime('%d.%m.%Y')
+
+
+def history_day_bounds(local_date, zone):
+    """UTC instants for a local civil day; handles 23/25 hour DST transitions."""
+    next_date = local_date + timedelta(days=1)
+    a = datetime(local_date.year, local_date.month, local_date.day, tzinfo=zone)
+    b = datetime(next_date.year, next_date.month, next_date.day, tzinfo=zone)
+    return a.astimezone(timezone.utc), b.astimezone(timezone.utc)
+
+
 def mini_history_detail(chat,wid):
+    zone = history_local_zone(chat)
     if wid < 0:
         with db() as conn:
             cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment FROM cardio_sessions
@@ -2874,7 +2903,7 @@ def mini_history_detail(chat,wid):
                {'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
         if hr is not None:
             items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
-        return {'date':dt.strftime('%d.%m.%Y'),'title':display_type,'items':items}
+        return {'date':history_local_date(dt, zone),'title':display_type,'items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
@@ -2883,7 +2912,7 @@ def mini_history_detail(chat,wid):
            FROM workout_sets s JOIN workout_items i ON i.workout_id=s.workout_id
            AND i.position=s.position WHERE s.workout_id=%s AND s.state='done'
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
-    return {'date':w[1].strftime('%d.%m.%Y'),'title':w[2] or day_title_for_code(chat,w[0]),'items':[
+    return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),'items':[
        {'name':visible_exercise_name(name),'key':key if key in EX else None,'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
        f' · {kg} кг' if kg is not None else '')} for name,count,kg,unit,key in rows]}
 
@@ -2906,10 +2935,11 @@ def mini_history_page(chat, body):
             start_day = date.fromisoformat(raw_day)
         except ValueError:
             raise ValueError('Неверная дата истории')
-        end_day = start_day + timedelta(days=1)
+        zone = history_local_zone(chat)
+        utc_start, utc_end = history_day_bounds(start_day, zone)
         suffix = ' AND {column} >= %s AND {column} < %s '
-        params_workout = (chat, start_day, end_day)
-        params_cardio = (chat, start_day, end_day)
+        params_workout = (chat, utc_start, utc_end)
+        params_cardio = (chat, utc_start, utc_end)
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
@@ -2926,11 +2956,12 @@ def mini_history_page(chat, body):
     with db() as conn:
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
+    zone = zone if raw_day not in (None, '') else history_local_zone(chat)
     page = []
     for ident, timestamp, kind, day, custom, minutes, equipment in rows[:limit]:
         page.append({
             'id': ident,
-            'date': timestamp.strftime('%d.%m.%Y'),
+            'date': history_local_date(timestamp, zone),
             'type': kind,
             'title': (custom or day_title(p, day)) if kind == 'workout'
                      else f'{CARDIO_LABELS.get(equipment, "Кардио")} · {minutes} мин',
@@ -2948,15 +2979,20 @@ def mini_history_month(chat, body):
         raise ValueError('Неверный месяц')
     start = date(year, month, 1)
     end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    zone = history_local_zone(chat)
+    utc_start, _ = history_day_bounds(start, zone)
+    utc_end, _ = history_day_bounds(end, zone)
+    # AT TIME ZONE is parameterized and uses the user's saved IANA timezone.
     with db() as conn:
         dates_workout = conn.execute(
-            "SELECT DISTINCT started_at::date FROM workouts WHERE chat_id=%s "
-            "AND status='finished' AND started_at >= %s AND started_at < %s",
-            (chat, start, end)).fetchall()
+            "SELECT DISTINCT (started_at AT TIME ZONE %s)::date FROM workouts "
+            "WHERE chat_id=%s AND status='finished' "
+            "AND started_at >= %s AND started_at < %s",
+            (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_cardio = conn.execute(
-            "SELECT DISTINCT performed_at::date FROM cardio_sessions WHERE chat_id=%s "
-            "AND performed_at >= %s AND performed_at < %s",
-            (chat, start, end)).fetchall()
+            "SELECT DISTINCT (performed_at AT TIME ZONE %s)::date FROM cardio_sessions "
+            "WHERE chat_id=%s AND performed_at >= %s AND performed_at < %s",
+            (zone.key, chat, utc_start, utc_end)).fetchall()
     marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
     return {'month': raw, 'dates': marked}
 
@@ -3060,11 +3096,12 @@ def mini_state(chat, just_finished=False):
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
         cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment FROM cardio_sessions
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
-    combined=[{'id':wid,'date':dt.strftime('%d.%m.%Y'),
+    history_zone=history_local_zone(chat)
+    combined=[{'id':wid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'workout',
         'title':manual_title or day_title(p,day)}
         for wid,day,dt,manual_title in history_rows]
-    combined.extend({'id':-cid,'date':dt.strftime('%d.%m.%Y'),
+    combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
         'title':f'{CARDIO_LABELS.get(equipment, "Кардио")} · {mins} мин'}
         for cid,dt,mins,equipment in cardio_rows)
