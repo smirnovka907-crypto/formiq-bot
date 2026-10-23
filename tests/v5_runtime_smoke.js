@@ -43,7 +43,7 @@ function createClient(auth=true,shared={}){
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='record'){
-    workout={...workout,done:1,current:{...workout.current,set_no:2}};
+    workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
@@ -81,6 +81,17 @@ async function run(){
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
+ const restored={storage:new Map(),workout:{id:71,done:1,total:3,finished:false,title:'Зал',
+   rest_remaining_seconds:47,current:{name:'Жим ногами',position:0,set_no:2,set_count:3,
+     low:10,high:12,unit:'reps',rest_seconds:120,tip:'Плавно'}}};
+ const resumed=createClient(true,restored);
+ await settle();
+ assert.match(resumed.root.innerHTML,/rest-count/,'Server time restores rest with empty sessionStorage');
+ await resumed.click({cmd:'rest-skip'});
+ assert.doesNotMatch(resumed.root.innerHTML,/rest-count/,'User can skip rest');
+ const reopened=createClient(true,restored);
+ await settle();
+ assert.doesNotMatch(reopened.root.innerHTML,/rest-count/,'Skipped rest persists across reload');
  const shared={storage:new Map()};
  const app=createClient(true,shared);
  await settle();
