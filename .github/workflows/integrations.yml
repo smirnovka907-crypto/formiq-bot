@@ -66,7 +66,12 @@ jobs:
       - name: Install runtime and CSS validator
         id: runtime_dependencies
         if: ${{ !cancelled() }}
-        run: pip install -r requirements.txt tinycss2
+        run: pip install -r requirements.txt tinycss2 'PyYAML>=6,<7' 'jsonschema>=4,<5'
+      - name: Validate isolated Android test Blueprint
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
+        run: |
+          python scripts/validate_android_test_blueprint.py
+          python scripts/validate_android_test_blueprint.py --profile kirill
       - name: Compile bot
         if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
         run: python -m py_compile main.py welcome_art.py
