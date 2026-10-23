@@ -140,7 +140,10 @@ async function run(){
    await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').click();
    assert.equal(await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').getAttribute('aria-pressed'),'true');
    await checkLayout('profile questionnaire');
+   await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:path.join(OUT,'profile-'+size.width+'.png')});
+   await page.evaluate(()=>window.scrollTo(0,360));
+   await page.screenshot({path:path.join(OUT,'profile-scroll-'+size.width+'.png')});
    assert.equal(errors.length,0,'No JS errors: '+errors.join(' | '));
    await context.close();
   }
