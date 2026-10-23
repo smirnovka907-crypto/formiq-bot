@@ -37,7 +37,7 @@ function restoreRecommendedRest(){
 async function send(action,more={}){
  if(busy)return null;busy=true;const beforeSet=nextKey();
  try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;if(beforeSet!==nextKey()){drafts.reps='';drafts.weight=''}restoreRecommendedRest();error='';return response}
- catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
+ catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. При повторе сервер проверит номер подхода и не запишет его дважды.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
 }
 function workout(){
@@ -183,7 +183,9 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(val)||Number(val)<1||Number(val)>300){fail('Введи от 1 до 300 повторений или секунд.');return}
   if(kg&&!/^\d+(?:[.,]\d{1,2})?$/.test(kg)){fail('Укажи вес в килограммах.');return}
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
-  const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
+  const prev=state.workout.current;
+  const expected={workout_id:state.workout.id,position:prev.position,set_no:prev.set_no};
+  const success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{}),expected});
   if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
   if(state.workout?.current&&!Object.prototype.hasOwnProperty.call(state.workout,'rest_remaining_seconds')&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
  }
@@ -191,7 +193,13 @@ app.addEventListener('click',async e=>{
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
  if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor=''}draw();return}
- if(cmd==='skip'){modal='';await send('skip');return}
+ if(cmd==='skip'){
+  modal='';
+  const c=state?.workout?.current;
+  if(!c){fail('Текущий подход не найден. Обнови тренировку.');return}
+  await send('skip',{expected:{workout_id:state.workout.id,position:c.position,set_no:c.set_no}});
+  return;
+ }
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
  if(cmd==='cardio'){
