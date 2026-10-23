@@ -246,5 +246,24 @@ class V5StagingContract(unittest.TestCase):
 
 
 
+    def test_rest_timer_resumes_from_saved_postgres_set(self):
+        from decimal import Decimal
+        from unittest.mock import MagicMock
+        conn=MagicMock()
+        p={'goal':'general','level':'some'}
+        conn.execute.return_value.fetchone.return_value=('done','reps','leg_press',Decimal('50.25'))
+        self.assertEqual(self.mod.workout_rest_remaining(conn,91,p),70)
+        query,args=conn.execute.call_args.args
+        self.assertIn("s.state IN ('done', 'skipped')",query)
+        self.assertIn('NOW() - s.completed_at',query)
+        self.assertEqual(args,(91,))
+        conn.execute.return_value.fetchone.return_value=('skipped','reps','leg_press',Decimal('1'))
+        self.assertEqual(self.mod.workout_rest_remaining(conn,91,p),0)
+        conn.execute.return_value.fetchone.return_value=('done','reps','leg_press',Decimal('210'))
+        self.assertEqual(self.mod.workout_rest_remaining(conn,91,p),0)
+        conn.execute.return_value.fetchone.return_value=('done','min','elliptical',Decimal('1'))
+        self.assertEqual(self.mod.workout_rest_remaining(conn,91,p),0)
+
+
 if __name__ == '__main__':
     unittest.main()
