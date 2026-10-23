@@ -133,5 +133,65 @@ class V5StagingContract(unittest.TestCase):
                     'minutes': 30, 'avg_hr': None, 'type': 'Неизвестно'})
 
 
+    def test_signed_v5_workout_and_history_api_contract(self):
+        """Flask dispatches authenticated actions without touching real DB."""
+        from unittest.mock import call
+
+        actions = [
+            ('start', {'mood': 'normal'}, 'workout', 'mini_write'),
+            ('record', {'reps': 12, 'weight': 60}, 'workout', 'mini_write'),
+            ('skip', {}, 'workout', 'mini_write'),
+            ('finish', {}, 'data', 'mini_write'),
+            ('cardio', {'minutes': 60, 'avg_hr': 120, 'type': 'Велосипед'},
+             'data', 'mini_aux'),
+            ('history_page', {'offset': 0, 'limit': 30},
+             'history', 'mini_history_page'),
+            ('history_month', {'month': '2026-10'}, 'dates',
+             'mini_history_month'),
+            ('detail', {'id': 8}, 'detail', 'mini_aux'),
+        ]
+        for action, extra, expected, dispatcher in actions:
+            with self.subTest(action=action), \\
+                 patch.object(self.mod, 'mini_auth', return_value=777) as auth, \\
+                 patch.object(self.mod, 'mini_write', return_value=False) as write, \\
+                 patch.object(self.mod, 'mini_aux', return_value={'detail': {'title':'Зал'}}) as aux, \\
+                 patch.object(self.mod, 'mini_state', return_value={'history': []}) as state, \\
+                 patch.object(self.mod, 'mini_workout_delta',
+                              return_value={'workout': {'id': 4}}) as delta, \\
+                 patch.object(self.mod, 'mini_history_page',
+                              return_value={'history': []}) as history_page, \\
+                 patch.object(self.mod, 'mini_history_month',
+                              return_value={'dates': ['2026-10-23']}) as history_month:
+                payload = {'action': action, **extra}
+                response = self.client.post('/mini/api',
+                    json=payload, headers={'X-Formiq-Init':'signed-for-test'})
+                self.assertEqual(response.status_code, 200, action)
+                data = response.get_json()
+                self.assertTrue(data.get('ok'), action)
+                self.assertIn(expected, data, action)
+                auth.assert_called_once_with('signed-for-test')
+                if dispatcher == 'mini_write':
+                    write.assert_called_once_with(777, action, payload)
+                elif dispatcher == 'mini_aux':
+                    aux.assert_called_once_with(777, action, payload)
+                elif dispatcher == 'mini_history_page':
+                    history_page.assert_called_once_with(777, payload)
+                elif dispatcher == 'mini_history_month':
+                    history_month.assert_called_once_with(777, payload)
+                if action in ('start','record','skip'):
+                    delta.assert_called_once_with(777)
+                if action == 'finish':
+                    state.assert_called_once_with(777, False)
+
+    def test_signed_api_rejects_invalid_payload_without_database(self):
+        with patch.object(self.mod, 'mini_auth', return_value=777), \\
+             patch.object(self.mod, 'mini_write') as write:
+            result = self.client.post('/mini/api',
+                data='not-json', headers={'X-Formiq-Init':'signed-for-test'},
+                content_type='text/plain')
+            self.assertEqual(result.status_code, 415)
+            write.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
