@@ -210,12 +210,19 @@ function workout(){
 function training(){
  if(!ready()){onboardOpen=true;return onboardForm()}
  if(active())return workout();
- const idx='ABCDEFG'.indexOf(state.next_day||''),list=state.plan?.[idx]||[],upcoming=(state.calendar||[]).find(x=>x.status==='planned'&&x.day===state.next_day);
- return page('Тренировки',block(`<span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span><h2>${esc(state.plan_names?.[idx]||state.goal||'Тренировка')}</h2><p class="subtitle">${esc(upcoming?.date_ru||'По плану')}</p>
- ${list.map(e=>`<div class="exercise"><span class="exercise-name">${esc(e.name)}</span><span class="exercise-reps">${e.sets} × ${e.low}–${e.high}</span></div>`).join('')}${button('Начать тренировку','mood',true)}`)+block(`<h2>Записать кардио</h2><label class="field"><span>Вид кардио</span>${button(cardioType||'Выбрать вид кардио','cardio-types')}</label>
- ${typesOpen?`<div class="fq-live-actions">${['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,`data-type="${x}"`)).join('')}</div>`:''}
- <div class="fq-live-grid" style="margin-top:12px">${input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')}${input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')}</div>
- <p class="input-note">Вид кардио, длительность и пульс сохраняются в дневнике. Garmin пока не подключён.</p>${button('Сохранить кардио','cardio',true)}`));
+ const ix='ABCDEFG'.indexOf(state.next_day||''),items=state.plan?.[ix]||[];
+ const next=(state.calendar||[]).find(row=>row.status==='planned'&&row.day===state.next_day);
+ const exercises=items.map((e,i)=>'<div class="exercise"><span class="exercise-index">'+
+  String(i+1).padStart(2,'0')+'</span><span class="exercise-name">'+esc(e.name)+'</span>'+
+  '<span class="exercise-reps">'+esc(e.sets)+' × '+esc(e.low)+'–'+esc(e.high)+'</span></div>').join('');
+ const trainingCard=block('<span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span>'+
+  '<h2>'+esc(state.plan_names?.[ix]||state.goal||'Тренировка')+'</h2>'+
+  '<p class="subtitle">'+esc(next?.date_ru||'По плану')+'</p><div class="divider"></div>'+
+  exercises+button('Начать тренировку','mood',true));
+ const cardioCard=block('<h2 style="font-size:21px;margin:0">Кардио</h2>'+
+  '<p class="subtitle" style="margin:12px 0">Если сделал кардио вне плана, запиши его в дневник.</p>'+
+  button('Записать кардио','cardio-add'));
+ return page('Сегодня','<p class="intro">Главное на сегодня — без лишнего.</p>'+trainingCard+cardioCard);
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -270,11 +277,13 @@ function planPage(){
  return page('Твой план','<p class="intro">Нажми на период — занятия раскроются прямо под ним.</p><section class="week-selector">'+periods.join('')+'</section>');
 }
 function progress(){
- const stats=state.stats||{},plan=state.calendar||[];
- return page('Прогресс',block(`<h2>Результаты</h2><div class="fq-live-grid"><div><span class="eyebrow">ТРЕНИРОВОК</span><h2>${stats.total||0}</h2></div><div><span class="eyebrow">ПОДХОДОВ</span><h2>${stats.sets||0}</h2></div></div>`)+
- block('<h2>Garmin Connect</h2><p>Синхронизация пока не подключена.</p>')+
- block(`<h2>Тренировочный план</h2><div class="fq-live-plan-grid">${[1,2,3,4].map(i=>button(periodLabel(i),'week',false,`data-week="${i}"`)).join('')}</div>
- ${week?`<div class="fq-live-list">${plan.filter(x=>x.week===week).map(x=>`<div class="fq-live-row"><span>${esc(x.date_ru)} · ${esc(x.title)}</span><small>${x.status==='done'?'Выполнено':'По плану'}</small></div>`).join('')}</div>`:''}`)+history());
+ const stats=state.stats||{};
+ return page('Прогресс','<p class="intro">Результаты, сохранённые в твоём дневнике.</p>'+
+  block('<h2>Результаты</h2><div class="summary-grid">'+
+   '<div class="metric"><span>Тренировок</span><strong>'+esc(stats.total||0)+'</strong></div>'+
+   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets||0)+'</strong></div></div>')+
+  block('<h2>Garmin Connect</h2><p class="fq-live-muted">Синхронизация пока не подключена. Данные Garmin не подменяются расчётными.</p>')+
+  history());
 }
 function food(){
  return page('Питание',
@@ -285,7 +294,7 @@ function food(){
  <p id="nutrition-error" class="fq-live-error" role="alert"></p>
  ${button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')}
  ${nutritionAnswer?`<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">${esc(nutritionAnswer)}</p>`:''}`)
- +block(`<h2>Настройки питания и согласия</h2><p class="fq-live-muted">Остальные функции доступны в прежнем интерфейсе FORMIQ.</p><a href="/mini/legacy" data-legacy class="button-subtle fq-live-onboarding-link">Открыть прежнюю версию</a>`));
+ +block('<h2>FatSecret</h2><p>Автоматическая синхронизация пока не подключена. Когда она появится, здесь будут персональные калории и БЖУ.</p><div class="metric"><span>Калории · белки · жиры · углеводы</span><strong>— / — / — / —</strong><span>Нет синхронизированных данных</span></div>'));
 }
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
@@ -304,6 +313,16 @@ function profile(){
 function modalHTML(){
  if(!modal)return '';
  let content='';
+ if(modal==='cardio'){
+  content='<h2>Запись кардио</h2><p>Запиши кардио, которое сделал самостоятельно.</p>'+
+  '<label class="field"><span>Вид кардио</span>'+button(cardioType||'Выбрать вид кардио','cardio-types')+'</label>'+
+  (typesOpen?'<div class="fq-live-actions">'+['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,'data-type="'+esc(x)+'"')).join('')+'</div>':'')+
+  '<div class="fq-live-grid" style="margin-top:15px">'+
+   input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')+
+   input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')+
+  '</div><p class="input-note">Пульс необязателен. Garmin пока не подключён.</p>'+
+  button('Сохранить кардио','cardio',true)+button('Отмена','close');
+ }
  if(modal==='mood')content=`<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
  if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
@@ -414,6 +433,7 @@ app.addEventListener('click',async e=>{
   return;
  }
  if(cmd==='close'){modal='';draw();return}
+ if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
  if(cmd==='mood'){modal='mood';draw();return}
  if(cmd==='start-normal'||cmd==='start-tired'){modal='';await send('start',{mood:cmd==='start-normal'?'normal':'tired'});return}
  if(cmd==='record'){
@@ -448,7 +468,7 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
   const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
-  if(saved){cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';draw()}
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';draw()}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
