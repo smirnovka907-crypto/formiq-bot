@@ -49,7 +49,7 @@ function training(){
  ${list.map(e=>`<div class="exercise"><span class="exercise-name">${esc(e.name)}</span><span class="exercise-reps">${e.sets} × ${e.low}–${e.high}</span></div>`).join('')}${button('Начать тренировку','mood',true)}`)+block(`<h2>Записать кардио</h2><label class="field"><span>Вид кардио</span>${button(cardioType||'Выбрать вид кардио','cardio-types')}</label>
  ${typesOpen?`<div class="fq-live-actions">${['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,`data-type="${x}"`)).join('')}</div>`:''}
  <div class="fq-live-grid" style="margin-top:12px">${input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')}${input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')}</div>
- <p class="input-note">Сервер пока сохраняет только время и пульс, но не название вида кардио. Garmin не подключён.</p>${button('Сохранить кардио','cardio',true)}`));
+ <p class="input-note">Вид кардио, длительность и пульс сохраняются в дневнике. Garmin пока не подключён.</p>${button('Сохранить кардио','cardio',true)}`));
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -144,10 +144,11 @@ app.addEventListener('click',async e=>{
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
  if(cmd==='cardio'){
+  if(!cardioType){fail('Сначала выбери вид кардио.');return}
   const m=document.getElementById('cardio-min')?.value.trim()||'',p=document.getElementById('cardio-hr')?.value.trim()||'';
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
-  if(await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null})){cardioType='';typesOpen=false}return;
+  if(await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType})){cardioType='';typesOpen=false}return;
  }
  if(cmd==='week'){week=week===Number(element.dataset.week)?0:Number(element.dataset.week);draw();return}
  if(cmd==='calendar'){calendarOpen=!calendarOpen;month=date.slice(0,7)||new Date().toISOString().slice(0,7);monthMarks=new Set();partialHistory();if(calendarOpen)await fetchMonthMarks();return}
