@@ -61,7 +61,7 @@ const ico=n=>`<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="cu
 const EMPTY={sex:'',age:'',height:'',weight:'',goal:'',days:[],duration:45,place:'gym',limits:'',consent:false,confirmedLimits:''};
 function loadProfile(){try{const t=localStorage.getItem('formiq_design_profile_v3');if(t){const v=JSON.parse(t);return {...EMPTY,...v,days:Array.isArray(v.days)?v.days:[]};}}catch(e){}return {...EMPTY,days:[]}}
 let profile=loadProfile();
-let screen='home', previous='home', aiResultOpen=false, planWeek=1, selectedDate='', modal='', chartExercise='legs', promptMode='', nutritionSaved=false, toastTimer;
+let screen='home', previous='home', aiResultOpen=false, planWeek=0, selectedDate='', modal='', chartExercise='legs', promptMode='', nutritionSaved=false, toastTimer;
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function dow(s){let d=new Date(s+'T12:00:00');return (d.getDay()+6)%7;}
 function iso(date){const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,'0'),d=String(date.getDate()).padStart(2,'0');return `${y}-${m}-${d}`;}
