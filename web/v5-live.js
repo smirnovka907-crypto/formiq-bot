@@ -9,26 +9,39 @@ const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='';
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='';
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
 const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:'';};
 const REST_TIMER_KEY='formiq_v5_rest_countdown';
 function storeRestTimer(){
  try{
-  if(restUntil>Date.now()&&restFor)window.sessionStorage?.setItem(REST_TIMER_KEY,JSON.stringify({until:restUntil,for:restFor}));
+  if(restSkippedKey&&restSkippedKey===nextKey())
+   window.sessionStorage?.setItem(REST_TIMER_KEY,JSON.stringify({skippedFor:restSkippedKey}));
+  else if(restUntil>Date.now()&&restFor)
+   window.sessionStorage?.setItem(REST_TIMER_KEY,JSON.stringify({until:restUntil,for:restFor}));
   else window.sessionStorage?.removeItem(REST_TIMER_KEY);
- }catch(_error){} // In-app browsers may disable temporary storage.
+ }catch(_error){}
 }
 function restoreRestTimer(){
+ const key=nextKey();
+ if(!key){restUntil=0;restFor='';restSkippedKey='';storeRestTimer();return}
  try{
-  const value=window.sessionStorage?.getItem(REST_TIMER_KEY);
-  if(!value)return;
-  const timer=JSON.parse(value);
-  if(Number.isSafeInteger(timer.until)&&timer.until>Date.now()&&timer.for===nextKey()){
-   restUntil=timer.until;restFor=timer.for;
-  }else window.sessionStorage?.removeItem(REST_TIMER_KEY);
- }catch(_error){restUntil=0;restFor=''}
+  const stored=window.sessionStorage?.getItem(REST_TIMER_KEY);
+  if(stored){
+   const timer=JSON.parse(stored);
+   if(timer.skippedFor===key){restSkippedKey=key;restUntil=0;restFor='';return}
+   if(!Object.prototype.hasOwnProperty.call(state?.workout||{},'rest_remaining_seconds')&&
+      Number.isSafeInteger(timer.until)&&timer.until>Date.now()&&timer.for===key){
+     restUntil=timer.until;restFor=key;return;
+   }
+  }
+ }catch(_error){}
+ const remaining=Number(state?.workout?.rest_remaining_seconds||0);
+ if(!restSkippedKey&&remaining>0&&Number.isFinite(remaining)){
+  restUntil=Date.now()+remaining*1000;restFor=key;
+ }else{restUntil=0;restFor=''}
+ storeRestTimer();
 }
 function updateViewportPosition(){
  const activeInput=document.activeElement;
@@ -54,7 +67,7 @@ async function send(action,more={}){
   else if(response.patch?.metrics){state.metrics=response.patch.metrics;if(response.patch.zones)state.zones=response.patch.zones}
   else state=(await request('state')).data;
   if(action==='state')restoreRestTimer();
-  if(originalSet!==nextKey()){drafts.reps='';drafts.weight=''}
+  if(originalSet!==nextKey()){drafts.reps='';drafts.weight='';restSkippedKey=''}
   error='';return response}
  catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
@@ -217,9 +230,11 @@ app.addEventListener('click',async e=>{
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
   const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
   if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
-  if(state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();storeRestTimer();draw()}else{restUntil=0;restFor='';storeRestTimer()}return;
+  const remaining=Number(state.workout?.rest_remaining_seconds??prev.rest_seconds??0);
+  if(state.workout?.current&&remaining>0){restUntil=Date.now()+remaining*1000;restFor=nextKey();storeRestTimer();draw()}
+  else{restUntil=0;restFor='';storeRestTimer()}return;
  }
- if(cmd==='rest-skip'){restUntil=0;restFor='';storeRestTimer();draw();return}
+ if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
  if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer()}draw();return}
