@@ -56,8 +56,9 @@ class Release382Tests(unittest.TestCase):
     def test_mini_frontend_routes_and_version(self):
         client=self.m.APP.test_client()
         self.assertIn(f'FORMIQ {self.m.VERSION} online'.encode(),client.get('/').data)
-        page=client.get('/mini')
+        page=client.get('/mini/legacy')
         self.assertIn(b'/mini/ux-382.css',page.data)
+        self.assertIn(b'v5-live.js', client.get('/mini').data)
         self.assertIn(b'/mini/ux-382.js',page.data)
         self.assertEqual(client.get('/mini/ux-382.css').status_code,200)
         self.assertEqual(client.get('/mini/ux-382.js').status_code,200)

@@ -18,7 +18,7 @@ class RouteTests(unittest.TestCase):
 
     def test_page_and_assets(self):
         client = self.app.test_client()
-        page = client.get('/mini')
+        page = client.get('/mini/legacy')
         self.assertEqual(page.status_code, 200)
         self.assertIn(b'ux-381.css', page.data)
         self.assertIn(b'ux-381.js', page.data)
@@ -31,6 +31,17 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(mime, response.content_type)
             self.assertIn(snippet, response.data)
+
+    def test_approved_v5_is_default_and_legacy_is_preserved(self):
+        client = self.app.test_client()
+        new_app = client.get('/mini')
+        self.assertEqual(new_app.status_code, 200)
+        self.assertIn(b'/mini/v5-live.js', new_app.data)
+        self.assertNotIn(b'/mini/ux-381.js', new_app.data)
+        self.assertEqual(new_app.headers.get('Cache-Control'), 'no-store')
+        old_app = client.get('/mini/legacy')
+        self.assertIn(b'/mini/ux-381.js', old_app.data)
+        self.assertEqual(client.post('/mini/api', json={'action': 'state'}).status_code,401)
 
     def test_api_does_not_respond_without_telegram_identity(self):
         client = self.app.test_client()
@@ -64,7 +75,7 @@ class RouteTests(unittest.TestCase):
 
     def test_feedback_and_version_assets(self):
         client=self.app.test_client()
-        res=client.get('/mini')
+        res=client.get('/mini/legacy')
         self.assertEqual(res.status_code,200)
         self.assertIn(b'ux-3811.js',res.data)
         self.assertIn(b'ux-3811.css',res.data)
