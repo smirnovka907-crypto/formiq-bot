@@ -23,11 +23,13 @@ const onboardChoices={
  course:[['Выбери характер симптомов',''],['Давно, без изменений','stable'],['Недавно появились','recent'],['Усиливаются','worsening']]
 };
 const onboardRegions=[['hip','Тазобедренный сустав'],['knee','Колени'],['back','Поясница и спина'],['shoulder','Плечи'],['wrist','Запястья'],['ankle','Голеностоп'],['neck','Шея'],['heart','Сердечно-сосудистая система'],['breathing','Дыхательная система'],['other','Другое']];
+const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 function initOnboard(){
  if(onboard)return;
  const p=state?.profile_raw||{},m=state?.metrics||{},h=state?.health_profile||{};
  const areas=Array.isArray(h.affected)?h.affected.filter(k=>onboardRegions.some(([id])=>k===id)):[];
  onboard={goal:p.goal||'general',level:p.level||'beginner',days:String(p.days||2),
+  weekdays:Array.isArray(p.weekdays)?[...new Set(p.weekdays.filter(d=>Number.isInteger(d)&&d>=0&&d<=6))].sort((a,b)=>a-b):[],
   equipment:p.equipment||'home',minutes:String(p.minutes||45),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
   equipment_description:state?.equipment_description||'',sex:m.sex||'',
@@ -57,6 +59,17 @@ function onboardDuration(){
  '<input class="range" id="onboard-duration" data-onboard="minutes" type="range" min="20" max="90" step="5" value="'+esc(onboard.minutes)+'">'+
  '<div class="range-labels"><span>20 мин</span><span>90 мин</span></div></div>';
 }
+function onboardWeekdays(){
+ const saved=Array.isArray(state?.profile_raw?.weekdays);
+ const legacy=!!state?.agreed&&!!state?.profile_raw?.goal&&!saved;
+ const count=Number(onboard.days),daysWord=count===1?'день':count<5?'дня':'дней';
+ return '<div class="fq-onboard-choice"><h3 class="section-label" id="onboard-weekdays-label">Дни тренировок</h3>'+
+  '<div class="fq-weekday-options" role="group" aria-labelledby="onboard-weekdays-label" aria-describedby="onboard-weekdays-note">'+
+  weekdayNames.map((name,day)=>'<button type="button" class="choice'+(onboard.weekdays.includes(day)?' on':'')+'" data-onboard-weekday="'+day+'" aria-pressed="'+onboard.weekdays.includes(day)+'">'+name+'</button>').join('')+'</div>'+
+  '<p class="input-note" id="onboard-weekdays-note" aria-live="polite">'+
+  (saved?'':legacy?'Раньше сохранялось только количество тренировок. Выбери конкретные дни для нового плана. ':'Выбери '+esc(onboard.days)+' '+daysWord+' в неделю. ')+
+  'Выбрано '+onboard.weekdays.length+' из '+esc(onboard.days)+'. Дни сохранятся вместе с анкетой.</p></div>';
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
@@ -77,7 +90,7 @@ function onboardForm(){
   onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Подтверждаю, что мне исполнилось 18 лет'));
  const training=block('<h2>Тренировки</h2>'+onboardButtons('goal','Цель',onboardChoices.goal)+
   onboardChoice('level','Опыт',onboardChoices.level)+'<div class="fq-live-grid">'+
-  onboardChoice('days','Тренировок в неделю',onboardChoices.days)+'</div>'+onboardDuration()+
+  onboardChoice('days','Тренировок в неделю',onboardChoices.days)+'</div>'+onboardWeekdays()+onboardDuration()+
   onboardButtons('equipment','Где тренируешься',onboardChoices.equipment)+
   (d.equipment==='homegear'?'<label class="field"><span>Домашний инвентарь</span><textarea data-onboard="equipment_description" rows="2" maxlength="400">'+esc(d.equipment_description)+'</textarea></label>':''));
  const health=block('<h2>Самочувствие и ограничения</h2>'+
@@ -96,6 +109,7 @@ function onboardingPayload(){
  const d=onboard,m=state?.metrics||{};
  if(String(d.description||'').trim()&&(!d.aiResult||!d.aiReviewed))throw Error('Описание не подтверждено: разбери текст с ИИ и проверь результат или очисти текст и отметь области вручную.');
  if(!d.adult||!d.terms||!d.privacy||!d.health)throw Error('Подтверди возраст 18+ и три согласия.');
+ if(d.weekdays.length!==Number(d.days))throw Error('Выбери конкретные дни тренировок: нужно '+d.days+', выбрано '+d.weekdays.length+'.');
  const mm={};
  for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
   const raw=String(d[key]??'').trim(),val=Number(raw.replace(',','.'));
@@ -108,7 +122,7 @@ function onboardingPayload(){
  const score=affected.length?Number(d.pain):0;
  if(!Number.isInteger(score)||score<0||score>10)throw Error('Укажи боль от 0 до 10.');
  const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
- return {answers:{goal:d.goal,level:d.level,days:d.days,equipment:d.equipment,age_group:'adult',minutes:d.minutes},
+ return {answers:{goal:d.goal,level:d.level,days:d.days,weekdays:[...d.weekdays].sort((a,b)=>a-b),equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,...(m.resting_hr?{resting_hr:m.resting_hr}:{}),sex:['male','female','other'].includes(d.sex)?d.sex:null},
   timezone,health_profile:{affected,pain_score:score,
    symptom_course:affected.length?d.course:'none',danger_signs:d.danger===true,
@@ -129,10 +143,10 @@ function onboardChanged(e){
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
- if(field==='description'){onboard.aiResult=null;onboard.aiReviewed=false;}
+ if(field==='description'||(['aiConsent','adult','privacy'].includes(field)&&!target.checked)){onboard.aiResult=null;onboard.aiReviewed=false;}
  if(['limitation','pain','course','danger','cleared'].includes(field)){onboard.aiReviewed=false;const confirm=app.querySelector?.('input[data-onboard="aiReviewed"]');if(confirm)confirm.checked=false;}
  if(field==='minutes'){const label=document.getElementById('onboard-duration-value');if(label)label.textContent=onboard.minutes+' мин';return;}
- if(field==='limitation'||field==='equipment')draw();
+ if(field==='limitation'||field==='equipment'||field==='days')draw();
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -150,6 +164,7 @@ function storeRestTimer(){
 function restoreRestTimer(){
  const key=nextKey();
  if(!key){restUntil=0;restFor='';restSkippedKey='';storeRestTimer();return}
+ if(restSkippedKey!==key)restSkippedKey='';
  try{
   const stored=window.sessionStorage?.getItem(REST_TIMER_KEY);
   if(stored){
@@ -242,10 +257,17 @@ function training(){
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
+function currentMonth(){
+ const today=new Date();
+ try{
+  const parts=new Intl.DateTimeFormat('en',{timeZone:state?.metrics?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone,year:'numeric',month:'2-digit'}).formatToParts(today);
+  return parts.find(p=>p.type==='year').value+'-'+parts.find(p=>p.type==='month').value;
+ }catch(_e){return today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')}
+}
 const filtered=()=>date?(dayRows??(state?.history||[]).filter(x=>isoDate(x.date)===date)):(state?.history||[]);
 const historyRow=x=>`<button type="button" class="button-subtle" data-cmd="detail" data-id="${x.id}" style="display:block;width:100%;text-align:left;margin-top:8px"><strong>${esc(x.title)}</strong><small style="display:block">${esc(x.date)}</small></button>`;
 function calendar(){
- if(!month)month=new Date().toISOString().slice(0,7);
+ if(!month)month=currentMonth();
  const [year,n]=month.split('-').map(Number),first=new Date(Date.UTC(year,n-1,1)),count=new Date(Date.UTC(year,n,0)).getUTCDate(),padding=(first.getUTCDay()+6)%7;
  const highlighted=new Set([...monthMarks,...(state.history||[]).map(x=>isoDate(x.date))]);
  return `<div class="fq-live-calendar-controls">${button('‹','prev-month')}<strong>${first.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'})}</strong>${button('›','next-month')}</div><div class="fq-live-days">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>`<small>${x}</small>`).join('')}${'<span></span>'.repeat(padding)}${Array.from({length:count},(_,i)=>{const day=`${month}-${String(i+1).padStart(2,'0')}`;return `<button type="button" class="fq-live-date ${highlighted.has(day)?'has-entry':''} ${date===day?'selected':''}" data-date="${day}" aria-label="${prettyDate(day)}">${i+1}</button>`}).join('')}</div>`;
@@ -315,7 +337,9 @@ function food(){
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
  const names={'goal':'Цель тренировок','level':'Опыт','days':'Дни в неделю','equipment':'Место тренировок','age_group':'Возрастная группа','minutes':'Длительность','clearance':'Ограничения'};
- const labels=Object.entries(state.profile||{}).map(([k,v])=>`<div class="fq-live-row"><span>${esc(names[k]||k)}</span><strong>${esc(v)}</strong></div>`).join('');
+ const savedWeekdays=state.profile_raw?.weekdays;
+ const labels=Object.entries(state.profile||{}).map(([k,v])=>`<div class="fq-live-row"><span>${esc(names[k]||k)}</span><strong>${esc(v)}</strong></div>`).join('')+
+  (Array.isArray(savedWeekdays)?'<div class="fq-live-row"><span>Дни тренировок</span><strong>'+esc(savedWeekdays.map(day=>weekdayNames[day]).filter(Boolean).join(', '))+'</strong></div>':'');
  const data=state.metrics||{};
  const measure=metricEdit?`<div class="fq-live-grid">${fields.map(([key,label,min,max])=>`<label class="field"><span>${label}</span><input id="profile-${key}" data-metric="${key}" type="number" inputmode="${key==='age'?'numeric':'decimal'}" min="${min}" max="${max}" step="${key==='age'?'1':'0.1'}" autocomplete="off" placeholder="—" value="${esc(profileDraft?.[key]??'')}"></label>`).join('')}</div>
  <p class="input-note">Изменятся только исправленные значения. История тренировок сохраняется.</p><div class="fq-live-actions" style="margin-top:12px">${button('Сохранить','profile-metrics-save',true)}${button('Отмена','profile-metrics-cancel')}</div>`:
@@ -353,7 +377,12 @@ function draw(){
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
-app.addEventListener('input',e=>{onboardChanged(e);if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;});
+app.addEventListener('input',e=>{
+ onboardChanged(e);
+ if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ const metric=String(e.target.id||'').replace(/^profile-/,'');
+ if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
+});
 app.addEventListener('change',onboardChanged);
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
@@ -369,6 +398,13 @@ app.addEventListener('click',async e=>{
  if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(element.dataset.onboardWeekday!==undefined){
+  if(!onboardOpen||!onboard)return;
+  const day=Number(element.dataset.onboardWeekday);
+  if(!Number.isInteger(day)||day<0||day>6)return;
+  onboard.weekdays=onboard.weekdays.includes(day)?onboard.weekdays.filter(d=>d!==day):[...onboard.weekdays,day].sort((a,b)=>a-b);
+  draw();app.querySelector?.('[data-onboard-weekday="'+day+'"]')?.focus();return;
+ }
  if(element.dataset.onboardPick){
   if(!onboardOpen||!onboard)return;
   const key=element.dataset.onboardPick,value=element.dataset.value;
@@ -381,10 +417,15 @@ app.addEventListener('click',async e=>{
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
  if(cmd==='onboard-ai'){
   if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
+  if(!onboard.adult||!onboard.privacy){fail('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности.');return}
   const txt=String(onboard.description||'').trim();
   if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
+  const analyzedForm=onboard;
   const result=await send('health_analyze',{adult:true,privacy_ack:true,text:txt});
   if(result?.analysis){
+   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==txt||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
+    fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
+   }
    const a=result.analysis;onboard.limitation='yes';
    onboard.areas=Array.isArray(a.affected)?a.affected.filter(k=>onboardRegions.some(([id])=>id===k)):[];
    onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
@@ -476,7 +517,7 @@ app.addEventListener('click',async e=>{
  if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer()}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
@@ -486,12 +527,12 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
   const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
-  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';draw()}
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';if(date){dayRows=null;await loadDay()}draw()}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
  if(cmd==='week'){week=week===Number(element.dataset.week)?0:Number(element.dataset.week);draw();return}
- if(cmd==='calendar'){calendarOpen=!calendarOpen;month=date.slice(0,7)||new Date().toISOString().slice(0,7);monthMarks=new Set();partialHistory();if(calendarOpen)await fetchMonthMarks();return}
+ if(cmd==='calendar'){calendarOpen=!calendarOpen;month=date.slice(0,7)||currentMonth();monthMarks=new Set();partialHistory();if(calendarOpen)await fetchMonthMarks();return}
  if(cmd==='prev-month'||cmd==='next-month'){const [y,m]=month.split('-').map(Number);month=new Date(Date.UTC(y,m-1+(cmd==='prev-month'?-1:1),1)).toISOString().slice(0,7);monthMarks=new Set();partialHistory();await fetchMonthMarks();return}
  if(cmd==='reset-date'){date='';dayRows=null;calendarOpen=false;partialHistory();return}
  if(cmd==='history-all'){modal='history';allRows=[];nextOffset=0;draw();await loadHistoryPage();return}

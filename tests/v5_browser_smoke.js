@@ -31,7 +31,7 @@ async function run(){
  ].find(p=>fs.existsSync(p));
  assert.ok(chrome,'Chromium/Chrome executable not installed on runner');
  fs.mkdirSync(OUT,{recursive:true});
- let profileComplete=true,profileState=exampleState(true),posts=[];
+ let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false;
  const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   if(req.method==='GET'&&(req.url==='/'||req.url==='/mini/v5-live')){
@@ -50,7 +50,12 @@ async function run(){
     assert.equal(data.privacy,true);
     assert.equal(data.health,true);
     assert.equal(data.answers.age_group,'adult');
+    assert.equal(data.answers.weekdays.length,Number(data.answers.days));
+    assert.equal(new Set(data.answers.weekdays).size,data.answers.weekdays.length);
     profileComplete=true;profileState=exampleState(true);
+    profileState.profile_raw={...data.answers};
+    profileState.metrics={...profileState.metrics,...data.metrics};
+    response={ok:true,data:profileState};
    }else if(data.action==='health_analyze'){
     response={ok:true,analysis:{affected:['knee'],pain_score:3,
       symptom_course:'stable',danger_signs:false,short_summary:'Беспокоит колено'}};
@@ -59,7 +64,27 @@ async function run(){
    }else if(data.action==='history_month'){
     response={ok:true,dates:['2026-10-23']};
    }else if(data.action==='detail'){
-    response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[]}};
+    const item=profileState.history.find(x=>x.id===data.id);
+    response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
+   }else if(data.action==='start'){
+    assert.equal(data.mood,'normal');
+    profileState.workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',
+     current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90}};
+    response={ok:true,patch:{workout:profileState.workout}};
+   }else if(data.action==='record'){
+    assert.equal(data.expected_workout,9);assert.equal(data.expected_set,1);
+    assert.equal(data.reps,12);assert.equal(data.weight,60);
+    profileState.workout={...profileState.workout,done:1,rest_remaining_seconds:89,
+     current:{...profileState.workout.current,set_no:2}};
+    response={ok:true,patch:{workout:profileState.workout}};
+   }else if(data.action==='finish'){
+    profileState.workout=null;
+    profileState.history.unshift({id:9,date:'23.10.2026',title:'Силовая · завершена в браузере'});
+    profileState.stats.total++;
+   }else if(data.action==='cardio'){
+    assert.equal(data.type,'Велосипед');assert.equal(data.minutes,60);assert.equal(data.avg_hr,120);
+    if(rejectCardioOnce){rejectCardioOnce=false;response={ok:false,error:'Тест: кардио не сохранено'}}
+    else profileState.history.unshift({id:10,date:'23.10.2026',title:'Кардио · Велосипед · 60 мин'});
    }else if(data.action!=='state') {
     response={ok:false,error:'Test fixture: unavailable action '+data.action};
    }
@@ -137,6 +162,10 @@ async function run(){
    await page.locator('[data-onboard-pick="goal"]').first().waitFor();
    assert.equal(await page.locator('a[href="/mini/legacy"]').count(),0,'No 38.2 redirect');
    assert.equal(await page.locator('input#onboard-duration').count(),1,'Approved duration slider');
+   assert.equal(await page.locator('[data-onboard-weekday]').count(),7,'Seven weekday controls');
+   const weekdayRects=await page.locator('[data-onboard-weekday]').evaluateAll(buttons=>buttons.map(b=>b.getBoundingClientRect().toJSON()));
+   assert.ok(weekdayRects.every(r=>r.height>=44),'Weekday controls have accessible touch height');
+   assert.ok(weekdayRects.every(r=>Math.abs(r.top-weekdayRects[0].top)<1),'Weekdays fit into one row');
    await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').click();
    assert.equal(await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').getAttribute('aria-pressed'),'true');
    await checkLayout('profile questionnaire');
@@ -144,6 +173,37 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'profile-'+size.width+'.png')});
    await page.evaluate(()=>window.scrollTo(0,360));
    await page.screenshot({path:path.join(OUT,'profile-scroll-'+size.width+'.png')});
+   await page.locator('.fq-weekday-options').scrollIntoViewIfNeeded();
+   await checkLayout('weekday selector '+size.width);
+   await page.screenshot({path:path.join(OUT,'weekdays-'+size.width+'.png')});
+   await page.getByRole('button',{name:'Отмена',exact:true}).click();
+   await page.locator('.bottom-nav [data-nav="home"]').click();
+   await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
+   await page.getByRole('button',{name:'Хорошо',exact:true}).click();
+   await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
+   await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
+   await page.locator('#rest-count').waitFor();
+   await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();
+   assert.equal(await page.locator('#reps').inputValue(),'','Saved repetitions are cleared for the next set');
+   await page.getByRole('button',{name:'Завершить',exact:true}).click();
+   await page.locator('.fq-live-dialog').getByRole('button',{name:'Завершить',exact:true}).click();
+   await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
+   await page.locator('.bottom-nav [data-nav="home"]').click();
+   await page.getByRole('button',{name:'Записать кардио',exact:true}).click();
+   await page.getByRole('button',{name:'Выбрать вид кардио',exact:true}).click();
+   await page.getByRole('button',{name:'Велосипед',exact:true}).click();
+   await page.locator('#cardio-min').fill('60');await page.locator('#cardio-hr').fill('120');
+   rejectCardioOnce=true;
+   await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
+   await page.getByRole('alert').filter({hasText:'Тест: кардио не сохранено'}).waitFor();
+   assert.equal(await page.locator('#cardio-min').inputValue(),'60','Failed save preserves cardio minutes');
+   assert.equal(await page.locator('#cardio-hr').inputValue(),'120','Failed save preserves heart rate');
+   await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
+   await page.locator('.fq-live-dialog').waitFor({state:'detached'});
+   await page.locator('.bottom-nav [data-nav="progress"]').click();
+   await page.getByRole('button',{name:/Кардио · Велосипед · 60 мин/}).click();
+   await page.getByText('Записано в тестовом дневнике',{exact:true}).waitFor();
+   assert.equal(profileState.history.filter(x=>x.id===10).length,1,'Retry of a rejected request creates one cardio entry');
    assert.equal(errors.length,0,'No JS errors: '+errors.join(' | '));
    await context.close();
   }
@@ -158,6 +218,7 @@ async function run(){
   }}});
   await onboarding.goto(base+'/',{waitUntil:'load'});
   await onboarding.locator('button[data-cmd="onboard-save"]').waitFor();
+  assert.equal(await onboarding.getByText(/Раньше сохранялось только количество/).count(),0,'First launch has no legacy-profile explanation');
   assert.equal(await onboarding.locator('a[href="/mini/legacy"]').count(),0);
   assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No bottom navigation before finishing onboarding');
   assert.equal(await onboarding.locator('.profile-open').isVisible(),false,'No profile shortcut before onboarding is complete');
@@ -166,6 +227,29 @@ async function run(){
    'A synthetic header click must not bypass mandatory onboarding');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No tabs after attempted onboarding bypass');
   await onboarding.screenshot({path:path.join(OUT,'first-launch.png')});
+  await onboarding.locator('[data-onboard="age"]').fill('34');
+  await onboarding.locator('[data-onboard="height_cm"]').fill('181');
+  await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
+  for(const field of ['adult','terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
+  await onboarding.locator('[data-onboard="days"]').selectOption('3');
+  await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
+  await onboarding.getByRole('alert').filter({hasText:'Выбери конкретные дни тренировок'}).waitFor();
+  assert.equal(posts.filter(p=>p.action==='onboarding').length,0,'Legacy/new blank weekdays must not be submitted');
+  for(const day of [0,2,4])await onboarding.locator('[data-onboard-weekday="'+day+'"]').click();
+  await onboarding.locator('[data-onboard-weekday="0"]').focus();
+  await onboarding.keyboard.press('Space');
+  assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'false');
+  await onboarding.keyboard.press('Space');
+  assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'true','Keyboard focus survives weekday toggle');
+  await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
+  await onboarding.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
+  assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
+  assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
+  await onboarding.getByRole('button',{name:'Профиль',exact:true}).click();
+  await onboarding.getByText('Пн, Ср, Пт',{exact:true}).waitFor();
+  await onboarding.getByRole('button',{name:'Редактировать анкету',exact:true}).click();
+  for(const day of [0,2,4])assert.equal(await onboarding.locator('[data-onboard-weekday="'+day+'"]').getAttribute('aria-pressed'),'true','Saved weekday restored');
+  await onboarding.screenshot({path:path.join(OUT,'saved-weekdays.png')});
   await onboarding.close();
   process.stdout.write('PASS browser: 3 tabs, nested plan, screen layout, fullscreen stub, profile, first launch (2 mobile sizes)\n');
  }finally{

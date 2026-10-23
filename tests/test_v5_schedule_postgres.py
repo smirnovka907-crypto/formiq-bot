@@ -1,0 +1,311 @@
+"""Opt-in PostgreSQL regression tests. Never use the application's DATABASE_URL.
+
+Each test owns an isolated schema in an explicitly named local test database.
+GitHub Actions supplies a disposable PostgreSQL service for these tests.
+"""
+import importlib
+import os
+import unittest
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
+from threading import Barrier
+from unittest.mock import patch
+from urllib.parse import urlparse
+
+import psycopg
+from psycopg import sql
+
+
+TEST_URL = os.environ.get('FORMIQ_TEST_DATABASE_URL')
+
+
+class Clock(datetime):
+    instant = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.instant.astimezone(tz) if tz else cls.instant.replace(tzinfo=None)
+
+
+@unittest.skipUnless(TEST_URL, 'FORMIQ_TEST_DATABASE_URL not supplied')
+class SchedulePostgresTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        target = urlparse(TEST_URL)
+        if (target.hostname not in ('localhost', '127.0.0.1', 'postgres')
+                or not target.path.rstrip('/').endswith('_test')):
+            raise RuntimeError('Scheduling regressions require a local *_test database')
+        with patch.dict(os.environ, {
+            'TELEGRAM_BOT_TOKEN': '123456789:TESTONLY_schedule',
+            'DATABASE_URL': 'postgresql://unused:unused@example.invalid/never_connect',
+            'RENDER_EXTERNAL_URL': 'https://example.invalid',
+        }):
+            cls.m = importlib.import_module('main')
+
+    def setUp(self):
+        self.schema = 'formiq_schedule_regression_' + uuid.uuid4().hex
+        with psycopg.connect(TEST_URL) as conn:
+            conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(self.schema)))
+        self.addCleanup(self.drop_schema)
+        self.db_patch = patch.object(self.m, 'db', self.connect)
+        self.db_patch.start()
+        self.addCleanup(self.db_patch.stop)
+        Clock.instant = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+        self.clock_patch = patch.object(self.m, 'datetime', Clock)
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
+        self.m.init_db()
+        self.chat = 777
+
+    def connect(self):
+        return psycopg.connect(TEST_URL, options='-c search_path=' + self.schema
+                               + ' -c statement_timeout=15000')
+
+    def drop_schema(self):
+        with psycopg.connect(TEST_URL) as conn:
+            conn.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
+
+    def body(self, weekdays=(0, 2, 4), *, days=None, zone='Europe/Helsinki'):
+        answers = dict(goal='general', level='beginner', days=str(days or len(weekdays)),
+                       equipment='gym', age_group='adult', minutes='45')
+        if weekdays is not None:
+            answers['weekdays'] = list(weekdays)
+        return dict(answers=answers, metrics=dict(age=34, height_cm=181, weight_kg=82,
+                    resting_hr=60, sex='male'), timezone=zone,
+                    health_profile=dict(affected=[], pain_score=0, symptom_course='none',
+                    danger_signs=False, activity_cleared=False),
+                    equipment_description='', terms=True, privacy=True, health=True)
+
+    def save(self, weekdays=(0, 2, 4), **kwargs):
+        self.m.save_onboarding(self.chat, self.body(weekdays, **kwargs))
+        profile = self.m.profile(self.chat)
+        cycle, _ = self.m.get_cycle(self.chat, profile)
+        return profile, cycle, self.m.scheduled_calendar(self.chat, profile, cycle)
+
+    def rows(self, cycle):
+        with self.connect() as conn:
+            return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state
+                FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
+                ORDER BY week_no,day_code''', (self.chat, cycle)).fetchall()
+
+    def snapshot_history(self):
+        with self.connect() as conn:
+            return {table: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1,2')
+                    .format(sql.Identifier(table))).fetchall()
+                    for table in ('workouts', 'workout_items', 'workout_sets',
+                                  'cardio_sessions', 'pending_inputs', 'rest_timers')}
+
+    def test_onboarding_api_reopen_and_four_weeks_for_all_counts(self):
+        client = self.m.APP.test_client()
+        for count in range(1, 8):
+            self.chat = 700 + count
+            weekdays = list(range(count))
+            # Exercise the real API and PostgreSQL writes; only Telegram identity is mocked.
+            with patch.object(self.m, 'mini_auth', return_value=self.chat):
+                response = client.post('/mini/api', json={'action': 'onboarding',
+                                                          **self.body(weekdays)})
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertTrue(response.get_json()['ok'], response.get_json())
+            restored = self.m.profile(self.chat)
+            self.assertEqual(restored['weekdays'], weekdays)
+            cycle, _ = self.m.get_cycle(self.chat, restored)
+            calendar = self.m.scheduled_calendar(self.chat, restored, cycle)
+            self.assertEqual(len(calendar), 4 * count)
+            for week in range(1, 5):
+                entries = [x for x in calendar if x['week'] == week]
+                self.assertEqual(len(entries), count)
+                self.assertEqual({date.fromisoformat(x['date']).weekday() for x in entries},
+                                 set(weekdays))
+            self.assertTrue(all(date(2026, 10, 19) <= date.fromisoformat(x['date'])
+                                < date(2026, 11, 16) for x in calendar))
+
+    def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
+        profile, cycle, _ = self.save()
+        by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
+        manual = by_key[(3, 'C')]
+        self.m.mini_aux(self.chat, 'reschedule', {'id': manual[0], 'date': '2026-11-05'})
+        with self.connect() as conn:
+            for week, day, status in ((1, 'A', 'finished'), (2, 'B', 'active')):
+                wid = conn.execute('''INSERT INTO workouts(chat_id,cycle_id,week_no,plan_day,
+                    status,started_at,finished_at,source) VALUES(%s,%s,%s,%s,%s,%s,%s,'template')
+                    RETURNING id''', (self.chat, cycle, week, day, status,
+                    Clock.instant, Clock.instant if status == 'finished' else None)).fetchone()[0]
+                conn.execute('''INSERT INTO workout_items(workout_id,position,exercise,target,
+                    exercise_key) VALUES(%s,0,'Жим ногами','3 × 10','leg_press')''', (wid,))
+                conn.execute('''INSERT INTO workout_sets(workout_id,position,set_no,target_min,
+                    target_max,unit,actual_value,state,weight_kg,completed_at)
+                    VALUES(%s,0,1,10,12,'reps',12,'done',60,%s)''', (wid, Clock.instant))
+            conn.execute('''INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment)
+                VALUES(%s,45,120,'cycling')''', (self.chat,))
+        history = self.snapshot_history()
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        updated, new_cycle, _ = self.save((1, 3))
+        self.assertEqual(new_cycle, cycle, 'Schedule edits must retain current cycle identity')
+        self.assertEqual(self.snapshot_history(), history, 'History and working weights are immutable')
+        after = {(r[1], r[2]): r for r in self.rows(cycle)}
+        for key in ((1, 'A'), (2, 'B')):
+            self.assertEqual(after[key][3], by_key[key][3], 'Past/linked slot date changed')
+        self.assertEqual(after[(3, 'C')][3], date(2026, 11, 5))
+        self.assertEqual(after[(3, 'C')][4], 'manual')
+        self.assertTrue(any(r[4] == 'retired' for r in after.values()))
+        for row in after.values():
+            if row[4] == 'auto' and row[3] > date(2026, 10, 20) and (row[1], row[2]) != (2, 'B'):
+                self.assertIn(row[3].weekday(), (1, 3))
+        self.assertEqual(updated['weekdays'], [1, 3])
+        # Saving the same questionnaire again is idempotent.
+        previous = self.rows(cycle)
+        self.save((1, 3))
+        self.assertEqual(self.rows(cycle), previous)
+        self.assertEqual(self.snapshot_history(), history)
+        # A manually retained C slot must still produce a valid workout at frequency 2.
+        self.assertTrue(self.m.make_session(updated, 3, 'C'))
+
+    def test_retired_slots_do_not_reappear_as_time_passes(self):
+        _, cycle, _ = self.save(tuple(range(7)))
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        profile, new_cycle, _ = self.save((0,))
+        self.assertEqual(cycle, new_cycle)
+        retired = {r[0] for r in self.rows(cycle) if r[4] == 'retired'}
+        self.assertTrue(retired)
+        Clock.instant = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+        calendar = self.m.scheduled_calendar(self.chat, profile, cycle)
+        self.assertFalse(retired & {x['id'] for x in calendar})
+        self.assertTrue(retired <= {r[0] for r in self.rows(cycle) if r[4] == 'retired'})
+
+    def test_legacy_migration_is_additive_and_keeps_manual_dates(self):
+        # Simulate a database created by the previous release, only in this test schema.
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE profiles DROP COLUMN weekdays')
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+            conn.execute('''INSERT INTO profiles(chat_id,goal,level,days,equipment,
+                age_group,minutes,clearance) VALUES(%s,'general','beginner','3','gym',
+                'adult','45','none')''', (self.chat,))
+            conn.execute('''INSERT INTO profile_metrics(chat_id,timezone)
+                VALUES(%s,'Europe/Helsinki')''', (self.chat,))
+            cycle = conn.execute('''INSERT INTO training_cycles(chat_id,starts_on,
+                profile_fingerprint) VALUES(%s,%s,%s) RETURNING id''', (self.chat,
+                date(2026, 10, 19), self.m.fingerprint(dict(goal='general', level='beginner',
+                days='3', equipment='gym', age_group='adult', minutes='45',
+                clearance='none')))).fetchone()[0]
+            for week in range(1, 5):
+                for day, offset in zip('ABC', (0, 2, 4)):
+                    planned = date(2026, 10, 19) + timedelta(days=7 * (week - 1) + offset)
+                    if (week, day) == (3, 'C'):
+                        planned = date(2026, 11, 5)
+                    conn.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,
+                        day_code,planned_date) VALUES(%s,%s,%s,%s,%s)''',
+                        (self.chat, cycle, week, day, planned))
+        self.m.init_db()
+        self.m.init_db()  # Migration is idempotent.
+        legacy = self.m.profile(self.chat)
+        self.assertIsNone(legacy.get('weekdays'))
+        before = self.rows(cycle)
+        self.m.scheduled_calendar(self.chat, legacy, cycle)
+        self.assertEqual(self.rows(cycle), before, 'Opening old profiles must not rewrite dates')
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        _, new_cycle, _ = self.save((1, 3, 5))
+        self.assertEqual(new_cycle, cycle)
+        manual = next(r for r in self.rows(cycle) if (r[1], r[2]) == (3, 'C'))
+        self.assertEqual(manual[3], date(2026, 11, 5))
+        self.assertIn(manual[4], (None, 'manual'))
+
+    def test_invalid_weekdays_do_not_write_profile_or_calendar(self):
+        _, cycle, _ = self.save()
+        before = self.rows(cycle)
+        old_profile = self.m.profile(self.chat)
+        for weekdays in ([0, 0, 2], [0, 1], [True, 2, 4], [-1, 2, 4],
+                         [0, 2, 7], ['0', 2, 4]):
+            payload = self.body((0, 2, 4))
+            payload['answers']['weekdays'] = weekdays
+            with self.subTest(weekdays=weekdays), self.assertRaises(ValueError):
+                self.m.save_onboarding(self.chat, payload)
+            self.assertEqual(self.rows(cycle), before)
+            self.assertEqual(self.m.profile(self.chat), old_profile)
+
+    def test_local_weekdays_across_dst_and_utc_date_boundary(self):
+        for index, (instant, zone, start) in enumerate((
+                (datetime(2026, 10, 24, 21, 30, tzinfo=timezone.utc),
+                 'Europe/Helsinki', date(2026, 10, 25)),
+                (datetime(2026, 3, 28, 22, 30, tzinfo=timezone.utc),
+                 'Europe/Helsinki', date(2026, 3, 29)),
+                (datetime(2026, 10, 24, 12, 30, tzinfo=timezone.utc),
+                 'Pacific/Kiritimati', date(2026, 10, 25)))):
+            with self.subTest(zone=zone, instant=instant):
+                self.chat = 900 + index
+                Clock.instant = instant
+                profile, cycle, calendar = self.save((6,), zone=zone)
+                expected = [(start + timedelta(days=7 * week)).isoformat()
+                            for week in range(4)]
+                self.assertEqual([row['date'] for row in calendar], expected)
+                Clock.instant = instant + timedelta(days=8)
+                self.assertEqual([row['date'] for row in self.m.scheduled_calendar(
+                    self.chat, profile, cycle)], expected)
+
+    def test_schedule_failure_rolls_back_profile_health_metrics_and_dates(self):
+        _, cycle, _ = self.save()
+        def snapshot():
+            with self.connect() as conn:
+                return {table: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1')
+                        .format(sql.Identifier(table))).fetchall()
+                        for table in ('profiles', 'profile_metrics', 'health_limits',
+                                      'profile_equipment', 'training_cycles',
+                                      'scheduled_sessions', 'user_agreements')}
+        before = snapshot()
+        payload = self.body((1, 3, 5))
+        payload['metrics']['weight_kg'] = 85
+        with patch.object(self.m, 'reconcile_schedule_in', side_effect=RuntimeError('test rollback')):
+            with self.assertRaisesRegex(RuntimeError, 'test rollback'):
+                self.m.save_onboarding(self.chat, payload)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.m.get_cycle(self.chat, self.m.profile(self.chat))[0], cycle)
+
+    def test_concurrent_save_and_manual_reschedule_keep_manual_date(self):
+        stale_profile, cycle, _ = self.save()
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'C'))
+        barrier = Barrier(2)
+        def save_schedule():
+            barrier.wait(timeout=10)
+            self.m.save_onboarding(self.chat, self.body((1, 3)))
+        def move_manually():
+            barrier.wait(timeout=10)
+            self.m.mini_aux(self.chat, 'reschedule', {'id': sid, 'date': '2026-11-05'})
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            tasks = [pool.submit(save_schedule), pool.submit(move_manually)]
+            for task in tasks:
+                task.result(timeout=30)
+        moved = next(r for r in self.rows(cycle) if r[0] == sid)
+        self.assertEqual(moved[3:], (date(2026, 11, 5), 'manual'))
+        # A previously loaded dashboard must not regenerate the old preferences.
+        self.assertEqual(self.m.get_cycle(self.chat, stale_profile)[0], cycle)
+        before = self.rows(cycle)
+        self.m.scheduled_calendar(self.chat, stale_profile, cycle)
+        self.assertEqual(self.rows(cycle), before)
+
+    def test_timezone_change_keeps_cycle_manual_move_and_protected_boundary(self):
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        _, cycle, _ = self.save((1, 3), zone='Asia/Tokyo')  # Locally October 20.
+        sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'B'))
+        self.m.mini_aux(self.chat, 'reschedule', {'id': sid, 'date': '2026-11-04'})
+        profile, changed_cycle, calendar = self.save((0, 2), zone='America/Los_Angeles')
+        self.assertEqual(changed_cycle, cycle, 'Changing timezone must not replace the cycle')
+        self.assertEqual(next(r for r in self.rows(cycle) if r[0] == sid)[3], date(2026, 11, 4))
+        self.assertIn(sid, {r['id'] for r in calendar})
+        # A count increase must not insert a slot on the old timezone's protected today,
+        # even if a later read regards it as tomorrow in the newly selected timezone.
+        self.chat = 778
+        Clock.instant = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+        _, other_cycle, _ = self.save((6,), zone='Asia/Tokyo')
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        profile, same_cycle, calendar = self.save((0, 1), zone='America/Los_Angeles')
+        self.assertEqual(same_cycle, other_cycle)
+        before = self.rows(other_cycle)
+        for _ in range(2):
+            calendar = self.m.scheduled_calendar(self.chat, profile, other_cycle)
+        self.assertEqual(self.rows(other_cycle), before)
+        self.assertFalse(any(r['date'] == '2026-10-20' and r['day'] == 'B' for r in calendar))
+
+
+if __name__ == '__main__':
+    unittest.main()

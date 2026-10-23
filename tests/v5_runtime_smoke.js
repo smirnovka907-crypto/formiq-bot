@@ -10,7 +10,7 @@ class FakeFormData{
 
 
 function createClient(auth=true,shared={}){
- const requests=[],handlers={},fields=new Map(),failActions=new Set(),staleActions=new Set();
+ const requests=[],handlers={},fields=new Map(),failActions=new Set(),staleActions=new Set(),deferredActions=new Map();
  let html='';
  const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values()){const tail=html.split('id="'+field.id+'"')[1];const tag=tail?.split('>')[0];field.value=tag?.match(/value="([^"]*)"/)?.[1]??''}},addEventListener(name,fn){handlers[name]=fn}};
  const doc={
@@ -22,11 +22,14 @@ function createClient(auth=true,shared={}){
  const temporary=shared.storage||(shared.storage=new Map());
  const viewportHandlers={};
  const scrollMoves=[];
- let metrics={age:34,height_cm:181,weight_kg:82};
+ let metrics={age:34,height_cm:181,weight_kg:82,...shared.metrics};
+ let profileRaw={goal:'general',...shared.profileRaw};
+ let history=[{id:8,date:'23.10.2026',title:'Силовая'}];
  const client={
   root,handlers,fields,requests,scrollMoves,viewportHandlers,
   failOnce(action){failActions.add(action)},
   staleOnce(action){staleActions.add(action)},
+  deferOnce(action){let release;deferredActions.set(action,new Promise(resolve=>{release=resolve}));return release},
   async fetch(url,opts){
    if(url==='/mini/report'){
     assert.equal(opts.method,'POST');
@@ -40,17 +43,18 @@ function createClient(auth=true,shared={}){
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
    const p=JSON.parse(opts.body);requests.push(p);
+   if(deferredActions.has(p.action)){const waiting=deferredActions.get(p.action);deferredActions.delete(p.action);await waiting}
    if(failActions.delete(p.action))return {ok:false,status:503,async json(){return {ok:false,error:'Временная ошибка API'}}};
    if(staleActions.delete(p.action)){
-    workout={...workout,done:1,rest_remaining_seconds:0,current:{...workout.current,set_no:2}};
+    workout={...workout,done:1,rest_remaining_seconds:shared.staleRestRemaining||0,current:{...workout.current,set_no:workout.current.set_no+1}};
     shared.workout=workout;
     return {ok:false,status:400,async json(){return {ok:false,error:'Этот подход уже изменился. Обнови тренировку'}}};
    }
    let response;
    const state=()=>({
-    agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
+    agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',
-    workout,history:[{id:8,date:'23.10.2026',title:'Силовая'}],
+    workout,history,
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
@@ -66,9 +70,9 @@ function createClient(auth=true,shared={}){
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
-   else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
+   else if(p.action==='history_page')response={ok:true,history:history.filter(x=>!p.date||x.date.split('.').reverse().join('-')===p.date),next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
-   else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
+   else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');if(shared.trackHistory)history=[{id:81,date:'23.10.2026',title:'Кардио · Велосипед'},...history];response={ok:true,data:state()};}
    else if(p.action==='health_analyze'){
      assert.equal(p.adult,true);assert.equal(p.privacy_ack,true);
      response={ok:true,analysis:{affected:['knee'],pain_score:3,symptom_course:'stable',danger_signs:false,short_summary:'Беспокоит колено'}};
@@ -78,6 +82,9 @@ function createClient(auth=true,shared={}){
      assert.equal(p.answers.age_group,'adult');
      assert.ok(p.metrics.age>=18);
      assert.ok(Array.isArray(p.health_profile.affected));
+     assert.equal(p.answers.weekdays.length,Number(p.answers.days));
+     assert.equal(new Set(p.answers.weekdays).size,p.answers.weekdays.length);
+     profileRaw={...p.answers};
      response={ok:true,data:state()};
     }
     else if(p.action==='save_metrics'){
@@ -90,12 +97,13 @@ function createClient(auth=true,shared={}){
    return {ok:true,status:200,async json(){return response}};
   }
  };
+ const ClientDate=shared.now?class extends Date{constructor(...args){super(...(args.length?args:[shared.now]))}static now(){return new Date(shared.now).getTime()}}:Date;
  const context={
   document:doc,
-  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){},...(shared.fullscreen?{isVersionAtLeast(){return true},requestFullscreen(){shared.fullscreenCalls=(shared.fullscreenCalls||0)+1},onEvent(){}}:{})}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
+  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){shared.expandCalls=(shared.expandCalls||0)+1},...(shared.fullscreen?{isVersionAtLeast(){return !shared.oldTelegram},requestFullscreen(){shared.fullscreenCalls=(shared.fullscreenCalls||0)+1;if(shared.fullscreenThrows)throw Error('Fullscreen unavailable')},onEvent(){}}:{})}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
   fetch:client.fetch,
   setTimeout(fn){return 1},clearTimeout(){},setInterval(fn){return 1},
-  AbortController,Date,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
+  AbortController,Date:ClientDate,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
  };
  vm.runInNewContext(js,context,{filename:'web/v5-live.js',timeout:2000});
  client.click=async(dataset)=>{
@@ -134,6 +142,11 @@ async function run(){
  assert.match(staleCase.root.innerHTML,/id="reps"[^>]*value=""/);
  assert.match(staleCase.root.innerHTML,/id="weight"[^>]*value=""/);
  assert.equal(staleCase.requests.filter(x=>x.action==='record').length,1,'Retry error does not auto-submit next approach');
+ const newerSet=createClient(true,{staleRestRemaining:50,workout:{id:72,done:1,total:4,finished:false,title:'Зал',rest_remaining_seconds:47,
+  current:{name:'Жим ногами',position:0,set_no:2,set_count:4,low:10,high:12,unit:'reps',rest_seconds:90}}});
+ await settle();await newerSet.click({cmd:'rest-skip'});
+ newerSet.input('reps','12');newerSet.staleOnce('record');await newerSet.click({cmd:'record'});
+ assert.match(newerSet.root.innerHTML,/rest-count/,'Skipping an earlier rest must not suppress rest after another client advances the set');
  const shared={storage:new Map()};
  const app=createClient(true,shared);
  await settle();
@@ -217,6 +230,12 @@ async function run(){
  await app.click({cmd:'profile-metrics-save'});
  assert.equal(app.requests.filter(x=>x.action==='save_metrics').length,1,'Invalid age must not reach API');
  assert.match(app.root.innerHTML,/Проверь допустимые значения/);
+ app.input('profile-height_cm','190');app.input('profile-weight_kg','90');
+ await app.click({cmd:'profile-metrics-save'});
+ assert.match(app.root.innerHTML,/id="profile-height_cm"[^>]*value="190"/,'Invalid age must not erase other unsaved measurements');
+ assert.match(app.root.innerHTML,/id="profile-weight_kg"[^>]*value="90"/);
+ await app.click({nav:'home'});await app.click({nav:'profile'});
+ assert.match(app.root.innerHTML,/id="profile-height_cm"[^>]*value="190"/,'Profile drafts survive navigation');
  await app.click({cmd:'profile-metrics-cancel'});
  assert.doesNotMatch(app.root.innerHTML,/id="profile-age"/);
  const inputField={id:'cardio-min',closest(){return {getBoundingClientRect(){return {top:210}}}}};
@@ -261,11 +280,27 @@ async function run(){
   assert.equal(polished.fullscreenCalls,1,'Supported Telegram clients request true fullscreen');
   assert.match(ux.root.innerHTML,/Тренировки/);
    assert.equal((ux.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Fullscreen has three bottom buttons');
+  for(const fallback of [{fullscreen:true,oldTelegram:true},{fullscreen:true,fullscreenThrows:true}]){
+   const legacyClient=createClient(true,fallback);await settle();
+   assert.equal(fallback.expandCalls,1,'Fallback clients stay expanded');
+   assert.equal(fallback.fullscreenCalls||0,fallback.oldTelegram?0:1);
+   assert.match(legacyClient.root.innerHTML,/Начать тренировку/,'Fullscreen rejection must not prevent API startup');
+  }
+  for(const [now,timezone,expected] of [
+   ['2026-11-01T00:30:00Z','America/Los_Angeles','2026-10'],
+   ['2026-10-31T23:30:00Z','Asia/Tokyo','2026-11']
+  ]){
+   const localCalendar=createClient(true,{now,metrics:{timezone}});await settle();
+   await localCalendar.click({nav:'progress'});await localCalendar.click({cmd:'calendar'});
+   assert.equal(localCalendar.requests.find(x=>x.action==='history_month').month,expected,'Calendar starts in the saved user timezone');
+  }
   await ux.click({cmd:'plan-open'});
   assert.match(ux.root.innerHTML,/Твой план/);
   assert.match(ux.root.innerHTML,/week-range/);
   await ux.click({nav:'profile'});
   await ux.click({cmd:'onboard-open'});
+  assert.match(ux.root.innerHTML,/Раньше сохранялось только количество/,'Legacy profiles must explicitly pick weekdays');
+  assert.equal((ux.root.innerHTML.match(/data-onboard-weekday="[0-6]"/g)||[]).length,7);
   assert.match(ux.root.innerHTML,/data-onboard-pick="goal"/,'Goal uses approved choice buttons');
    assert.match(ux.root.innerHTML,/data-onboard-pick="equipment"/,'Equipment uses approved choice buttons');
    assert.match(ux.root.innerHTML,/id="onboard-duration"/,'Duration uses approved slider');
@@ -274,6 +309,10 @@ async function run(){
    assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
    for(const key of ['adult','terms','privacy','health'])
      ux.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   await ux.click({cmd:'onboard-save'});
+   assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'Legacy weekday preferences must never be invented');
+   assert.match(ux.root.innerHTML,/Выбери конкретные дни тренировок/);
+   await ux.click({onboardWeekday:'0'});await ux.click({onboardWeekday:'3'});
    ux.handlers.change({target:{dataset:{onboard:'limitation'},type:'select-one',value:'yes'}});
    ux.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено при приседаниях'}});
    await ux.click({cmd:'onboard-save'});
@@ -290,20 +329,48 @@ async function run(){
    assert.equal(edits[0].metrics.weight_kg,82);
    assert.equal(edits[0].metrics.sex,'female');
    assert.equal(edits[0].answers.minutes,'50');
+   assert.deepEqual(Array.from(edits[0].answers.weekdays),[0,3]);
    assert.deepEqual(Array.from(edits[0].health_profile.affected),['knee']);
    assert.match(ux.root.innerHTML,/Тренировки/,'Returns to v5 after profile save');
+   await ux.click({nav:'profile'});
+   assert.match(ux.root.innerHTML,/Пн, Чт/,'Saved weekdays appear in the profile');
+   await ux.click({cmd:'onboard-open'});
+   assert.match(ux.root.innerHTML,/data-onboard-weekday="0" aria-pressed="true"/);
+   assert.match(ux.root.innerHTML,/data-onboard-weekday="3" aria-pressed="true"/,'Saved weekdays are restored for editing');
+   const sevenDays=createClient(true,{profileRaw:{days:'7',weekdays:[0,1,2,3,4,5,6]}});await settle();
+   await sevenDays.click({nav:'profile'});await sevenDays.click({cmd:'onboard-open'});
+   assert.equal((sevenDays.root.innerHTML.match(/data-onboard-weekday="[0-6]" aria-pressed="true"/g)||[]).length,7,'All seven weekdays can be restored');
+   for(const key of ['adult','terms','privacy','health'])sevenDays.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   sevenDays.handlers.change({target:{dataset:{onboard:'days'},type:'select-one',value:'1'}});
+   await sevenDays.click({cmd:'onboard-save'});
+   assert.equal(sevenDays.requests.filter(x=>x.action==='onboarding').length,0,'Count changes require matching explicit weekday selection');
+   for(let day=1;day<7;day++)await sevenDays.click({onboardWeekday:String(day)});
+   await sevenDays.click({cmd:'onboard-save'});
+   assert.deepEqual(Array.from(sevenDays.requests.find(x=>x.action==='onboarding').answers.weekdays),[0],'One-day schedules are supported without duplicates');
   
    const ai=createClient(true,{storage:new Map()});await settle();
    await ai.click({nav:'profile'});await ai.click({cmd:'onboard-open'});
-   for(const key of ['adult','terms','privacy','health'])
-     ai.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
    ai.handlers.change({target:{dataset:{onboard:'limitation'},type:'select-one',value:'yes'}});
    ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
    await ai.click({cmd:'onboard-ai'});
    assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'AI requires separate opt-in');
    ai.handlers.change({target:{dataset:{onboard:'aiConsent'},type:'checkbox',checked:true}});
    await ai.click({cmd:'onboard-ai'});
-   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,1);
+   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'AI cannot fabricate adult or privacy acknowledgement');
+   ai.handlers.change({target:{dataset:{onboard:'adult'},type:'checkbox',checked:true}});
+   await ai.click({cmd:'onboard-ai'});
+   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'Privacy must be acknowledged before analysis');
+   for(const key of ['terms','privacy','health'])
+     ai.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+   const finishAnalysis=ai.deferOnce('health_analyze');
+   const pendingAnalysis=ai.click({cmd:'onboard-ai'});await settle();
+   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Теперь беспокоит спина, не колено'}});
+   finishAnalysis();await pendingAnalysis;
+   assert.match(ai.root.innerHTML,/изменились во время анализа/,'A stale AI response must not describe a newer draft');
+   assert.doesNotMatch(ai.root.innerHTML,/data-onboard="aiReviewed"/,'Stale AI results cannot be confirmed');
+   await ai.click({cmd:'onboard-ai'});
+   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
    assert.match(ai.root.innerHTML,/Проверь разбор ИИ/);
    await ai.click({cmd:'onboard-save'});
    assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
@@ -312,6 +379,12 @@ async function run(){
    const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
    assert.equal(aiSaves.length,1,'Reviewed AI result can be saved');
    assert.equal(aiSaves[0].health_profile.pain_score,3);
+   const diary=createClient(true,{trackHistory:true});await settle();
+   await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
+   await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
+   await diary.click({cmd:'cardio-type',type:'Велосипед'});diary.input('cardio-min','60');
+   await diary.click({cmd:'cardio'});await diary.click({nav:'progress'});
+   assert.match(diary.root.innerHTML,/Кардио · Велосипед/,'Selected-date history refreshes after a successful cardio save');
    console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
