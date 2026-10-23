@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
 
-function createClient(auth=true){
+function createClient(auth=true,shared={}){
  const requests=[],handlers={},fields=new Map(),failActions=new Set();
  let html='';
  const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values()){const tail=html.split('id="'+field.id+'"')[1];const tag=tail?.split('>')[0];field.value=tag?.match(/value="([^"]*)"/)?.[1]??''}},addEventListener(name,fn){handlers[name]=fn}};
@@ -13,10 +13,13 @@ function createClient(auth=true){
   querySelector(){return null},
   activeElement:null
  };
- let workout=null;
+ let workout=shared.workout||null;
+ const temporary=shared.storage||(shared.storage=new Map());
+ const viewportHandlers={};
+ const scrollMoves=[];
  let metrics={age:34,height_cm:181,weight_kg:82};
  const client={
-  root,handlers,fields,requests,
+  root,handlers,fields,requests,scrollMoves,viewportHandlers,
   failOnce(action){failActions.add(action)},
   async fetch(url,opts){
    assert.equal(url,'/mini/api');
@@ -37,9 +40,11 @@ function createClient(auth=true){
    else if(p.action==='start'){
     assert.ok(['normal','tired'].includes(p.mood));
     workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно'}};
+    shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='record'){
     workout={...workout,done:1,current:{...workout.current,set_no:2}};
+    shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
@@ -49,7 +54,7 @@ function createClient(auth=true){
     assert.ok(Object.keys(p.metrics).every(k=>['age','height_cm','weight_kg'].includes(k)));
     Object.assign(metrics,p.metrics);response={ok:true,patch:{metrics:{...metrics},zones:[]}};
    }
-   else if(p.action==='finish'){workout=null;response={ok:true,data:state()}}
+   else if(p.action==='finish'){workout=null;shared.workout=null;response={ok:true,data:state()}}
    else if(p.action==='skip')response={ok:true,patch:{workout}};
    else throw Error('Unexpected action: '+p.action);
    return {ok:true,status:200,async json(){return response}};
@@ -57,7 +62,7 @@ function createClient(auth=true){
  };
  const context={
   document:doc,
-  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){}}},scrollTo(){},scrollBy(){},visualViewport:{offsetTop:0}},
+  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){}}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
   fetch:client.fetch,
   setTimeout(fn){return 1},clearTimeout(){},setInterval(fn){return 1},
   AbortController,Date,Set,Number,String,Array,Map,Object,RegExp,Math,
@@ -76,7 +81,8 @@ async function run(){
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
- const app=createClient(true);
+ const shared={storage:new Map()};
+ const app=createClient(true,shared);
  await settle();
  assert.match(app.root.innerHTML,/Начать тренировку/);
  assert.ok(app.requests.find(x=>x.action==='state'));
@@ -98,6 +104,12 @@ async function run(){
  await app.click({cmd:'record'});
  assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60));
  assert.match(app.root.innerHTML,/rest-count/);
+ assert.ok(shared.storage.has('formiq_v5_rest_countdown'),'rest countdown stored temporarily');
+ const resumed=createClient(true,shared);
+ await settle();
+ assert.match(resumed.root.innerHTML,/rest-count/,'rest restored when Mini App reloads');
+ await resumed.click({cmd:'rest-skip'});
+ assert.equal(shared.storage.has('formiq_v5_rest_countdown'),false,'rest timer removed after skip');
  await app.click({cmd:'rest-skip'});
  assert.match(app.root.innerHTML,/Подход 2 из 2/);
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
@@ -131,7 +143,9 @@ async function run(){
  await app.click({cmd:'profile-metrics-edit'});
  assert.match(app.root.innerHTML,/id="profile-age"[^>]*value="34"/);
  app.input('profile-age','34');app.input('profile-height_cm','181');app.input('profile-weight_kg','84,5');
+ const totalStatesBefore=app.requests.filter(x=>x.action==='state').length;
  await app.click({cmd:'profile-metrics-save'});
+ assert.equal(app.requests.filter(x=>x.action==='state').length,totalStatesBefore,'metric patch should avoid reloading full dashboard');
  const metricSaves=app.requests.filter(x=>x.action==='save_metrics');
  assert.equal(metricSaves.length,1);
  assert.deepEqual(metricSaves[0].metrics,{weight_kg:84.5},'Saving weight must not alter age or height');
@@ -144,6 +158,12 @@ async function run(){
  assert.match(app.root.innerHTML,/Проверь допустимые значения/);
  await app.click({cmd:'profile-metrics-cancel'});
  assert.doesNotMatch(app.root.innerHTML,/id="profile-age"/);
+ const inputField={id:'cardio-min',closest(){return {getBoundingClientRect(){return {top:210}}}}};
+ app.fields.set('cardio-min',inputField);
+ app.handlers.focusin({target:inputField});
+ assert.equal(typeof app.viewportHandlers.resize,'function','Android viewport resize handler is present');
+ // The field may be hidden in profile, but the helper must remain safely callable.
+ app.viewportHandlers.resize();
 
  await app.click({nav:'progress'});
  assert.match(app.root.innerHTML,/История тренировок/);

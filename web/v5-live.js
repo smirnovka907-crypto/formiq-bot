@@ -12,7 +12,32 @@ const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</s
 let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='';
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
-const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:''};
+const nextKey=()=>{const w=state?.workout,c=w?.current;return w&&c?`${w.id}:${c.position}:${c.set_no}`:'';};
+const REST_TIMER_KEY='formiq_v5_rest_countdown';
+function storeRestTimer(){
+ try{
+  if(restUntil>Date.now()&&restFor)window.sessionStorage?.setItem(REST_TIMER_KEY,JSON.stringify({until:restUntil,for:restFor}));
+  else window.sessionStorage?.removeItem(REST_TIMER_KEY);
+ }catch(_error){} // In-app browsers may disable temporary storage.
+}
+function restoreRestTimer(){
+ try{
+  const value=window.sessionStorage?.getItem(REST_TIMER_KEY);
+  if(!value)return;
+  const timer=JSON.parse(value);
+  if(Number.isSafeInteger(timer.until)&&timer.until>Date.now()&&timer.for===nextKey()){
+   restUntil=timer.until;restFor=timer.for;
+  }else window.sessionStorage?.removeItem(REST_TIMER_KEY);
+ }catch(_error){restUntil=0;restFor=''}
+}
+function updateViewportPosition(){
+ const activeInput=document.activeElement;
+ if(!activeInput||!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(activeInput.id))return;
+ const card=activeInput.closest?.('.surface');
+ if(!card)return;
+ const delta=card.getBoundingClientRect().top-(window.visualViewport?.offsetTop||0)-12;
+ if(Math.abs(delta)>15)window.scrollBy({top:delta,behavior:'instant'});
+}
 async function request(action,more={}){
  if(!token)throw Error('Открой FORMIQ через Telegram.');
  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),25000);
@@ -24,7 +49,13 @@ async function request(action,more={}){
 }
 async function send(action,more={}){
  if(busy)return null;busy=true;const originalSet=nextKey();
- try{const response=await request(action,more);if(response.data)state=response.data;else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;else state=(await request('state')).data;if(originalSet!==nextKey()){drafts.reps='';drafts.weight=''}error='';return response}
+ try{const response=await request(action,more);if(response.data)state=response.data;
+  else if(response.patch&&Object.prototype.hasOwnProperty.call(response.patch,'workout'))state.workout=response.patch.workout;
+  else if(response.patch?.metrics){state.metrics=response.patch.metrics;if(response.patch.zones)state.zones=response.patch.zones}
+  else state=(await request('state')).data;
+  if(action==='state')restoreRestTimer();
+  if(originalSet!==nextKey()){drafts.reps='';drafts.weight=''}
+  error='';return response}
  catch(e){error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;return null}
  finally{busy=false;draw()}
 }
@@ -138,9 +169,11 @@ app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  const field=e.target,card=e.target.closest('.surface');
  if(!card)return;
- const shift=()=>{if(document.activeElement!==field)return;const diff=card.getBoundingClientRect().top-(window.visualViewport?.offsetTop||0)-12;if(Math.abs(diff)>15)window.scrollBy({top:diff,behavior:'instant'})};
+ const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
  shift();setTimeout(shift,130);setTimeout(shift,320);
 });
+window.visualViewport?.addEventListener('resize',updateViewportPosition);
+window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
  if(element.dataset.nav){view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
@@ -184,12 +217,12 @@ app.addEventListener('click',async e=>{
   const weight=kg?Number(kg.replace(',','.')):null;if(weight!==null&&weight>500){fail('Вес не может превышать 500 кг.');return}
   const prev=state.workout.current,success=await send('record',{reps:Number(val),...(weight!==null?{weight}:{})});
   if(!success){const repetitions=document.getElementById('reps'),weightInput=document.getElementById('weight');if(repetitions)repetitions.value=val;if(weightInput)weightInput.value=kg;return}
-  if(state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();draw()}return;
+  if(state.workout?.current&&Number(prev.rest_seconds)>0){restUntil=Date.now()+prev.rest_seconds*1000;restFor=nextKey();storeRestTimer();draw()}else{restUntil=0;restFor='';storeRestTimer()}return;
  }
- if(cmd==='rest-skip'){restUntil=0;restFor='';draw();return}
+ if(cmd==='rest-skip'){restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor=''}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
@@ -211,6 +244,6 @@ app.addEventListener('click',async e=>{
  if(cmd==='history-more'){await loadHistoryPage();return}
  if(cmd==='detail'){const id=Number(element.dataset.id);if(!Number.isSafeInteger(id))return;const result=await send('detail',{id});if(result){detail=result.detail;modal='detail';draw()}return}
 });
-setInterval(()=>{const element=document.getElementById('rest-count');if(!element)return;const seconds=Math.max(0,Math.ceil((restUntil-Date.now())/1000));if(!seconds){restUntil=0;restFor='';draw();return}element.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`},500);
+setInterval(()=>{const element=document.getElementById('rest-count');if(!element)return;const seconds=Math.max(0,Math.ceil((restUntil-Date.now())/1000));if(!seconds){restUntil=0;restFor='';storeRestTimer();draw();return}element.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`},500);
 if(token){try{tg.ready();tg.expand()}catch(e){}send('state')}else draw();
 })();
