@@ -195,5 +195,31 @@ class V5StagingContract(unittest.TestCase):
             write.assert_not_called()
 
 
+    def test_rest_timer_resumes_from_previous_saved_set(self):
+        from decimal import Decimal
+        from unittest.mock import MagicMock
+        c = MagicMock()
+        p = {'goal': 'general', 'level': 'some'}
+        c.execute.return_value.fetchone.return_value = (
+            'done', 'reps', 'leg_press', Decimal('50.25'))
+        self.assertEqual(self.mod.workout_rest_remaining(c, 91, p), 70)
+        sql, args = c.execute.call_args.args
+        self.assertIn("s.state IN ('done', 'skipped')", sql)
+        self.assertIn('NOW() - s.completed_at', sql)
+        self.assertEqual(args, (91,))
+        # A skipped set must not start a new rest countdown.
+        c.execute.return_value.fetchone.return_value = (
+            'skipped', 'reps', 'leg_press', Decimal('1'))
+        self.assertEqual(self.mod.workout_rest_remaining(c, 91, p), 0)
+        # An old completed set must not restart the timer.
+        c.execute.return_value.fetchone.return_value = (
+            'done', 'reps', 'leg_press', Decimal('210'))
+        self.assertEqual(self.mod.workout_rest_remaining(c, 91, p), 0)
+        # Recovery in minutes must not trigger artificial rest.
+        c.execute.return_value.fetchone.return_value = (
+            'done', 'min', 'elliptical', Decimal('1'))
+        self.assertEqual(self.mod.workout_rest_remaining(c, 91, p), 0)
+
+
 if __name__ == '__main__':
     unittest.main()
