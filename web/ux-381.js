@@ -64,6 +64,16 @@ renderProfile=function(){
     `<button type="button" data-theme-mode="${key}" class="fq-theme-option ${themeMode===key?'sel':''}" aria-pressed="${themeMode===key?'true':'false'}">${label}</button>`).join('');
   const hint=grid.previousElementSibling;
   if(hint&&hint.classList.contains('subtitle'))hint.textContent='Автоматическая тема повторяет настройки телефона или Telegram.';
+  // A private, opt-in transition keeps the working Mini App untouched for other users.
+  if(state?.v5_preview_enabled&&grid.parentElement&&!document.getElementById('fq-v5-staging-entry')){
+    const link=document.createElement('a');
+    link.id='fq-v5-staging-entry';
+    link.href='/mini/v5';
+    link.textContent='Открыть Aluminium v5 · тестовый интерфейс';
+    link.style.cssText='display:block;margin-top:16px;padding:14px 16px;text-align:center;border:1px solid currentColor;border-radius:16px;font-weight:600;text-decoration:none';
+    link.setAttribute('aria-label','Открыть новый интерфейс Aluminium v5 для тестирования');
+    grid.parentElement.appendChild(link);
+  }
 };
 
 onboarding=function(){
