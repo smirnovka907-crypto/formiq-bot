@@ -2087,7 +2087,7 @@ def owner_v5_preview(m):
         web_app=types.WebAppInfo(url=BASE_URL + '/mini/v5')))
     BOT.send_message(
         m.chat.id,
-        'FORMIQ Aluminium v5 · проверка владельцем.\\n'
+        'FORMIQ Aluminium v5 · проверка владельцем.\n'
         'Это не демо: тренировки, подходы и кардио здесь записываются '
         'в настоящий дневник. Остальные пользователи продолжают '
         'открывать прежний интерфейс.',
