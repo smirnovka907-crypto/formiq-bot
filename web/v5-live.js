@@ -163,7 +163,7 @@ app.addEventListener('click',async e=>{
       if(state.metrics?.[name]!=null){fail('Не оставляй заполненные параметры пустыми.');return}
       continue;
     }
-    if(!(whole?/^\\d+$/:/^\\d+(?:[.,]\\d{1,2})?$/).test(raw)){fail('Проверь формат возраста, роста и веса.');return}
+    if(!(whole?/^\d+$/:/^\d+(?:[.,]\d{1,2})?$/).test(raw)){fail('Проверь формат возраста, роста и веса.');return}
     const value=Number(raw.replace(',','.'));
     if(!Number.isFinite(value)||value<min||value>max){fail('Проверь допустимые значения: возраст 18–100, рост 100–240, вес 25–300.');return}
     if(state.metrics?.[name]==null||Number(state.metrics[name])!==value)changes[name]=value;
