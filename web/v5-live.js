@@ -163,7 +163,7 @@ app.addEventListener('click',async e=>{
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
   const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
-  if(saved){cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']=''}
+  if(saved){cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';draw()}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
