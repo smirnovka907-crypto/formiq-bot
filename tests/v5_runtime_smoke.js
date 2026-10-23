@@ -13,7 +13,7 @@ function createClient(auth=true){
   querySelector(){return null},
   activeElement:null
  };
- let workout=null;
+ let workout=null,metrics={age:29,height_cm:178,weight_kg:75};
  const client={
   root,handlers,fields,requests,
   failOnce(action){failActions.add(action)},
@@ -26,7 +26,7 @@ function createClient(auth=true){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},tier_name:'Тестовый доступ',
+    profile:{goal:'Поддерживать форму'},tier_name:'Тестовый доступ',metrics:{...metrics},
     workout,history:[{id:8,date:'23.10.2026',title:'Силовая'}],
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -44,6 +44,11 @@ function createClient(auth=true){
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
+   else if(p.action==='save_metrics'){
+    assert.equal(Object.keys(p.metrics).join(','),'weight_kg','Only explicitly edited metric may be patched');
+    metrics={...metrics,...p.metrics};
+    response={ok:true,patch:{metrics:{...metrics},zones:[]}};
+   }
    else if(p.action==='finish'){workout=null;response={ok:true,data:state()}}
    else if(p.action==='skip')response={ok:true,patch:{workout}};
    else throw Error('Unexpected action: '+p.action);
@@ -122,6 +127,14 @@ async function run(){
  assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Period button must show all 7 days, not just workout days');
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
+ assert.match(app.root.innerHTML,/id="metric-age"[^>]*value="29"/);
+ assert.match(app.root.innerHTML,/id="metric-height"[^>]*value="178"/);
+ app.input('metric-weight','74.5');
+ await app.click({cmd:'save-metrics'});
+ const metricSave=app.requests.find(x=>x.action==='save_metrics');
+ assert.equal(metricSave.metrics.weight_kg,'74.5');
+ assert.match(app.root.innerHTML,/id="metric-weight"[^>]*value="74.5"/);
+ assert.match(app.root.innerHTML,/id="metric-age"[^>]*value="29"/);
  await app.click({nav:'progress'});
  assert.match(app.root.innerHTML,/История тренировок/);
  await app.click({cmd:'calendar'});
