@@ -14,6 +14,7 @@ function createClient(auth=true){
   activeElement:null
  };
  let workout=null;
+ let metrics={age:34,height_cm:181,weight_kg:82};
  const client={
   root,handlers,fields,requests,
   failOnce(action){failActions.add(action)},
@@ -26,7 +27,7 @@ function createClient(auth=true){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{goal:'general'},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},tier_name:'Тестовый доступ',
+    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',
     workout,history:[{id:8,date:'23.10.2026',title:'Силовая'}],
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -44,6 +45,10 @@ function createClient(auth=true){
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
+   else if(p.action==='save_metrics'){
+    assert.ok(Object.keys(p.metrics).every(k=>['age','height_cm','weight_kg'].includes(k)));
+    Object.assign(metrics,p.metrics);response={ok:true,patch:{metrics:{...metrics},zones:[]}};
+   }
    else if(p.action==='finish'){workout=null;response={ok:true,data:state()}}
    else if(p.action==='skip')response={ok:true,patch:{workout}};
    else throw Error('Unexpected action: '+p.action);
@@ -105,6 +110,24 @@ async function run(){
  assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Period button must show all 7 days, not just workout days');
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
+ assert.match(app.root.innerHTML,/Изменить параметры/);
+ await app.click({cmd:'profile-metrics-edit'});
+ assert.match(app.root.innerHTML,/id="profile-age"[^>]*value="34"/);
+ app.input('profile-age','34');app.input('profile-height_cm','181');app.input('profile-weight_kg','84,5');
+ await app.click({cmd:'profile-metrics-save'});
+ const metricSaves=app.requests.filter(x=>x.action==='save_metrics');
+ assert.equal(metricSaves.length,1);
+ assert.deepEqual(metricSaves[0].metrics,{weight_kg:84.5},'Saving weight must not alter age or height');
+ assert.match(app.root.innerHTML,/84.5/);
+ assert.match(app.root.innerHTML,/Изменения сохранены/);
+ await app.click({cmd:'profile-metrics-edit'});
+ app.input('profile-age','10');app.input('profile-height_cm','181');app.input('profile-weight_kg','84.5');
+ await app.click({cmd:'profile-metrics-save'});
+ assert.equal(app.requests.filter(x=>x.action==='save_metrics').length,1,'Invalid age must not reach API');
+ assert.match(app.root.innerHTML,/Проверь допустимые значения/);
+ await app.click({cmd:'profile-metrics-cancel'});
+ assert.doesNotMatch(app.root.innerHTML,/id="profile-age"/);
+
  await app.click({nav:'progress'});
  assert.match(app.root.innerHTML,/История тренировок/);
  await app.click({cmd:'calendar'});
