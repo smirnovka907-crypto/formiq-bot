@@ -3000,7 +3000,8 @@ def mini_state(chat, just_finished=False):
             current = next((s for s in rows if s[5]=='pending'),None)
             workout = {'id':wid,'day':day,'week':week,'done':done,
                 'skipped':skipped,'total':len(rows),'exercise_count':len({s[0] for s in rows}),
-                'current':None, 'finished':False, 'legacy':not bool(rows), 'title':manual_title or day_title_for_code(chat,day)}
+                'current':None, 'finished':False, 'legacy':not bool(rows), 'title':manual_title or day_title_for_code(chat,day),
+                'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
             if current:
                 pos, num, low, high, unit, _, name, key = current
                 info = EX.get(key, (name,'Двигайся плавно.','При боли остановись.'))
@@ -3627,6 +3628,29 @@ def rest_recommendation(p, key, unit='reps'):
         seconds = min(seconds, 120)
     return max(45, min(180, (seconds//15)*15))
 
+def workout_rest_remaining(conn, workout_id, user_profile):
+    """Remaining recommended rest using saved set completion time.
+
+    Uses PostgreSQL time, not browser state. No new columns or writes.
+    A skipped set does not start a rest timer.
+    """
+    row = conn.execute("""
+        SELECT s.state, s.unit, i.exercise_key,
+               GREATEST(0, EXTRACT(EPOCH FROM (NOW() - s.completed_at)))
+        FROM workout_sets s
+        JOIN workout_items i ON i.workout_id=s.workout_id
+            AND i.position=s.position
+        WHERE s.workout_id=%s AND s.state IN ('done', 'skipped')
+        ORDER BY s.completed_at DESC NULLS LAST, s.position DESC, s.set_no DESC
+        LIMIT 1
+    """, (workout_id,)).fetchone()
+    if not row or row[0] != 'done' or row[3] is None:
+        return 0
+    duration = rest_recommendation(user_profile, row[2], row[1])
+    seconds_elapsed = max(0, float(row[3]))
+    return max(0, int(duration - seconds_elapsed + 0.999))
+
+
 def mini_workout_delta(chat):
     """One short database session: only the live workout; no full dashboard."""
     with db() as c:
@@ -3648,7 +3672,8 @@ def mini_workout_delta(chat):
         title=manual_title or day_title(p,day)
         item={'id':wid,'day':day,'week':week,'done':done,'skipped':skipped,
               'total':len(rows),'exercise_count':len({r[0] for r in rows}),
-              'current':None,'finished':False,'legacy':not bool(rows),'title':title}
+              'current':None,'finished':False,'legacy':not bool(rows),'title':title,
+              'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
         if current:
             pos,num,low,high,unit,_,name,key=current
             info=EX.get(key,(name,'Двигайся плавно.','При боли остановись.'))
