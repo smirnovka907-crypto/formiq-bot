@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
 
-function createClient(auth=true){
+function createClient(auth=true, initialWorkout=null){
  const requests=[],handlers={},fields=new Map(),failActions=new Set();
  let html='';
  const root={get innerHTML(){return html},set innerHTML(value){html=value;for(const field of fields.values()){const after=html.split('id="'+field.id+'"')[1];const input=after?.split('>')[0];field.value=input?.match(/value="([^"]*)"/)?.[1]??''}},addEventListener(name,fn){handlers[name]=fn}};
@@ -13,7 +13,7 @@ function createClient(auth=true){
   querySelector(){return null},
   activeElement:null
  };
- let workout=null,metrics={age:29,height_cm:178,weight_kg:75};
+ let workout=initialWorkout,metrics={age:29,height_cm:178,weight_kg:75};
  const client={
   root,handlers,fields,requests,
   failOnce(action){failActions.add(action)},
@@ -38,7 +38,7 @@ function createClient(auth=true){
     workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно'}};
     response={ok:true,patch:{workout}};
    }else if(p.action==='record'){
-    workout={...workout,done:1,current:{...workout.current,set_no:2}};
+    workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     response={ok:true,patch:{workout}};
    }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
@@ -76,6 +76,14 @@ async function run(){
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
+ const resumed=createClient(true,{id:41,done:1,total:3,finished:false,title:'Зал',
+   rest_remaining_seconds:47,
+   current:{name:'Жим ногами',position:0,set_no:2,set_count:3,low:10,high:12,
+     unit:'reps',rest_seconds:120,tip:'Плавно'}});
+ await settle();
+ assert.match(resumed.root.innerHTML,/rest-count/,'Saved rest resumes on authenticated state load');
+ await resumed.click({cmd:'rest-skip'});
+ assert.doesNotMatch(resumed.root.innerHTML,/rest-count/,'Skipped rest disappears');
  const app=createClient(true);
  await settle();
  assert.match(app.root.innerHTML,/Начать тренировку/);
