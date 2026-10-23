@@ -171,4 +171,97 @@ body.cardio-typing .bottom-nav{visibility:hidden}
 .fq-live-onboarding-link{display:block;text-align:center}
 .fq-live-banner{border-radius:15px;background:rgba(145,169,140,.13);padding:13px 14px;color:var(--secondary);font-size:13px;line-height:1.5;margin-bottom:18px}
 @media (max-width:375px){.fq-live-grid{gap:8px}.fq-live-dialog{padding:16px}}
+
+/* UI fidelity: last approved Aluminium v5 polished preview (4ee68f6) */
+/* Mobile Safari/Telegram preview: swipe the document and keep navigation stable. */
+html,body{height:auto;min-height:100%;overscroll-behavior-y:auto}
+.app{height:auto;min-height:100dvh;overflow-y:visible;touch-action:pan-y}
+.view{padding-bottom:calc(138px + env(safe-area-inset-bottom))}
+.view.no-bottom{padding-bottom:calc(138px + env(safe-area-inset-bottom))}
+.bottom-nav{touch-action:manipulation}
+input,select,textarea{max-width:100%}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+
+/* Approved v4: calm silver date ranges instead of numbered week tabs */
+.week-selector{display:grid;grid-template-columns:1fr;gap:9px;margin:5px 0 18px}
+.week-selector button{height:auto;min-height:66px;width:100%;padding:12px 15px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;border-radius:15px;background:rgba(255,255,255,.28);border:1px solid rgba(101,113,117,.22);box-shadow:none}
+.week-selector button.on{background:linear-gradient(130deg,#e5ebe9,#d5ddda);border-color:#8c9b98;box-shadow:inset 0 1px 3px rgba(64,75,72,.12)}
+.week-range{display:block;color:#293537;font-size:17px;line-height:1.25;font-weight:765;letter-spacing:-.2px}
+.week-meta{display:block;margin-top:5px;color:#616e70;font-size:12px;font-weight:570}
+.week-chevron{color:#617173;font-size:22px;font-weight:450;min-width:16px}
+.plan-entry:disabled{opacity:1;cursor:pointer}
+.history-detail{font-size:14px;line-height:1.5;color:#536164}
+.connection-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:15px 0;border-bottom:1px solid var(--line)}
+.connection-row:last-child{border-bottom:0;padding-bottom:0}
+.connection-title{font-weight:750;font-size:16px}
+.connection-hint{font-size:13px;color:#607072;margin-top:5px}
+.connection-status{font-size:12px;color:#5c696a;border:1px solid #c2ccca;border-radius:99px;padding:6px 9px;white-space:nowrap}
+.home-equipment-panel{margin-top:13px;padding:16px;border:1px solid rgba(101,113,117,.20);border-radius:16px;background:rgba(255,255,255,.24)}
+.home-equipment-panel textarea{display:block;width:100%;min-height:102px;margin-top:9px}
+.home-equipment-panel .input-note{font-size:13px;line-height:1.45;margin:10px 0 0}
+
+/* Approved final plan: period and training days are separate matching silver buttons. */
+.week-selector{display:flex;flex-direction:column;gap:10px}
+.week-group{display:flex;flex-direction:column;gap:9px;border:0;background:transparent}
+.week-group > button{width:100%;min-height:68px;padding:12px 15px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid rgba(101,113,117,.20)!important;border-radius:16px!important;background:rgba(255,255,255,.19)!important;box-shadow:none!important}
+.week-group > button.on{background:linear-gradient(125deg,rgba(221,228,225,.78),rgba(245,248,247,.75))!important;border-color:#8c9b98!important}
+.week-details{padding:0 0 0 10px;border:0;background:transparent}
+.week-details .plan-list{display:grid;gap:9px;margin:0}
+.week-details .plan-entry{width:100%;min-height:68px;padding:12px 15px;display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;border:1px solid rgba(101,113,117,.20);border-radius:16px;background:rgba(255,255,255,.28);box-shadow:none}
+.week-details .plan-entry strong{display:block;color:#293537;font-size:17px;line-height:1.25;font-weight:765}
+.week-details .plan-entry small{display:block;margin-top:5px;color:#616e70;font-size:14px;line-height:1.35;font-weight:570}
+.week-details .plan-chevron{font-size:22px;font-weight:450;color:#617173;flex-shrink:0}
+
+/* Cardio follows existing monochrome style without a new bottom tab. */
+.cardio-history{margin-top:12px;border-top:1px solid var(--line)}
+.cardio-history-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.cardio-history-row strong{display:block;font-size:15px;font-weight:750}
+.cardio-history-row small{display:block;margin-top:3px;color:var(--secondary);font-size:12px}
+.cardio-history-row>.muted{font-size:12px;text-align:right}
+
+/* Cardio modal — same silver buttons and radii as the rest of FormIQ. */
+.modal-panel .cardio-type-trigger{width:100%;min-height:54px;margin-top:4px;justify-content:space-between;text-align:left}
+.cardio-choices{display:grid;grid-template-columns:1fr;gap:9px;margin:14px 0 8px}
+.modal-panel .cardio-choice{margin-top:0;min-height:55px;justify-content:space-between;text-align:left;font-size:16px}
+.cardio-chevron{font-size:22px;color:#657575}
+/* Preview-only integration state buttons in Profile */
+.preview-integrations{margin:9px 0 16px}
+.preview-integrations .button-subtle{min-height:46px;font-size:13px}
+/* Fixed-in-view settings access: keep the approved header in place while scrolling. */
+.profile-open{position:fixed;top:calc(19px + env(safe-area-inset-top));right:max(20px,calc((100vw - 460px)/2 + 20px));z-index:75;background:rgba(238,243,241,.94);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);box-shadow:0 4px 18px rgba(39,50,50,.12)}
+@media(min-width:750px){.profile-open{top:calc(43px + env(safe-area-inset-top))}}
+.history-scroll{overflow-y:auto;overscroll-behavior:contain;max-height:min(490px,65dvh);scrollbar-width:thin;margin:11px 0 14px;border-top:1px solid var(--line)}
+.history-scroll .cardio-history-row{min-height:70px}
+.history-modal .button-subtle{margin-top:8px}
+
+/* Keyboard-safe cardio editor follows the visual viewport above the mobile keyboard. */
+.modal-wrap.cardio-sheet.keyboard-open{
+  top:var(--cardio-visible-top,0px);bottom:auto;
+  height:var(--cardio-visible-height,100dvh);
+  align-items:flex-start;
+}
+.modal-wrap.cardio-sheet.keyboard-open .modal-panel{
+  max-height:var(--cardio-visible-height,100dvh);
+  width:100%;padding-top:max(12px,env(safe-area-inset-top));
+  border-radius:0 0 22px 22px;
+  scroll-padding-top:64px;overscroll-behavior:contain;
+}
+.modal-wrap.cardio-sheet.keyboard-open .modal-panel h2{
+  position:sticky;top:0;z-index:1;padding:9px 0;
+  background:#f4f7f5;
+}
+.modal-wrap.cardio-sheet .cardio-type-trigger{justify-content:flex-start}
+
+/* Telegram fullscreen content insets, form controls and 4-button navigation. */
+.view{padding-top:calc(18px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));padding-bottom:calc(138px + max(env(safe-area-inset-bottom),var(--fq-content-safe-bottom,0px)))}
+.view.no-bottom{padding-bottom:calc(138px + max(env(safe-area-inset-bottom),var(--fq-content-safe-bottom,0px)))}
+.bottom-nav{grid-template-columns:repeat(4,minmax(0,1fr));padding-bottom:max(12px,env(safe-area-inset-bottom),var(--fq-content-safe-bottom,0px))}
+.field select{min-width:0;width:100%;min-height:51px;border:1px solid #b9c6c3;border-radius:12px;padding:10px 12px;color:#344143;background:rgba(255,255,255,.55)}
+.fq-onboard-check{display:flex;gap:11px;align-items:flex-start;margin:15px 0;color:#394648;font-size:14px;line-height:1.45}
+.fq-onboard-check input{width:20px;height:20px;flex:none;accent-color:#667771;margin:0}
+.fq-onboard-areas{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:13px 0 19px}
+.fq-onboard-areas label{display:flex;gap:9px;align-items:center;border:1px solid rgba(101,113,117,.20);border-radius:13px;padding:10px;background:rgba(255,255,255,.25);font-size:13px}
+.fq-onboard-areas input{width:17px;height:17px;flex:none;accent-color:#667771}
+.fq-onboard-actions{display:grid;gap:9px;margin-top:23px}
+@media(max-width:360px){.fq-onboard-areas{grid-template-columns:1fr}.form-row{gap:6px}}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
