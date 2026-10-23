@@ -84,11 +84,11 @@ async function run(){
  const restored={storage:new Map(),workout:{id:71,done:1,total:3,finished:false,title:'Зал',
    rest_remaining_seconds:47,current:{name:'Жим ногами',position:0,set_no:2,set_count:3,
      low:10,high:12,unit:'reps',rest_seconds:120,tip:'Плавно'}}};
- const resumed=createClient(true,restored);
+ const serverResumed=createClient(true,restored);
  await settle();
- assert.match(resumed.root.innerHTML,/rest-count/,'Server time restores rest with empty sessionStorage');
- await resumed.click({cmd:'rest-skip'});
- assert.doesNotMatch(resumed.root.innerHTML,/rest-count/,'User can skip rest');
+ assert.match(serverResumed.root.innerHTML,/rest-count/,'Server time restores rest with empty sessionStorage');
+ await serverResumed.click({cmd:'rest-skip'});
+ assert.doesNotMatch(serverResumed.root.innerHTML,/rest-count/,'User can skip rest');
  const reopened=createClient(true,restored);
  await settle();
  assert.doesNotMatch(reopened.root.innerHTML,/rest-count/,'Skipped rest persists across reload');
