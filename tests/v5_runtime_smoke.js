@@ -69,7 +69,14 @@ function createClient(auth=true,shared={}){
    else if(p.action==='history_page')response={ok:true,history:[{id:8,date:'23.10.2026',title:'Силовая'}],next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');response={ok:true,data:state()};}
-   else if(p.action==='save_metrics'){
+   else if(p.action==='onboarding'){
+     assert.equal(p.terms,true);assert.equal(p.privacy,true);assert.equal(p.health,true);
+     assert.equal(p.answers.age_group,'adult');
+     assert.ok(p.metrics.age>=18);
+     assert.ok(Array.isArray(p.health_profile.affected));
+     response={ok:true,data:state()};
+    }
+    else if(p.action==='save_metrics'){
     assert.ok(Object.keys(p.metrics).every(k=>['age','height_cm','weight_kg'].includes(k)));
     Object.assign(metrics,p.metrics);response={ok:true,patch:{metrics:{...metrics},zones:[]}};
    }
@@ -81,7 +88,7 @@ function createClient(auth=true,shared={}){
  };
  const context={
   document:doc,
-  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){}}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
+  window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){},...(shared.fullscreen?{isVersionAtLeast(){return true},requestFullscreen(){shared.fullscreenCalls=(shared.fullscreenCalls||0)+1},onEvent(){}}:{})}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
   fetch:client.fetch,
   setTimeout(fn){return 1},clearTimeout(){},setInterval(fn){return 1},
   AbortController,Date,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
@@ -237,6 +244,27 @@ async function run(){
  await app.click({cmd:'nutrition-analyze'});
  assert.equal(reportCount(),1,'One report uploaded with consent');
  assert.match(app.root.innerHTML,/1900 ккал/);
- console.log('PASS v5 signed API, start, sets, retry-preserved fields, rest, history/calendar cardio and nutrition consent');
+ const polished={fullscreen:true};
+  const ux=createClient(true,polished);await settle();
+  assert.equal(polished.fullscreenCalls,1,'Supported Telegram clients request true fullscreen');
+  assert.match(ux.root.innerHTML,/Главная/);
+  await ux.click({nav:'plan'});
+  assert.match(ux.root.innerHTML,/Твой план/);
+  assert.match(ux.root.innerHTML,/week-range/);
+  await ux.click({nav:'profile'});
+  await ux.click({cmd:'onboard-open'});
+  assert.match(ux.root.innerHTML,/data-onboard="goal"/);
+  assert.doesNotMatch(ux.root.innerHTML,/href="\/mini\/legacy"/,'Profile editing stays in v5');
+  await ux.click({cmd:'onboard-save'});
+  assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
+  for(const key of ['adult','terms','privacy','health']){
+   ux.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+  }
+  await ux.click({cmd:'onboard-save'});
+  const edits=ux.requests.filter(x=>x.action==='onboarding');
+  assert.equal(edits.length,1,'Signed onboard edit is saved via API');
+  assert.equal(edits[0].metrics.weight_kg,82);
+  assert.match(ux.root.innerHTML,/Главная/,'Returns to v5 after profile save');
+  console.log('PASS v5 signed API, four tabs, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
