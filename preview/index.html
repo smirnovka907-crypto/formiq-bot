@@ -73,7 +73,7 @@ function weeksDay(i,n){return addDays(weekStart(i),n)}
 function spanDate(i){const a=dateObj(weekStart(i)),b=dateObj(weeksDay(i,6));if(a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear())return `${a.getDate()}–${b.getDate()} ${readable(weeksDay(i,6)).split(' ')[1]}`;return `${readable(weekStart(i))} — ${readable(weeksDay(i,6))}`;}
 function schedule(){return profile.days.length?[...profile.days].sort((a,b)=>a-b):[0,2,4]}
 function isWorkout(date){return schedule().includes(dow(date))}
-function sessionName(date){const i=schedule().indexOf(dow(date));return ['Ноги и корпус','Верх тела','Всё тело','Силовая тренировка'][Math.max(0,i)%4]}
+function sessionName(date){const i=schedule().indexOf(dow(date));return ['Ноги и пресс','Верх тела','Всё тело','Силовая тренировка'][Math.max(0,i)%4]}
 function isDemoSchedule(){return !profile.days.length}
 function trainingWord(n){return n%10===1 && n%100!==11?"тренировка":([2,3,4].includes(n%10) && (n%100<12 || n%100>14)?"тренировки":"тренировок")}
 function header(back=false){return `<header class="header"><span class="brand" aria-label="FORMIQ"><span>FORM</span><em>IQ</em></span>${back?`<button class="back" data-act="back">${ico('arrow')} Назад</button>`:`<button class="profile-open" data-act="profile" aria-label="Профиль">${ico('user')}</button>`}</header>`}
