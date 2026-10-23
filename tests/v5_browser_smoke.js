@@ -128,8 +128,12 @@ async function run(){
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Питание');
    await checkLayout('food');
    await page.screenshot({path:path.join(OUT,'food-'+size.width+'.png')});
+   assert.equal(await page.locator('.profile-open').evaluate(el=>getComputedStyle(el).position),'static',
+    'Profile shortcut must scroll with header instead of covering content');
    await page.getByRole('button',{name:'Профиль'}).click();
    await page.getByRole('button',{name:'Редактировать анкету'}).click();
+   assert.equal(await page.locator('.profile-open').isVisible(),false,
+    'Profile shortcut must not cover editable questionnaire fields');
    await page.locator('[data-onboard-pick="goal"]').first().waitFor();
    assert.equal(await page.locator('a[href="/mini/legacy"]').count(),0,'No 38.2 redirect');
    assert.equal(await page.locator('input#onboard-duration').count(),1,'Approved duration slider');
@@ -153,6 +157,11 @@ async function run(){
   await onboarding.locator('button[data-cmd="onboard-save"]').waitFor();
   assert.equal(await onboarding.locator('a[href="/mini/legacy"]').count(),0);
   assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No bottom navigation before finishing onboarding');
+  assert.equal(await onboarding.locator('.profile-open').isVisible(),false,'No profile shortcut before onboarding is complete');
+  await onboarding.locator('.profile-open').evaluate(el=>el.click());
+  assert.equal(await onboarding.locator('button[data-cmd="onboard-save"]').count(),1,
+   'A synthetic header click must not bypass mandatory onboarding');
+  assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No tabs after attempted onboarding bypass');
   await onboarding.screenshot({path:path.join(OUT,'first-launch.png')});
   await onboarding.close();
   process.stdout.write('PASS browser: 3 tabs, nested plan, screen layout, fullscreen stub, profile, first launch (2 mobile sizes)\n');
