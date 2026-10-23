@@ -2964,6 +2964,7 @@ def mini_state(chat, just_finished=False):
         'tier': tier,
         'tier_demo': not PREMIUM_ENFORCED,
         'tier_name': TIER_LABEL[tier],
+         'v5_preview_enabled': bool(ADMIN_ID > 0 and int(chat) == ADMIN_ID),
     }
     with db() as c:
         total, last7, last30 = c.execute('''
