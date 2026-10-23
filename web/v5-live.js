@@ -5,8 +5,8 @@ const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const button=(text,cmd,main=false,attrs='')=>`<button type="button" data-cmd="${cmd}" class="${main?'button-main':'button-subtle'}" ${attrs}>${esc(text)}</button>`;
 const block=html=>`<section class="surface">${html}</section>`;
 const h=()=>`<header class="header"><span class="brand"><span>FORM</span><em>IQ</em></span><button class="profile-open" data-nav="profile" aria-label="Профиль"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3-7 8-7s8 3 8 7"/></svg></button></header>`;
-const icon={home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 4l-5 5M20 15l-5 5"/>',food:'<path d="M6 3v7a3 3 0 0 0 6 0V3M9 3v18M18 3v18M16 3c4 2 4 8 2 9"/>',progress:'<path d="M4 20h16M5 17l5-6 4 3 5-8"/>'};
-const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
+const icon={plan:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/>',home:'<path d="m6.5 6.5 11 11M4 9l5-5M15 20l5-5M3 7l4-4M17 21l4-4M9 4l-5 5M20 15l-5 5"/>',food:'<path d="M6 3v7a3 3 0 0 0 6 0V3M9 3v18M18 3v18M16 3c4 2 4 8 2 9"/>',progress:'<path d="M4 20h16M5 17l5-6 4 3 5-8"/>'};
+const nav=()=>`<nav class="bottom-nav">${[['home','Главная'],['plan','План'],['progress','Прогресс'],['food','Питание']].map(([k,n])=>`<button class="nav-item ${view===k?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
 let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false,nutritionAnswer='',nutritionBusy=false;
@@ -151,6 +151,16 @@ function periodLabel(n){
  }
  return `Период ${n}`;
 }
+
+function planPage(){
+ const rows=state?.calendar||[];
+ const periods=[1,2,3,4].map(i=>{
+  const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-expanded="'+(week===i)+'"><span class="week-range">'+esc(periodLabel(i))+'</span></button>';
+  const dates=rows.filter(r=>r.week===i).map(r=>'<div class="plan-entry"><span><strong>'+esc(r.title)+'</strong><small>'+esc(r.date_ru)+' · '+(r.status==='done'?'Выполнено':'По плану')+'</small></span></div>').join('');
+  return '<div class="week-group">'+toggle+(week===i?'<div class="week-details">'+(dates||'<p class="empty">Нет занятий</p>')+'</div>':'')+'</div>';
+ });
+ return page('Твой план','<p class="intro">Нажми на период — занятия раскроются прямо под ним.</p><section class="week-selector">'+periods.join('')+'</section>');
+}
 function progress(){
  const stats=state.stats||{},plan=state.calendar||[];
  return page('Прогресс',block(`<h2>Результаты</h2><div class="fq-live-grid"><div><span class="eyebrow">ТРЕНИРОВОК</span><h2>${stats.total||0}</h2></div><div><span class="eyebrow">ПОДХОДОВ</span><h2>${stats.sets||0}</h2></div></div>`)+
@@ -196,7 +206,7 @@ function modalHTML(){
 function draw(){
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
- app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${view==='home'?training():view==='progress'?progress():view==='food'?food():profile()}</main>${(view==='profile'||!active())?nav():''}${modalHTML()}`;
+ app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${view==='home'?training():view==='plan'?planPage():view==='progress'?progress():view==='food'?food():profile()}</main>${(view==='profile'||!active())?nav():''}${modalHTML()}`;
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
@@ -319,5 +329,24 @@ app.addEventListener('click',async e=>{
  if(cmd==='detail'){const id=Number(element.dataset.id);if(!Number.isSafeInteger(id))return;const result=await send('detail',{id});if(result){detail=result.detail;modal='detail';draw()}return}
 });
 setInterval(()=>{const element=document.getElementById('rest-count');if(!element)return;const seconds=Math.max(0,Math.ceil((restUntil-Date.now())/1000));if(!seconds){restUntil=0;restFor='';storeRestTimer();draw();return}element.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`},500);
-if(token){try{tg.ready();tg.expand()}catch(e){}send('state')}else draw();
+function syncTelegramInsets(){
+ const safe=tg?.safeAreaInset||{},content=tg?.contentSafeAreaInset||{};
+ for(const side of ['top','bottom']){
+  const inset=Math.max(0,Number(safe[side])||0,Number(content[side])||0);
+  document.documentElement?.style?.setProperty('--fq-content-safe-'+side,Math.min(inset,180)+'px');
+ }
+}
+if(token){
+ try{
+  tg.ready();tg.expand();syncTelegramInsets();
+  if(typeof tg.onEvent==='function'){
+   tg.onEvent('safeAreaChanged',syncTelegramInsets);
+   tg.onEvent('contentSafeAreaChanged',syncTelegramInsets);
+   tg.onEvent('fullscreenChanged',syncTelegramInsets);
+  }
+  if(typeof tg.requestFullscreen==='function'&&
+     (typeof tg.isVersionAtLeast!=='function'||tg.isVersionAtLeast('8.0')))tg.requestFullscreen();
+ }catch(_e){/* Older Telegram clients stay expanded. */}
+ send('state');
+}else draw();
 })();
