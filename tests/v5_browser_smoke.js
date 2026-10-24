@@ -204,7 +204,8 @@ async function run(){
    assert.equal(await page.locator('#cardio-hr').inputValue(),'120','Failed save preserves heart rate');
    await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
    assert.equal(await page.locator('.cardio-inline').count(),1,'Cardio editor remains available after save');
-   assert.equal(await page.locator('#cardio-min').inputValue(),'','Saved cardio must clear editor');
+   await page.waitForFunction(()=>document.querySelector('#cardio-min')?.value==='','Saved cardio must clear editor');
+   assert.equal(await page.locator('#cardio-hr').inputValue(),'','Saved heart rate must clear');
    await page.locator('.bottom-nav [data-nav="progress"]').click();
    await page.getByRole('button',{name:/Кардио · Велосипед · 60 мин/}).click();
    await page.getByText('Записано в тестовом дневнике',{exact:true}).waitFor();
