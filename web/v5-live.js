@@ -14,7 +14,7 @@ const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&state?.metrics?.age&
 // Server-side safety warnings prevent unsafe sessions, not access to the app.
 const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 let onboardOpen=false,onboard=null,onboardErrors={};
-let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false;
+let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -143,13 +143,20 @@ async function loadFemalePeriods(){
   const res=await request('period_list');
   periodEntries=Array.isArray(res.periods)?res.periods:[];
   periodPrediction=res.next_period||null;periodError='';
+  if(!periodMonth&&periodEntries.length)periodMonth=periodEntries[0].start.slice(0,7);
  }catch(_e){periodError='Не удалось загрузить приватный календарь.'}
  finally{periodBusy=false;draw()}
 }
 function femaleCalendar(){
  if(state?.metrics?.sex!=='female')return '';
  const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
- const entries=(periodEntries||[]).map(p=>'<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
+ const months=[...new Set((periodEntries||[]).map(p=>p.start.slice(0,7)))];
+ const current=months.includes(periodMonth)?periodMonth:months[0]||'';
+ const selector=months.length?'<label class="field" style="margin-top:16px"><span>Месяц истории</span><select id="period-month">'+
+  months.map(v=>'<option value="'+esc(v)+'"'+(v===current?' selected':'')+'>'+esc(v.slice(5,7)+'.'+v.slice(0,4))+'</option>').join('')+
+  '</select></label>':'';
+ const entries=(periodEntries||[]).filter(p=>p.start.slice(0,7)===current).map(p=>
+  '<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
   button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
  const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
   esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
@@ -162,7 +169,7 @@ function femaleCalendar(){
   (periodError?'<p role="alert" class="fq-form-error">'+esc(periodError)+'</p>':'')+
   '<div class="workout-cta">'+button(periodEditing?'Сохранить исправление':'Добавить период','period-save',true)+
   (periodEditing?button('Отмена','period-cancel'):'')+'</div>'+
-  '<h3 class="section-label">История</h3>'+(periodBusy?'<p>Загрузка...</p>':entries||'<p class="empty">Записей пока нет.</p>')+
+  '<h3 class="section-label">История по месяцам</h3>'+selector+(periodBusy?'<p>Загрузка...</p>':entries||'<p class="empty">Записей пока нет.</p>')+
   estimate+'</section>';
 }
 
@@ -617,6 +624,7 @@ app.addEventListener('input',e=>{
  onboardChanged(e);
  if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
+ if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
@@ -655,6 +663,7 @@ app.addEventListener('click',async e=>{
   try{
    const response=await request('period_save',{...periodDraft,...(periodEditing?{id:periodEditing}:{})});
    periodEntries=response.periods||[];periodPrediction=response.next_period||null;
+   periodMonth=periodDraft.start.slice(0,7);
    periodEditing=null;periodDraft={start:'',end:''};periodError='';
   }catch(e){periodError=e.message||'Не удалось сохранить даты.'}
   finally{periodBusy=false;draw()}
