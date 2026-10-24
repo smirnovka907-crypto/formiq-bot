@@ -32,7 +32,7 @@ async function run(){
  ].find(p=>fs.existsSync(p));
  assert.ok(chrome,'Chromium/Chrome executable not installed on runner');
  fs.mkdirSync(OUT,{recursive:true});
- let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false;
+ let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false,periodHistory=[];
  const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   if(req.method==='GET'&&req.url==='/approved-reference'){
@@ -69,6 +69,16 @@ async function run(){
     response={ok:true,dates:['2026-10-23']};
    }else if(data.action==='progress_series'){
     response={ok:true,exercises:profileState.finishedWeightHistory||[]};
+   }else if(data.action==='period_list'){
+    assert.equal(profileState.metrics.sex,'female','Female calendar only after consented sex selection');
+    response={ok:true,periods:periodHistory,next_period:null};
+   }else if(data.action==='period_save'){
+    assert.equal(profileState.metrics.sex,'female');
+    if(data.id){
+     const record=periodHistory.find(x=>x.id===data.id);
+     assert.ok(record);record.start=data.start;record.end=data.end;
+    }else periodHistory.unshift({id:periodHistory.length+1,start:data.start,end:data.end});
+    response={ok:true,periods:periodHistory,next_period:null};
    }else if(data.action==='detail'){
     const item=profileState.history.find(x=>x.id===data.id);
     response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
@@ -520,6 +530,19 @@ async function run(){
   await onboarding.getByRole('button',{name:'Редактировать анкету',exact:true}).click();
   for(const day of [0,2,4])assert.equal(await onboarding.locator('[data-onboard-weekday="'+day+'"]').getAttribute('aria-pressed'),'true','Saved weekday restored');
   await onboarding.screenshot({path:path.join(OUT,'saved-weekdays.png')});
+  await onboarding.getByRole('button',{name:'Отмена',exact:true}).click();
+  await onboarding.locator('.bottom-nav [data-nav="progress"]').click();
+  await onboarding.getByText('Женский календарь',{exact:true}).waitFor();
+  await onboarding.locator('#period-start').fill('2026-09-01');
+  await onboarding.locator('#period-end').fill('2026-09-05');
+  await onboarding.getByRole('button',{name:'Добавить период'}).click();
+  await onboarding.getByText('01.09.2026 — 05.09.2026',{exact:true}).waitFor();
+  assert.equal(await onboarding.locator('#period-month').inputValue(),'2026-09','Monthly private history selector');
+  await onboarding.getByRole('button',{name:'Изменить',exact:true}).click();
+  await onboarding.locator('#period-end').fill('2026-09-06');
+  await onboarding.getByRole('button',{name:'Сохранить исправление'}).click();
+  await onboarding.getByText('01.09.2026 — 06.09.2026',{exact:true}).waitFor();
+  await onboarding.screenshot({path:path.join(OUT,'female-period-calendar.png')});
   await onboarding.close();
   process.stdout.write('PASS browser: 3 tabs, nested plan, screen layout, fullscreen stub, profile, first launch (2 mobile sizes)\n');
  }finally{
