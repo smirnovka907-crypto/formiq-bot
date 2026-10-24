@@ -278,6 +278,7 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
    await page.getByRole('button',{name:'Вся история →'}).click();
    await page.locator('.history-modal .history-scroll').waitFor();
+   await page.locator('.history-modal .fq-history-action').first().waitFor(); // Snapshot real rows, not loading placeholder.
    await checkLayout('history bottom sheet');
    assert.equal(await page.locator('.history-modal [role="region"]').count(),1,'Scroll within history sheet');
    await page.screenshot({path:path.join(OUT,'history-modal-'+size.width+'.png')});
