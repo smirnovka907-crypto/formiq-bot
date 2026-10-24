@@ -6,6 +6,7 @@ on:
       - release/formiq-38.1.2
       - release/formiq-38.1.3
       - main
+      - fix/v5-native-onboarding-fullscreen-20261023
       - release/v5-public-launch-20261023
       - fix/v5-history-local-days-20261023
       - feature/formiq-v5-owner-preview-20261023
@@ -21,6 +22,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: formiq_schedule_test
+          POSTGRES_USER: formiq_test
+          POSTGRES_PASSWORD: formiq_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U formiq_test -d formiq_schedule_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FORMIQ_TEST_DATABASE_URL: postgresql://formiq_test:formiq_test_only@localhost:5432/formiq_schedule_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,20 +49,38 @@ jobs:
         run: node --check web/ux-381.js && node --check web/ux-3811.js && node --check web/ux-382.js && node --check web/v5-live.js
       - name: Test signed V5 frontend interactions offline
         run: node tests/v5_runtime_smoke.js
+      - name: Install headless Chromium test harness
+        run: |
+          npm install --no-save --no-package-lock --ignore-scripts playwright-core@1.56.1
+          (command -v google-chrome || command -v chromium)
+      - name: Browser layout screenshots and E2E (mobile)
+        run: node tests/v5_browser_smoke.js
+      - name: Save QA screenshots for visual review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formiq-v5-mobile-layout
+          path: browser-shots/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Install runtime and CSS validator
-        run: pip install -r requirements.txt tinycss2
+        id: runtime_dependencies
+        if: ${{ !cancelled() }}
+        run: pip install -r requirements.txt -r requirements-backup.txt tinycss2 'PyYAML>=6,<7' 'jsonschema>=4,<5'
+      - name: Validate isolated Android test Blueprint
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
+        run: |
+          python scripts/validate_android_test_blueprint.py
+          python scripts/validate_android_test_blueprint.py --profile kirill
       - name: Compile bot
-        run: python -m py_compile main.py welcome_art.py
-      - name: Run full static smoke and UX tests
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
+        run: python -m py_compile main.py welcome_art.py tests/test_v5_schedule_postgres.py
+      - name: Run full static smoke and UX tests (PostgreSQL 18)
+        if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
+        env:
+          # Use pg_dump/pg_restore from the matching PostgreSQL 18 service.
+          # Test credentials and archive remain in the disposable GitHub runner.
+          FORMIQ_TEST_PG_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           python tests/test_static.py
-          python -m unittest discover -s tests -p test_ux_381.py -v
-          python -m unittest discover -s tests -p test_routes_381.py -v
-          python -m unittest discover -s tests -p test_telegram_3813.py -v
-          python -m unittest discover -s tests -p test_382.py -v
-          python -m unittest discover -s tests -p test_v5_bridge.py -v
-          python -m unittest discover -s tests -p test_v5_local_dates.py -v
-          python -m unittest discover -s tests -p test_v5_owner_preview.py -v
-          python -m unittest discover -s tests -p test_v5_set_guard.py -v
-      - name: Run integration tests
-        run: python -m unittest discover -s tests -p test_integrations.py -v
+          python -m unittest discover -s tests -p 'test_*.py' -v

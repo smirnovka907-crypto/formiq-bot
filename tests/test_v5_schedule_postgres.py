@@ -1,0 +1,598 @@
+"""Opt-in PostgreSQL regression tests. Never use the application's DATABASE_URL.
+
+Each test owns an isolated schema in an explicitly named local test database.
+GitHub Actions supplies a disposable PostgreSQL service for these tests.
+"""
+import importlib
+import os
+import unittest
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
+from threading import Barrier
+from unittest.mock import patch
+from urllib.parse import urlparse
+
+import psycopg
+from psycopg import sql
+
+
+TEST_URL = os.environ.get('FORMIQ_TEST_DATABASE_URL')
+
+
+class Clock(datetime):
+    instant = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.instant.astimezone(tz) if tz else cls.instant.replace(tzinfo=None)
+
+
+@unittest.skipUnless(TEST_URL, 'FORMIQ_TEST_DATABASE_URL not supplied')
+class SchedulePostgresTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        target = urlparse(TEST_URL)
+        if (target.hostname not in ('localhost', '127.0.0.1', 'postgres')
+                or not target.path.rstrip('/').endswith('_test')):
+            raise RuntimeError('Scheduling regressions require a local *_test database')
+        with patch.dict(os.environ, {
+            'TELEGRAM_BOT_TOKEN': '123456789:TESTONLY_schedule',
+            'DATABASE_URL': 'postgresql://unused:unused@example.invalid/never_connect',
+            'RENDER_EXTERNAL_URL': 'https://example.invalid',
+        }):
+            cls.m = importlib.import_module('main')
+
+    def setUp(self):
+        self.schema = 'formiq_schedule_regression_' + uuid.uuid4().hex
+        with psycopg.connect(TEST_URL) as conn:
+            conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(self.schema)))
+        self.addCleanup(self.drop_schema)
+        self.db_patch = patch.object(self.m, 'db', self.connect)
+        self.db_patch.start()
+        self.addCleanup(self.db_patch.stop)
+        Clock.instant = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+        self.clock_patch = patch.object(self.m, 'datetime', Clock)
+        self.clock_patch.start()
+        self.addCleanup(self.clock_patch.stop)
+        self.m.init_db()
+        self.chat = 777
+
+    def connect(self):
+        return psycopg.connect(TEST_URL, options='-c search_path=' + self.schema
+                               + ' -c statement_timeout=15000')
+
+    def drop_schema(self):
+        with psycopg.connect(TEST_URL) as conn:
+            conn.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
+
+    def body(self, weekdays=(0, 2, 4), *, days=None, zone='Europe/Helsinki'):
+        answers = dict(goal='general', level='beginner', days=str(days or len(weekdays)),
+                       equipment='gym', age_group='adult', minutes='45')
+        if weekdays is not None:
+            answers['weekdays'] = list(weekdays)
+        return dict(answers=answers, metrics=dict(age=34, height_cm=181, weight_kg=82,
+                    resting_hr=60, sex='male'), timezone=zone,
+                    health_profile=dict(affected=[], pain_score=0, symptom_course='none',
+                    danger_signs=False, activity_cleared=False),
+                    equipment_description='', terms=True, privacy=True, health=True)
+
+    def save(self, weekdays=(0, 2, 4), **kwargs):
+        self.m.save_onboarding(self.chat, self.body(weekdays, **kwargs))
+        profile = self.m.profile(self.chat)
+        cycle, _ = self.m.get_cycle(self.chat, profile)
+        return profile, cycle, self.m.scheduled_calendar(self.chat, profile, cycle)
+
+    def rows(self, cycle):
+        with self.connect() as conn:
+            return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state
+                FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
+                ORDER BY week_no,day_code''', (self.chat, cycle)).fetchall()
+
+    def snapshot_history(self):
+        with self.connect() as conn:
+            return {table: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1,2')
+                    .format(sql.Identifier(table))).fetchall()
+                    for table in ('workouts', 'workout_items', 'workout_sets',
+                                  'cardio_sessions', 'pending_inputs', 'rest_timers')}
+
+    def test_active_workout_overview_uses_saved_set_rows(self):
+        rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),
+                (0, 2, 8, 12, 'reps', 'pending', 'Жим ногами', 'leg_press'),
+                (1, 1, 10, 10, 'reps', 'skipped', 'Тяга блока', 'lat_pull'),
+                (1, 2, 10, 10, 'reps', 'pending', 'Тяга блока', 'lat_pull')]
+        result = self.m.mini_workout_exercises(rows)
+        self.assertEqual([(x['done'],x['skipped'],x['total']) for x in result],
+                         [(1,0,2),(0,1,2)])
+        self.assertEqual(result[0]['name'],'Жим ногами')
+
+    def test_onboarding_api_reopen_and_four_weeks_for_all_counts(self):
+        client = self.m.APP.test_client()
+        for count in range(1, 8):
+            self.chat = 700 + count
+            weekdays = list(range(count))
+            # Exercise the real API and PostgreSQL writes; only Telegram identity is mocked.
+            with patch.object(self.m, 'mini_auth', return_value=self.chat):
+                response = client.post('/mini/api', json={'action': 'onboarding',
+                                                          **self.body(weekdays)})
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertTrue(response.get_json()['ok'], response.get_json())
+            restored = self.m.profile(self.chat)
+            self.assertEqual(restored['weekdays'], weekdays)
+            cycle, _ = self.m.get_cycle(self.chat, restored)
+            calendar = self.m.scheduled_calendar(self.chat, restored, cycle)
+            self.assertEqual(len(calendar), 4 * count)
+            for week in range(1, 5):
+                entries = [x for x in calendar if x['week'] == week]
+                self.assertEqual(len(entries), count)
+                self.assertEqual({date.fromisoformat(x['date']).weekday() for x in entries},
+                                 set(weekdays))
+            self.assertTrue(all(date(2026, 10, 19) <= date.fromisoformat(x['date'])
+                                < date(2026, 11, 16) for x in calendar))
+
+    def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
+        profile, cycle, _ = self.save()
+        by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
+        manual = by_key[(3, 'C')]
+        self.m.mini_aux(self.chat, 'reschedule', {'id': manual[0], 'date': '2026-11-05'})
+        with self.connect() as conn:
+            for week, day, status in ((1, 'A', 'finished'), (2, 'B', 'active')):
+                wid = conn.execute('''INSERT INTO workouts(chat_id,cycle_id,week_no,plan_day,
+                    status,started_at,finished_at,source) VALUES(%s,%s,%s,%s,%s,%s,%s,'template')
+                    RETURNING id''', (self.chat, cycle, week, day, status,
+                    Clock.instant, Clock.instant if status == 'finished' else None)).fetchone()[0]
+                conn.execute('''INSERT INTO workout_items(workout_id,position,exercise,target,
+                    exercise_key) VALUES(%s,0,'Жим ногами','3 × 10','leg_press')''', (wid,))
+                conn.execute('''INSERT INTO workout_sets(workout_id,position,set_no,target_min,
+                    target_max,unit,actual_value,state,weight_kg,completed_at)
+                    VALUES(%s,0,1,10,12,'reps',12,'done',60,%s)''', (wid, Clock.instant))
+            conn.execute('''INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment)
+                VALUES(%s,45,120,'cycling')''', (self.chat,))
+        history = self.snapshot_history()
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        updated, new_cycle, _ = self.save((1, 3))
+        self.assertEqual(new_cycle, cycle, 'Schedule edits must retain current cycle identity')
+        self.assertEqual(self.snapshot_history(), history, 'History and working weights are immutable')
+        after = {(r[1], r[2]): r for r in self.rows(cycle)}
+        for key in ((1, 'A'), (2, 'B')):
+            self.assertEqual(after[key][3], by_key[key][3], 'Past/linked slot date changed')
+        self.assertEqual(after[(3, 'C')][3], date(2026, 11, 5))
+        self.assertEqual(after[(3, 'C')][4], 'manual')
+        self.assertTrue(any(r[4] == 'retired' for r in after.values()))
+        for row in after.values():
+            if row[4] == 'auto' and row[3] > date(2026, 10, 20) and (row[1], row[2]) != (2, 'B'):
+                self.assertIn(row[3].weekday(), (1, 3))
+        self.assertEqual(updated['weekdays'], [1, 3])
+        # Saving the same questionnaire again is idempotent.
+        previous = self.rows(cycle)
+        self.save((1, 3))
+        self.assertEqual(self.rows(cycle), previous)
+        self.assertEqual(self.snapshot_history(), history)
+        # A manually retained C slot must still produce a valid workout at frequency 2.
+        self.assertTrue(self.m.make_session(updated, 3, 'C'))
+
+    def test_retired_slots_do_not_reappear_as_time_passes(self):
+        _, cycle, _ = self.save(tuple(range(7)))
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        profile, new_cycle, _ = self.save((0,))
+        self.assertEqual(cycle, new_cycle)
+        retired = {r[0] for r in self.rows(cycle) if r[4] == 'retired'}
+        self.assertTrue(retired)
+        Clock.instant = datetime(2026, 10, 29, 12, tzinfo=timezone.utc)
+        calendar = self.m.scheduled_calendar(self.chat, profile, cycle)
+        self.assertFalse(retired & {x['id'] for x in calendar})
+        self.assertTrue(retired <= {r[0] for r in self.rows(cycle) if r[4] == 'retired'})
+
+    def test_legacy_migration_is_additive_and_keeps_manual_dates(self):
+        # Simulate a database created by the previous release, only in this test schema.
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE profiles DROP COLUMN weekdays')
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+            conn.execute('''INSERT INTO profiles(chat_id,goal,level,days,equipment,
+                age_group,minutes,clearance) VALUES(%s,'general','beginner','3','gym',
+                'adult','45','none')''', (self.chat,))
+            conn.execute('''INSERT INTO profile_metrics(chat_id,timezone)
+                VALUES(%s,'Europe/Helsinki')''', (self.chat,))
+            cycle = conn.execute('''INSERT INTO training_cycles(chat_id,starts_on,
+                profile_fingerprint) VALUES(%s,%s,%s) RETURNING id''', (self.chat,
+                date(2026, 10, 19), self.m.fingerprint(dict(goal='general', level='beginner',
+                days='3', equipment='gym', age_group='adult', minutes='45',
+                clearance='none')))).fetchone()[0]
+            for week in range(1, 5):
+                for day, offset in zip('ABC', (0, 2, 4)):
+                    planned = date(2026, 10, 19) + timedelta(days=7 * (week - 1) + offset)
+                    if (week, day) == (3, 'C'):
+                        planned = date(2026, 11, 5)
+                    conn.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,
+                        day_code,planned_date) VALUES(%s,%s,%s,%s,%s)''',
+                        (self.chat, cycle, week, day, planned))
+        self.m.init_db()
+        self.m.init_db()  # Migration is idempotent.
+        legacy = self.m.profile(self.chat)
+        self.assertIsNone(legacy.get('weekdays'))
+        before = self.rows(cycle)
+        self.m.scheduled_calendar(self.chat, legacy, cycle)
+        self.assertEqual(self.rows(cycle), before, 'Opening old profiles must not rewrite dates')
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        _, new_cycle, _ = self.save((1, 3, 5))
+        self.assertEqual(new_cycle, cycle)
+        manual = next(r for r in self.rows(cycle) if (r[1], r[2]) == (3, 'C'))
+        self.assertEqual(manual[3], date(2026, 11, 5))
+        self.assertIn(manual[4], (None, 'manual'))
+
+    def test_checked_in_migration_preserves_legacy_data_and_is_idempotent(self):
+        # The exact production preparation file is executed against this
+        # isolated schema, never against the Render database.
+        from pathlib import Path
+        migration = (Path(__file__).resolve().parents[1] /
+                     'migrations/20261023_weekday_schedule.sql').read_text()
+        sql_without_comments = '\n'.join(
+            line for line in migration.splitlines()
+            if not line.lstrip().startswith('--'))
+        statements = [piece.strip() for piece in sql_without_comments.split(';')
+                      if piece.strip()]
+        self.assertEqual(statements[0].splitlines()[-1], 'BEGIN')
+        self.assertEqual(statements[-1], 'COMMIT')
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE profiles DROP COLUMN weekdays')
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+            conn.execute("""INSERT INTO profiles(chat_id,goal,level,days,equipment,
+                age_group,minutes,clearance) VALUES(%s,'general','beginner','2',
+                'gym','adult','45','none')""", (self.chat,))
+            conn.execute("""INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,
+                day_code,planned_date) VALUES(%s,1,2,'B',%s)""",
+                         (self.chat, date(2026, 11, 5)))
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,equipment)
+                VALUES(%s,45,'cycling')""", (self.chat,))
+        with self.connect() as conn:
+            profile_before = conn.execute(
+                'SELECT chat_id,goal,days,equipment FROM profiles').fetchall()
+            schedule_before = conn.execute(
+                'SELECT chat_id,cycle_id,week_no,day_code,planned_date '
+                'FROM scheduled_sessions').fetchall()
+            cardio_before = conn.execute(
+                'SELECT chat_id,minutes,equipment FROM cardio_sessions').fetchall()
+        # Run BEGIN/COMMIT from the file with autocommit, so the script
+        # transaction mirrors the real migration instead of nesting BEGIN.
+        for _ in range(2):
+            with self.connect() as conn:
+                conn.autocommit = True
+                for statement in statements:
+                    conn.execute(statement)
+            with self.connect() as conn:
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,goal,days,equipment FROM profiles').fetchall(),
+                    profile_before)
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,cycle_id,week_no,day_code,planned_date '
+                    'FROM scheduled_sessions').fetchall(), schedule_before)
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,minutes,equipment FROM cardio_sessions').fetchall(),
+                    cardio_before)
+                self.assertEqual(conn.execute(
+                    'SELECT weekdays FROM profiles').fetchone()[0], None)
+                self.assertEqual(conn.execute(
+                    'SELECT schedule_state FROM scheduled_sessions').fetchone()[0], None)
+        with self.connect() as conn:
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                conn.execute("""UPDATE scheduled_sessions SET schedule_state='deleted'
+                    WHERE chat_id=%s""", (self.chat,))
+
+    def test_progress_weights_are_real_bounded_owner_scoped_and_read_only(self):
+        # All inserts are in this UUID test schema, never in production.
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO profile_metrics(chat_id,timezone)
+                VALUES(%s,'Europe/Helsinki')""", (self.chat,))
+            for chat, stamp, kg, status, set_state in (
+                    (self.chat, '2026-10-19T10:00:00Z', 55, 'finished', 'done'),
+                    (self.chat, '2026-10-19T12:00:00Z', 60, 'finished', 'done'),
+                    (self.chat, '2026-10-21T10:00:00Z', 65, 'finished', 'done'),
+                    (self.chat, '2026-10-22T10:00:00Z', 80, 'active', 'done'),
+                    (self.chat, '2026-10-23T10:00:00Z', 95, 'finished', 'pending'),
+                    (self.chat + 1, '2026-10-24T10:00:00Z', 500, 'finished', 'done')):
+                wid = conn.execute("""INSERT INTO workouts(chat_id,plan_day,status,
+                    started_at,finished_at) VALUES(%s,'A',%s,%s,%s) RETURNING id""",
+                    (chat,status,stamp,stamp if status == 'finished' else None)).fetchone()[0]
+                conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,
+                    target,exercise_key) VALUES(%s,0,'Жим ногами','3 x 10','leg_press')""",
+                    (wid,))
+                conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                    target_min,target_max,unit,actual_value,state,weight_kg)
+                    VALUES(%s,0,1,10,12,'reps',12,%s,%s)""",
+                    (wid,set_state,kg))
+        before = self.snapshot_history()
+        client = self.m.APP.test_client()
+        with patch.object(self.m, 'mini_auth', return_value=self.chat):
+            result = client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(result.status_code,200,result.get_json())
+        self.assertEqual(result.get_json()['exercises'][0]['points'],[
+            {'date':'2026-10-19','weight':60.0},
+            {'date':'2026-10-21','weight':65.0},
+        ])
+        self.assertEqual(self.snapshot_history(),before)
+        with patch.object(self.m,'mini_auth',return_value=self.chat+1):
+            other=client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(other.get_json()['exercises'][0]['points'][0]['weight'],500.0)
+        with patch.object(self.m,'mini_auth',return_value=None):
+            denied=client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(denied.status_code,401)
+
+    def test_invalid_weekdays_do_not_write_profile_or_calendar(self):
+        _, cycle, _ = self.save()
+        before = self.rows(cycle)
+        old_profile = self.m.profile(self.chat)
+        for weekdays in ([0, 0, 2], [0, 1], [True, 2, 4], [-1, 2, 4],
+                         [0, 2, 7], ['0', 2, 4]):
+            payload = self.body((0, 2, 4))
+            payload['answers']['weekdays'] = weekdays
+            with self.subTest(weekdays=weekdays), self.assertRaises(ValueError):
+                self.m.save_onboarding(self.chat, payload)
+            self.assertEqual(self.rows(cycle), before)
+            self.assertEqual(self.m.profile(self.chat), old_profile)
+
+    def test_local_weekdays_across_dst_and_utc_date_boundary(self):
+        for index, (instant, zone, start) in enumerate((
+                (datetime(2026, 10, 24, 21, 30, tzinfo=timezone.utc),
+                 'Europe/Helsinki', date(2026, 10, 25)),
+                (datetime(2026, 3, 28, 22, 30, tzinfo=timezone.utc),
+                 'Europe/Helsinki', date(2026, 3, 29)),
+                (datetime(2026, 10, 24, 12, 30, tzinfo=timezone.utc),
+                 'Pacific/Kiritimati', date(2026, 10, 25)))):
+            with self.subTest(zone=zone, instant=instant):
+                self.chat = 900 + index
+                Clock.instant = instant
+                profile, cycle, calendar = self.save((6,), zone=zone)
+                expected = [(start + timedelta(days=7 * week)).isoformat()
+                            for week in range(4)]
+                self.assertEqual([row['date'] for row in calendar], expected)
+                Clock.instant = instant + timedelta(days=8)
+                self.assertEqual([row['date'] for row in self.m.scheduled_calendar(
+                    self.chat, profile, cycle)], expected)
+
+    def test_schedule_failure_rolls_back_profile_health_metrics_and_dates(self):
+        _, cycle, _ = self.save()
+        def snapshot():
+            with self.connect() as conn:
+                return {table: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1')
+                        .format(sql.Identifier(table))).fetchall()
+                        for table in ('profiles', 'profile_metrics', 'health_limits',
+                                      'profile_equipment', 'training_cycles',
+                                      'scheduled_sessions', 'user_agreements')}
+        before = snapshot()
+        payload = self.body((1, 3, 5))
+        payload['metrics']['weight_kg'] = 85
+        with patch.object(self.m, 'reconcile_schedule_in', side_effect=RuntimeError('test rollback')):
+            with self.assertRaisesRegex(RuntimeError, 'test rollback'):
+                self.m.save_onboarding(self.chat, payload)
+        self.assertEqual(snapshot(), before)
+        self.assertEqual(self.m.get_cycle(self.chat, self.m.profile(self.chat))[0], cycle)
+
+    def test_concurrent_save_and_manual_reschedule_preserves_one_safe_state(self):
+        stale_profile, cycle, _ = self.save()
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'C'))
+        barrier = Barrier(2)
+        def save_schedule():
+            barrier.wait(timeout=10)
+            self.m.save_onboarding(self.chat, self.body((1, 3)))
+        def move_manually():
+            barrier.wait(timeout=10)
+            try:
+                self.m.mini_aux(self.chat, 'reschedule',
+                                {'id': sid, 'date': '2026-11-05'})
+            except ValueError as exc:
+                if str(exc) != 'Дата не найдена':
+                    raise
+                return 'retired_before_move'
+            return 'manual_before_retirement'
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            scheduled = pool.submit(save_schedule)
+            moved_task = pool.submit(move_manually)
+            scheduled.result(timeout=30)
+            result = moved_task.result(timeout=30)
+        moved = next(r for r in self.rows(cycle) if r[0] == sid)
+        if result == 'manual_before_retirement':
+            # A manual move wins the lock and cannot be retired afterwards.
+            self.assertEqual(moved[3:], (date(2026, 11, 5), 'manual'))
+        else:
+            # A new preference wins first; stale client must never revive retired.
+            self.assertEqual(result, 'retired_before_move')
+            self.assertEqual(moved[4], 'retired')
+        # A previously loaded dashboard must never regenerate old preferences.
+        self.assertEqual(self.m.get_cycle(self.chat, stale_profile)[0], cycle)
+        before = self.rows(cycle)
+        self.m.scheduled_calendar(self.chat, stale_profile, cycle)
+        self.assertEqual(self.rows(cycle), before)
+
+    def test_isolated_pg_dump_restore_preserves_history_and_retired_slots(self):
+        # Real backup/restore rehearsal in the disposable *_test database only.
+        # setUpClass validates the loopback host and database name; each test
+        # owns a unique temporary schema, never the production schema.
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        docker_container = os.getenv('FORMIQ_TEST_PG_DOCKER_CONTAINER')
+        if docker_container:
+            # Never accept user-supplied host names or container references:
+            # GitHub Actions supplies the exact ephemeral postgres service ID.
+            self.assertRegex(docker_container, r'^[0-9a-f]{64}$')
+            self.assertIsNotNone(shutil.which('docker'))
+        else:
+            for program in ('pg_dump', 'pg_restore'):
+                self.assertIsNotNone(shutil.which(program),
+                                     program + ' is required for an actual restore test')
+        _, cycle, _ = self.save(tuple(range(7)))
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        _, unchanged_cycle, _ = self.save((0,))
+        self.assertEqual(cycle, unchanged_cycle)
+        with self.connect() as conn:
+            wid = conn.execute("""INSERT INTO workouts(chat_id,cycle_id,week_no,
+                plan_day,status,started_at,finished_at,source)
+                VALUES(%s,%s,1,'A','finished',%s,%s,'template') RETURNING id""",
+                (self.chat, cycle, Clock.instant, Clock.instant)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,
+                exercise_key) VALUES(%s,0,'Жим ногами','3 × 10','leg_press')""", (wid,))
+            conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                target_min,target_max,unit,actual_value,state,weight_kg,completed_at)
+                VALUES(%s,0,1,10,12,'reps',12,'done',60,%s)""",
+                (wid, Clock.instant))
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment)
+                VALUES(%s,45,120,'cycling')""", (self.chat,))
+        before_history = self.snapshot_history()
+        before_profile = self.m.profile(self.chat)
+        before_calendar = self.rows(cycle)
+        self.assertTrue(any(row[4] == 'retired' for row in before_calendar))
+        self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
+        with tempfile.TemporaryDirectory(prefix='formiq-restore-') as directory:
+            archive = str(Path(directory) / 'sample.backup')
+            if docker_container:
+                # Executing in the disposable PG18 service avoids depending on
+                # the host runner's possibly older pg_dump binary.
+                archive = '/tmp/formiq-test-' + uuid.uuid4().hex + '.backup'
+                dump = ['docker', 'exec', docker_container, 'pg_dump',
+                        '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                        '--format=custom', '--schema', self.schema, '--file', archive]
+                restore = ['docker', 'exec', docker_container, 'pg_restore',
+                           '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                           '--no-owner', '--no-acl', '--exit-on-error', archive]
+            else:
+                dump = ['pg_dump', '--dbname', TEST_URL, '--format=custom',
+                        '--schema', self.schema, '--file', archive]
+                restore = ['pg_restore', '--dbname', TEST_URL, '--no-owner',
+                           '--no-acl', '--exit-on-error', archive]
+            try:
+                subprocess.run(dump, check=True, capture_output=True, timeout=60)
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'test',
+                                    '-s', archive],
+                                   check=True, capture_output=True, timeout=20)
+                else:
+                    self.assertGreater(Path(archive).stat().st_size, 0)
+                # Destructive part is confined to this disposable test schema.
+                with psycopg.connect(TEST_URL) as conn:
+                    conn.execute(sql.SQL('DROP SCHEMA {} CASCADE')
+                                 .format(sql.Identifier(self.schema)))
+                subprocess.run(restore, check=True, capture_output=True, timeout=60)
+            finally:
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'rm',
+                                    '-f', archive], capture_output=True, timeout=20)
+        self.assertEqual(self.snapshot_history(), before_history)
+        self.assertEqual(self.rows(cycle), before_calendar)
+        self.assertEqual(self.m.profile(self.chat), before_profile)
+
+    def test_timezone_change_keeps_cycle_manual_move_and_protected_boundary(self):
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        _, cycle, _ = self.save((1, 3), zone='Asia/Tokyo')  # Locally October 20.
+        sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'B'))
+        self.m.mini_aux(self.chat, 'reschedule', {'id': sid, 'date': '2026-11-04'})
+        profile, changed_cycle, calendar = self.save((0, 2), zone='America/Los_Angeles')
+        self.assertEqual(changed_cycle, cycle, 'Changing timezone must not replace the cycle')
+        self.assertEqual(next(r for r in self.rows(cycle) if r[0] == sid)[3], date(2026, 11, 4))
+        self.assertIn(sid, {r['id'] for r in calendar})
+        # A count increase must not insert a slot on the old timezone's protected today,
+        # even if a later read regards it as tomorrow in the newly selected timezone.
+        self.chat = 778
+        Clock.instant = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+        _, other_cycle, _ = self.save((6,), zone='Asia/Tokyo')
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        profile, same_cycle, calendar = self.save((0, 1), zone='America/Los_Angeles')
+        self.assertEqual(same_cycle, other_cycle)
+        before = self.rows(other_cycle)
+        for _ in range(2):
+            calendar = self.m.scheduled_calendar(self.chat, profile, other_cycle)
+        self.assertEqual(self.rows(other_cycle), before)
+        self.assertFalse(any(r['date'] == '2026-10-20' and r['day'] == 'B' for r in calendar))
+
+
+    def test_readonly_rollback_gate_on_real_pg18_isolated_schema(self):
+        """Check real SQL + SELECT-only assessment without changing any records."""
+        from scripts.rollback_readonly_gate import inspect_legacy_rollback
+
+        with self.connect() as conn:
+            clean = inspect_legacy_rollback(conn)
+        self.assertEqual(clean['status'], 'candidate')
+
+        self.save((0, 2, 4))
+        before_rows = self.rows(self.m.get_cycle(self.chat, self.m.profile(self.chat))[0])
+        before_profile = self.m.profile(self.chat)
+        before_history = self.snapshot_history()
+        with self.connect() as conn:
+            report = inspect_legacy_rollback(conn)
+            with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
+                conn.execute('UPDATE profiles SET days=days')
+            conn.rollback()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertTrue(report['weekday_choices_present'])
+        self.assertTrue(report['schedule_states_present'])
+        self.assertEqual(before_rows, self.rows(self.m.get_cycle(
+            self.chat, self.m.profile(self.chat))[0]))
+        self.assertEqual(before_profile, self.m.profile(self.chat))
+        self.assertEqual(before_history, self.snapshot_history())
+
+        # A broken one-column migration must never be called safe.
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+        with self.connect() as conn:
+            damaged = inspect_legacy_rollback(conn)
+        self.assertEqual(damaged['reason'], 'partial_v5_schema')
+
+
+    def test_emergency_v5_fallback_freezes_schedule_but_keeps_history(self):
+        """A V5-compatible fallback must never recreate retired slots or cycles."""
+        profile, cycle, _ = self.save((0, 2, 4))
+        by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
+        manual = by_key[(3, 'C')]
+        self.m.mini_aux(self.chat, 'reschedule', {
+            'id': manual[0], 'date': '2026-11-06'})
+        profile, current_cycle, _ = self.save((1, 3))
+        self.assertEqual(current_cycle, cycle)
+        original_slots = self.rows(cycle)
+        self.assertTrue(any(row[4] == 'retired' for row in original_slots))
+        self.assertTrue(any(row[4] == 'manual' for row in original_slots))
+        retired_id = next(row[0] for row in original_slots if row[4] == 'retired')
+        # A stale client must never be able to resurrect this retired identity.
+        with self.assertRaisesRegex(ValueError, 'Дата не найдена'):
+            self.m.mini_aux(self.chat, 'reschedule', {
+                'id': retired_id, 'date': '2026-11-07'})
+        self.assertEqual(self.rows(cycle), original_slots)
+        original_history = self.snapshot_history()
+        with self.connect() as conn:
+            before_cycles = conn.execute(
+                'SELECT id,starts_on,profile_fingerprint FROM training_cycles '
+                'WHERE chat_id=%s ORDER BY id', (self.chat,)).fetchall()
+        with patch.dict(os.environ, {'FORMIQ_SCHEDULE_SAFE_MODE': '1'}):
+            self.assertTrue(self.m.schedule_emergency_readonly())
+            # A user's existing plan is browsable, including manual slots.
+            self.assertEqual(self.m.get_cycle(self.chat, profile)[0], cycle)
+            shown = self.m.scheduled_calendar(self.chat, profile, cycle)
+            self.assertTrue(any(x['id'] == manual[0] for x in shown))
+            retired_ids = {row[0] for row in original_slots if row[4] == 'retired'}
+            self.assertFalse(any(x['id'] in retired_ids for x in shown))
+            self.m.next_day_in_readonly(self.chat, cycle, 2)
+            self.assertEqual(self.rows(cycle), original_slots)
+            # Profile edit and manual reschedule are blocked without side effects.
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.save_onboarding(self.chat, self.body((0, 2, 4)))
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.mini_aux(self.chat, 'reschedule', {
+                    'id': manual[0], 'date': '2026-11-05'})
+            self.assertEqual(self.m.profile(self.chat), profile)
+            self.assertEqual(self.rows(cycle), original_slots)
+            # Even after 28 days: do not mint a fresh cycle while frozen.
+            Clock.instant = datetime(2026, 12, 2, 12, tzinfo=timezone.utc)
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.get_cycle(self.chat, profile)
+        with self.connect() as conn:
+            after_cycles = conn.execute(
+                'SELECT id,starts_on,profile_fingerprint FROM training_cycles '
+                'WHERE chat_id=%s ORDER BY id', (self.chat,)).fetchall()
+        self.assertEqual(before_cycles, after_cycles)
+        self.assertEqual(self.rows(cycle), original_slots)
+        self.assertEqual(self.snapshot_history(), original_history)
+
+
+if __name__ == '__main__':
+    unittest.main()

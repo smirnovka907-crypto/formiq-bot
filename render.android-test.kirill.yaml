@@ -1,0 +1,59 @@
+# Paid test alternative for Kirill's workspace. Do not apply without cost approval.
+# Never sync this file into the production Blueprint or reuse production env groups.
+previews:
+  generation: "off"
+
+databases:
+  - name: formiq-android-test-db-pr15-f2f6009
+    databaseName: formiq_android_test_pr15_f2f6009
+    user: formiq_android_test
+    plan: 0.1c-256mb
+    diskSizeGB: 1
+    storageAutoscalingEnabled: false
+    region: frankfurt
+    postgresMajorVersion: "16"
+    ipAllowList: []
+
+services:
+  - type: web
+    name: formiq-android-test-pr15-f2f6009
+    runtime: python
+    repo: https://github.com/smirnovka907-crypto/formiq-bot
+    branch: fix/v5-native-onboarding-fullscreen-20261023
+    region: frankfurt
+    plan: 0.5c-512mb
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/run_android_test.py
+    healthCheckPath: /android-test-info
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.15"
+      - key: FORMIQ_ENV
+        value: android-test
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: FORMIQ_TEST_BOT_USERNAME
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: formiq-android-test-db-pr15-f2f6009
+          property: connectionString
+      - key: FORMIQ_TEST_DB_HOST
+        fromDatabase:
+          name: formiq-android-test-db-pr15-f2f6009
+          property: host
+      - key: FORMIQ_TEST_DB_NAME
+        value: formiq_android_test_pr15_f2f6009
+      - key: FORMIQ_PREMIUM_ENFORCED
+        value: "0"
+      - key: FORMIQ_ADMIN_ID
+        value: "0"
+      - key: YANDEX_API_KEY
+        value: ""
+      - key: YANDEX_FOLDER_ID
+        value: ""
+      - key: FORMIQ_FEEDBACK_SHEETS_WEBHOOK
+        value: ""
+      - key: FORMIQ_FEEDBACK_SHEETS_SECRET
+        value: ""

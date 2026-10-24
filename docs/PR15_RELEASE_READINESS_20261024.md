@@ -1,0 +1,162 @@
+# FORMIQ / PR №15 — релизный аудит, 24.10.2026
+
+**Решение: NO-GO.** Эта запись не разрешает merge, deploy, изменение production PostgreSQL, webhook, токена или создание дополнительного Telegram-бота.
+
+## 1. Проверенные версии
+
+- GitHub [PR №15](https://github.com/smirnovka907-crypto/formiq-bot/pull/15): Draft, открытый; исходный проверенный HEAD `3e024d14136c90ce012c19098a96c3f9348e2c28`.
+- [Actions №40112661035](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40112661035): завершён **SUCCESS на точном SHA**. Проверки: JS syntax/runtime, Python/API, миграция и pg_dump/pg_restore изолированной PostgreSQL 18, мобильный Chromium E2E 360×740 и 393×852.
+- GitHub Actions artifact `formiq-v5-mobile-layout` №12567277005: 142 файла с сопоставленными approved/live PNG. При независимом визуальном просмотре выборки на 360 px поля веса/повторений выровнены; сетка пола включает три равные кнопки; действия «Подход выполнен», «Пропустить упражнение», «Завершить» видны над нижними вкладками. Нет обнаруженного блокирующего перекрытия. **Это не проверка Telegram Android WebView.**
+- `main`: `11551f4305212236ee312b4e970eeb4f040c76a9`. Render `formiq-bot`: ветка main, статус Live, deployed SHA **тот же**. PR в production не находится.
+- Render `formiq-db`: PostgreSQL **18.6**, `available`, SSL on. Read-only SQL подтвердил отсутствие `profiles.weekdays` и `scheduled_sessions.schedule_state` в production. Личные строки не читались и не выводились.
+
+## 2. Риски и запреты
+
+| Контроль | Статус |
+| --- | --- |
+| UI API, Chromium 360/393, миграция и pg_dump/pg_restore **тестовой** схемы | PASS в CI |
+| Архивированный backup **действующей production БД** | НЕ ПОДТВЕРЖДЁН |
+| Успешный restore **копии реальной production БД** в изоляции | НЕ ПРОВЕДЁН |
+| Безопасный rollback после новых `weekdays` / `retired` | НЕ ПОДГОТОВЛЕН |
+| Android Telegram WebView на **коде PR №15** | НЕ ПРОВЕРЕН |
+| Ручное визуальное согласование владельцем / разрешение на merge и release | НЕ ПОЛУЧЕНО |
+
+- Free PostgreSQL Render **не имеет управляемых backups/PITR**. Метаданные показывают `expiresAt=2026-11-19T19:50:15Z`. После окончания Free периода база станет недоступной; Render указывает 14-дневный grace period, затем удаление. Требуется решение по долговременному хранению **до 19 ноября 2026**. Источники: https://render.com/docs/free и https://render.com/docs/postgresql-backups.
+- `ipAllowList=0.0.0.0/0`: внешняя сеть для БД открыта, хотя аутентификация и SSL включены. Менять доступ без теста существующего соединения Render и разрешения владельца нельзя.
+- Production запускается через `python main.py`; в логах есть предупреждение Flask **development server**. Для устойчивой эксплуатации оценить переход на production WSGI и тестировать его до изменения start command. Сегодня запуск/инфраструктура не меняются.
+- `migrations/20261023_weekday_schedule.sql`: добавление nullable столбцов с `IF NOT EXISTS`, транзакцией, `lock_timeout=5s`, `statement_timeout=30s`; SQL проверен в изолированной PG18. На production **не выполнялся**. Схема должна быть совместимо подготовлена **до** запуска нового приложения.
+- Старый планировщик не понимает `retired` и `weekdays`. **Откат только кода на `11551f4` после пользовательских изменений расписания НЕ БЕЗОПАСЕН.** Не удалять колонки, не возвращать старый дамп поверх live-БД: новые тренировки, кардио и веса могут быть утрачены.
+
+## 3. Реальный backup/restore — порядок только после отдельного разрешения
+
+1. Согласовать окно, политику секретов, защищённый внешний каталог хранения, способ шифрования и восстановление; перед работой повторно сверить SHA, deployed SHA и PG version.
+2. Выполнить read-only консистентный `pg_dump --format=custom` совместимым клиентом PG18 с авторизованным подключением. Не публиковать DSN, архив, персональные строки, пароли или токен. Не складывать backup в эфемерную файловую систему Render web.
+3. Проверить размер, checksum и `pg_restore --list`; сохранить независимую защищённую копию.
+4. Восстановить **только в пустой изолированной PostgreSQL 18**, с отключёнными Telegram/Yandex и без production credentials. Никаких `DROP`/`--clean`/`pg_restore` на живой БД.
+5. Сверить структуры, количества, неизменность первичных ключей и контрольные выборки `profiles`, `profile_metrics`, `training_cycles`, `scheduled_sessions`, `workouts`, `workout_items`, `workout_sets`, `cardio_sessions`, `rest_timers`, `pending_inputs`. Проверка на одном и том же восстановленном снимке; личные данные в логи не включать.
+6. Применить точный файл миграции к **копии** дважды; проверить идемпотентность, расписание, состояния `retired/manual`, сохранность истории и отказ при ошибках.
+7. Подготовить и проверить **совместимый rollback/hotfix** на той же копии: `retired` не видны как занятия, `weekdays` и ручные переносы не теряются, история остаётся неизменной. Пока такого проверенного rollback нет, выпуск — **NO-GO**.
+8. Только после успешного восстановления/репетиции, решения о Free PG, совместимого отката и **нового разрешения владельца** — рассматривать подготовку production миграции и релиз. Не выполнять автоматически.
+
+## 4. Android — план с единственным ботом
+
+**Важно:** новый бот запрещён. `@formiqcoachbot` сейчас открывает `main`, не PR. Один Telegram webhook нельзя обслуживать двумя независимыми backend одновременно. Отдельный исторический сценарий в `docs/ANDROID_TEST_LAUNCH.md` с новым ботом **больше не применим**.
+
+**До публикации PR:** в Telegram Android открыть `@formiqcoachbot` → «FormIQ». Только посмотреть текущие вкладки, профиль, план и историю; не переписывать реальные записи. Зафиксировать устройство, версию Telegram и UI-проблемы. Это **baseline старого кода**, не проверка PR.
+
+**После отдельного разрешения на выпуск**, подтверждённых backup+restore и rollback и фактического нового Render Live SHA:
+
+1. Запустить **тот же** `@formiqcoachbot` → «FormIQ». Зафиксировать точный deployed SHA, HTTP health и ошибки логов. Использовать отдельный тестовый Telegram-аккаунт без старой истории (не создавать новый бот).
+2. На первом входе: короткое приветствие, одна анкета Aluminium v5, **никакого перехода в 38.2**. Заполнить согласия и частоту 3 дня с Пн/Ср/Пт; ошибка несоответствия числа дней не должна сохраняться.
+3. Закрыть Mini App и снова открыть из того же бота: профиль и дни восстановились, история осталась. Сменить дни, проверить 4-недельный календарь и ручной перенос будущего занятия.
+4. Проверить на Android реальные отступы Telegram, высоту 51 px и верхнюю линию веса/повторений, три равные кнопки пола, три нижние вкладки **Тренировки / Питание / Прогресс**; план внутри «Тренировок». Проверить клавиатуру, скролл, кнопки «Подход выполнен», «Пропустить упражнение», «Завершить» и возврат назад.
+5. На тестовом аккаунте: старт → несколько подходов с весами → отдых → переключение вкладок без потери введённого → завершение → повторное открытие → история. Записать кардио и проверить календарь/детали; старые записи, ручные переносы, выполненные подходы должны оставаться.
+6. «Питание» — пустое состояние без выдуманных ккал/FatSecret/Garmin; отчёт отправляется только при согласии. «Прогресс» — только реальные показатели, корректное пустое состояние.
+7. Проверить «Разбудить», выход/повторное открытие Telegram WebView, поведение Android Back, Render логи и ошибки; владелец утверждает внешний вид скриншотами.
+8. При риске потери истории остановить операции расписания и релиз; предпочтителен совместимый forward fix. **Не откатывать blindly код и не восстанавливать архив поверх production.**
+
+**Итог:** технические CI и выборочная визуальная проверка пройдены, но **NO-GO до безопасного backup/restore production, совместимого отката, Android-приёмки PR и явного разрешения.**
+
+
+## 5. Профилактика опасного downgrade — подготовка в PR №15
+
+Добавлен строго read-only `scripts/rollback_readonly_gate.py` и regression
+проверки на PostgreSQL 18. Инспектор запускается **только на изолированной
+восстановленной копии** (`*_test` / `*_restore`), отклоняет использование
+`DATABASE_URL`, не читает/печатает личные строки, не выполняет DML/DDL,
+использует транзакцию READ ONLY и короткие таймауты. Он останавливает
+старый scheduler rollback, когда найдены `weekdays` или любой новый
+`schedule_state`; отказывает при частичной схеме или ошибках.
+
+Первоначальные интеграционные тесты проходят в
+[Actions №40114458062](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40114458062),
+**SUCCESS**, SHA `4a6cc33`. В следующих коммитах добавлены подтверждение,
+что попытка SQL записи в проверяемой транзакции отклоняется, и контроль
+отсутствия DSN в error output. Финальный результат определяется **по CI
+последнего HEAD**, а не по первому PASS.
+
+**Всё ещё NO-GO:** инспектор выявляет несовместимость, но НЕ является
+работающим compatible rollback-hotfix. Нужны реальные production
+backup/restore на отдельной базе, протестированный обратимый путь для
+планировщика, Android WebView приёмка новой версии и явное разрешение.
+
+
+## 6. Owner authorization and actually executable backup status
+
+The owner explicitly **authorized** a protected read-only production backup,
+isolated restore rehearsal and code-only release preparations on 24.10.2026.
+This does **not** authorize production migrations, a merge, a deploy,
+additional bots/services, paid resources or loss of user data.
+
+**Backup execution: BLOCKED / NOT PERFORMED.** The available Render
+connection implements read-only SQL queries, PostgreSQL instance metadata and
+service logs/deploy status. It does **not** implement shell/SSH, `pg_dump`,
+direct encrypted backup export, secure private backup object storage or
+`pg_restore`. The assistant cannot run a dump merely by selecting records;
+doing so would expose private user data and fail to capture PostgreSQL
+schema/constraints/consistent snapshot. No archive, checksum, restore
+duration or real-data consistency comparison exists. Do not confuse
+ephemeral GitHub Actions `formiq_schedule_test` pg_dump/restore with this.
+
+**Required execution capability:** a private trusted runner with PostgreSQL
+18 client access to the existing Render database, encrypted off-repository
+storage and a local/isolated PostgreSQL 18 restore target, with secrets
+delivered via a secret store rather than chat, GitHub code or logs.
+No additional paid infrastructure is approved. Before connecting verify
+the destination is isolated and devoid of Telegram/Yandex/webhook clients.
+Use a single read-only consistent snapshot and check archive hash,
+`pg_restore --list`, table totals/relationships, then run exact PR15
+migration twice and V5 fallback regression on the restored copy. Record
+time and error detail without exposing rows or credentials.
+
+**Compatible fallback prepared, not activated:** `FORMIQ_SCHEDULE_SAFE_MODE=1`
+on the **V5 application code** freezes new calendar changes, new cycles and
+profile schedule edits; old V5 calendar history and completed workouts remain
+on the live data model; `retired` entries are still hidden. This is safer
+than a blind redeploy of `main` but reduces plan editing and cycling during
+an emergency. Real PG18 integration tests were added in PR #15 and passed
+in [Actions #40116070978](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40116070978)
+for exact SHA `af56cf0c35162685a3c4072284312389787c5ada`.
+Further commits require fresh SHA-specific CI.
+
+**Actual Telegram Android WebView** still requires the single existing bot
+and a separately approved deploy. Chromium tests are preparatory only.
+
+**Decision remains NO-GO until the real encrypted production backup,
+real restore rehearsal, exact migration test, verified safe fallback and
+separate owner release approval are independently recorded.**
+
+
+## 7. Backup execution channel prepared, production still not backed up (2026-10-24)
+
+A **local**, encryption-first PostgreSQL 18 tool was added to PR #15:
+`scripts/formiq_pg_backup.py`, `requirements-backup.txt`,
+`tests/test_production_backup_local.py`, `.gitignore` safeguards, and
+`docs/PRODUCTION_BACKUP_RUNBOOK.md`. It uses the owner's locally entered
+Render External URL without printing/passing credentials in process argv,
+a read-only `pg_dump`, streaming AES-256-GCM with scrypt and an off-repository
+private output directory. Verification authenticates GCM and parses archive TOC
+without persisting an unencrypted dump. Restore is only allowed on a
+pre-existing empty PostgreSQL 18 `localhost` database ending `_restore`,
+with no `--clean`/`--create`. Offline security tests are synthetic only.
+
+**Important:** no production backup was executed using connected ChatGPT tools:
+Render Free has no managed backups or Shell/SSH, Render connection here is
+read-only SQL, and no private object store / production pg_dump execution
+channel is connected. Real archive checksum, upload verification, restored
+user rows and restore duration are **unknown**. The owner must run this
+prepared local script on a trusted PC, obtaining the Render External URL
+*inside their own Render account*, without sharing credentials in chat.
+Encrypted file goes to owner-controlled private off-device storage with MFA,
+password phrase retained separately. See runbook for exact steps. Never
+store customer data in GitHub artifacts or PR attachments.
+
+Free Render PostgreSQL `expiresAt=2026-11-19T19:50:15Z`. Requires
+separate owner decision to upgrade the existing database or otherwise
+establish durable storage before expiration. Daily encrypted snapshots and
+periodic isolated restore checks are recommended; copies alone do not keep
+the Telegram service online after Free expiry.
+
+**NO-GO** until first real encrypted dump, copied private storage,
+isolated restore, migration + fallback rehearsals on real data, exact CI
+and separately approved production deployment and Android acceptance.
