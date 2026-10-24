@@ -79,3 +79,49 @@
 работающим compatible rollback-hotfix. Нужны реальные production
 backup/restore на отдельной базе, протестированный обратимый путь для
 планировщика, Android WebView приёмка новой версии и явное разрешение.
+
+
+## 6. Owner authorization and actually executable backup status
+
+The owner explicitly **authorized** a protected read-only production backup,
+isolated restore rehearsal and code-only release preparations on 24.10.2026.
+This does **not** authorize production migrations, a merge, a deploy,
+additional bots/services, paid resources or loss of user data.
+
+**Backup execution: BLOCKED / NOT PERFORMED.** The available Render
+connection implements read-only SQL queries, PostgreSQL instance metadata and
+service logs/deploy status. It does **not** implement shell/SSH, `pg_dump`,
+direct encrypted backup export, secure private backup object storage or
+`pg_restore`. The assistant cannot run a dump merely by selecting records;
+doing so would expose private user data and fail to capture PostgreSQL
+schema/constraints/consistent snapshot. No archive, checksum, restore
+duration or real-data consistency comparison exists. Do not confuse
+ephemeral GitHub Actions `formiq_schedule_test` pg_dump/restore with this.
+
+**Required execution capability:** a private trusted runner with PostgreSQL
+18 client access to the existing Render database, encrypted off-repository
+storage and a local/isolated PostgreSQL 18 restore target, with secrets
+delivered via a secret store rather than chat, GitHub code or logs.
+No additional paid infrastructure is approved. Before connecting verify
+the destination is isolated and devoid of Telegram/Yandex/webhook clients.
+Use a single read-only consistent snapshot and check archive hash,
+`pg_restore --list`, table totals/relationships, then run exact PR15
+migration twice and V5 fallback regression on the restored copy. Record
+time and error detail without exposing rows or credentials.
+
+**Compatible fallback prepared, not activated:** `FORMIQ_SCHEDULE_SAFE_MODE=1`
+on the **V5 application code** freezes new calendar changes, new cycles and
+profile schedule edits; old V5 calendar history and completed workouts remain
+on the live data model; `retired` entries are still hidden. This is safer
+than a blind redeploy of `main` but reduces plan editing and cycling during
+an emergency. Real PG18 integration tests were added in PR #15 and passed
+in [Actions #40116070978](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40116070978)
+for exact SHA `af56cf0c35162685a3c4072284312389787c5ada`.
+Further commits require fresh SHA-specific CI.
+
+**Actual Telegram Android WebView** still requires the single existing bot
+and a separately approved deploy. Chromium tests are preparatory only.
+
+**Decision remains NO-GO until the real encrypted production backup,
+real restore rehearsal, exact migration test, verified safe fallback and
+separate owner release approval are independently recorded.**
