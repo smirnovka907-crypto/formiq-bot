@@ -1,5 +1,7 @@
 """Fail-closed rollback gate tests; no network and no production credentials."""
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from unittest.mock import patch
 
 from scripts.rollback_readonly_gate import (
@@ -88,9 +90,13 @@ class RollbackGateTests(unittest.TestCase):
             self.assertEqual(main(['--dsn-env', 'DATABASE_URL']), 2)
 
     def test_cli_error_does_not_echo_password(self):
+        output, errors = StringIO(), StringIO()
         with patch.dict('os.environ', {'FORMIQ_RESTORE_TEST_DATABASE_URL':
                        'postgresql://user:SECRET_NEVER_PRINT@localhost/formiq_db'}):
-            self.assertEqual(main([]), 2)
+            with redirect_stderr(errors), redirect_stdout(output):
+                self.assertEqual(main([]), 2)
+        self.assertNotIn('SECRET_NEVER_PRINT', output.getvalue() + errors.getvalue())
+        self.assertIn('BLOCKED', errors.getvalue())
 
 
 if __name__ == '__main__':
