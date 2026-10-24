@@ -71,7 +71,7 @@ QUESTIONS = [
     ('days', 'Сколько тренировок в неделю?', [(f'{n} дн.', str(n)) for n in range(1, 8)]),
     ('equipment', 'Где тренируешься?', [('Дома', 'home'), ('Дома с инвентарём', 'homegear'), ('В зале', 'gym')]),
     ('age_group', 'Тебе исполнилось 18 лет?', [('Да, 18+', 'adult'), ('Нет', 'minor')]),
-    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in range(20, 91, 5)]),
+    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in range(20, 121, 10)]),
     ('clearance', 'Есть боль, травмы или ограничения?', [('Нет известных ограничений', 'none'), ('Да', 'yes'), ('Не уверен(а)', 'unsure')])
 ]
 FIELDS = [q[0] for q in QUESTIONS]
@@ -485,6 +485,23 @@ def init_db():
             activity_cleared BOOLEAN NOT NULL DEFAULT FALSE,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
+        # Only additive tables: historic profiles, workouts and schedules remain untouched.
+        c.execute("""CREATE TABLE IF NOT EXISTS profile_health_notes(
+            chat_id BIGINT PRIMARY KEY,
+            description TEXT NOT NULL CHECK(char_length(description)<=800),
+            consented_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE TABLE IF NOT EXISTS menstrual_periods(
+            id BIGSERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            starts_on DATE NOT NULL,
+            ends_on DATE NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK(ends_on>=starts_on),
+            CHECK(ends_on<=starts_on+14),
+            UNIQUE(chat_id,starts_on))""")
+        c.execute("""CREATE INDEX IF NOT EXISTS menstrual_periods_owner_date
+            ON menstrual_periods(chat_id,starts_on DESC)""")
         c.execute("ALTER TABLE workouts ADD COLUMN IF NOT EXISTS manual_title TEXT")
         c.execute("ALTER TABLE workouts ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'template'")
         c.execute('CREATE INDEX IF NOT EXISTS ai_history_idx ON ai_messages(chat_id,id DESC)')
@@ -1321,7 +1338,7 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
     # remain usable by every caller, including callers outside user_session.
     count = max(sessions(p),TRAINING_DAYS.index(day)+1 if day in TRAINING_DAYS else 0)
     goal = p['goal'] if p.get('goal') in ROUTINES[kind] else 'general'
-    mins = max(20, min(90, int(p['minutes'])))
+    mins = max(20, min(120, int(p['minutes'])))
     # 5–7 ACTIVE days are NOT 5–7 intense strength workouts.
     # Recovery sessions are gentle; never force a user to fill all seven days.
     if not custom_keys and count >= 5 and day in 'BDFG':
@@ -2708,7 +2725,14 @@ def save_onboarding(chat,body):
     for field in allowed_fields:
         choices={v for _,v in QUESTIONS[FIELDS.index(field)][2]}
         if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
-    selected_weekdays = validate_weekdays(vals['weekdays'],int(vals['days'])) if 'weekdays' in vals else None
+    selected_weekdays = None
+    if 'weekdays' in vals:
+        if not isinstance(vals['weekdays'],list) or not 1<=len(vals['weekdays'])<=7:
+            raise ValueError('Выбери хотя бы один день тренировок')
+        # The authoritative count is derived server-side; never trust an old
+        # drop-down value that conflicts with the user's chosen weekdays.
+        vals={**vals,'days':str(len(vals['weekdays']))}
+        selected_weekdays = validate_weekdays(vals['weekdays'],len(vals['weekdays']))
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
     age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
@@ -2716,13 +2740,26 @@ def save_onboarding(chat,body):
     weight=onboarding_number(raw.get('weight_kg'),'вес',25,300)
     hr=onboarding_number(raw.get('resting_hr'),'пульс в покое',35,120,required=False,whole=True)
     sex=raw.get('sex') or None
-    if sex not in (None,'male','female','other'):
-        raise ValueError('Проверь пол')
+    if sex not in ('male','female'):
+        raise ValueError('Выбери пол: Мужской или Женский')
     health=validate_health(body.get('health_profile'))
     equipment_description=body.get('equipment_description','')
     if not isinstance(equipment_description,str) or len(equipment_description)>400:
         raise ValueError('Описание инвентаря: не более 400 символов')
-    equipment_description=equipment_description.strip() if vals['equipment']=='homegear' else ''
+    equipment_description=equipment_description.strip()
+    # Two visible choices, retain legacy homegear storage for home inventory.
+    if vals['equipment']=='home' and equipment_description:
+        vals={**vals,'equipment':'homegear'}
+    if vals['equipment']!='homegear':
+        equipment_description=''
+    raw_note=body.get('health_description','')
+    if not isinstance(raw_note,str) or len(raw_note)>800:
+        raise ValueError('Описание здоровья: не более 800 символов')
+    raw_note=raw_note.strip()
+    if raw_note and body.get('health_storage_consent') is not True:
+        raise ValueError('Подтверди сохранение описания здоровья')
+    # No automatic diagnosis: text alone cannot override existing health limits.
+    # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         previous = profile_in(c,chat)
@@ -2765,6 +2802,12 @@ def save_onboarding(chat,body):
             updated_at=NOW()''',
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
+        if raw_note:
+            c.execute("""INSERT INTO profile_health_notes(chat_id,description,consented_at)
+                VALUES(%s,%s,NOW()) ON CONFLICT(chat_id)
+                DO UPDATE SET description=EXCLUDED.description,
+                consented_at=NOW(),updated_at=NOW()""",(chat,raw_note))
+        # Blank optional text does not delete existing sensitive history.
         if selected_weekdays is not None:
             cycle = c.execute('''SELECT id,starts_on,profile_fingerprint FROM training_cycles
                 WHERE chat_id=%s ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
@@ -3342,6 +3385,10 @@ def mini_state(chat, just_finished=False):
     result['history']=combined[:20]
     result['stats']['cardio7']=cardio
     result['metrics']=metrics(chat)
+    with db() as c:
+        private_note=c.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
+                               (chat,)).fetchone()
+    result['health_description']=private_note[0] if private_note else ''
     result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(result['metrics']))
     result['ai']={'consent':ai_state(chat)[0], 'left':ai_quota(chat)}
     result['prices']={'start':START_PRICE_RUB,'comfort':COMFORT_PRICE_RUB,'max':MAX_PRICE_RUB,
