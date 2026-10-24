@@ -245,6 +245,19 @@ async function run(){
     });
     assert.ok(result.documentWidth<=result.width+1,location+' horizontal scroll: '+JSON.stringify(result));
     assert.ok(result.bodyWidth<=result.width+1,location+' body overflow: '+JSON.stringify(result));
+    // Detect side overflows at any scroll position, including hidden below the fold.
+    const geometry=await page.evaluate(()=>{
+     const width=document.documentElement.clientWidth;
+     const nodes=document.querySelectorAll('.surface,.fq-live-dialog,.bottom-nav,.field input,.field select,.field textarea,.button-main,.button-subtle,.choice');
+     return Array.from(nodes).flatMap(el=>{
+      const style=getComputedStyle(el),b=el.getBoundingClientRect();
+      if(style.display==='none'||b.width===0||b.height===0)return [];
+      const offscreen=b.left<-.8||b.right>width+.8;
+      const undersized=el.matches('.button-main,.button-subtle')&&(b.height<43||b.width<44);
+      return offscreen||undersized?[{className:el.className,tag:el.tagName,rect:{left:b.left,right:b.right,height:b.height,width:b.width},offscreen,undersized}]:[];
+     }).slice(0,12);
+    });
+    assert.deepEqual(geometry,[],location+' misaligned mobile controls: '+JSON.stringify(geometry));
     if(result.navRect)assert.ok(result.navRect.bottom<=size.height+1,location+' bottom nav outside viewport');
    };
    await checkLayout('home '+size.width);
