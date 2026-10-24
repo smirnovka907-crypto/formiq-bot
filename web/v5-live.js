@@ -103,7 +103,7 @@ function onboardForm(){
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+button('Сохранить анкету','onboard-save',true)+
   (ready()?button('Отмена','onboard-cancel'):'')+'</div>');
- return page('Твой профиль',intro+block(personal+training)+health+legal);
+ return h()+(ready()?'<span class="kicker">Настройки</span>':'')+'<h1 class="title">Твой профиль</h1>'+intro+block(personal+training)+health+legal;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{};
