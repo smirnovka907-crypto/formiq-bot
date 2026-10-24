@@ -298,6 +298,31 @@ class V5StagingContract(unittest.TestCase):
                     self.mod.save_metrics(777, {'metrics': metrics})
                 conn.assert_not_called()
 
+    def test_health_ai_requires_explicit_server_side_consent(self):
+        """A signed session alone cannot authorize external health-data transfer."""
+        from urllib.error import URLError
+        import urllib.request
+        client=self.mod.APP.test_client()
+        payload={'action':'health_analyze','adult':True,'privacy_ack':True,
+                 'text':'Болит колено после пробежки в течение месяца'}
+        with patch.object(self.mod,'mini_auth',return_value=777), \
+             patch.object(self.mod,'YANDEX_KEY','test-key'), \
+             patch.object(self.mod,'FOLDER_ID','test-folder'), \
+             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound:
+            for value in (None,False,'yes'):
+                body={**payload}
+                if value is not None:
+                    body['ai_consent']=value
+                rejected=client.post('/mini/api',json=body)
+                self.assertEqual(rejected.status_code,400,rejected.get_json())
+                self.assertIn('отдельное согласие',rejected.json['error'])
+            outbound.assert_not_called()
+            # Explicit opt-in allows the separate AI path to reach the
+            # outbound request, here deliberately intercepted offline.
+            allowed=client.post('/mini/api',json={**payload,'ai_consent':True})
+            self.assertEqual(allowed.status_code,400,allowed.get_json())
+            outbound.assert_called_once()
+
     def test_onboarding_saves_health_and_profile_together_without_touching_history(self):
         from unittest.mock import MagicMock
         conn = MagicMock()
