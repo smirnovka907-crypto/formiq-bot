@@ -145,6 +145,37 @@ class WeekdayScheduleTests(unittest.TestCase):
         self.assertTrue(all('pg_advisory_xact_lock' in call.args[0]
                             for call in conn.execute.call_args_list))
 
+    def test_expired_wake_acknowledgement_is_not_an_app_failure(self):
+        from types import SimpleNamespace
+        error = self.m.telebot.apihelper.ApiTelegramException(
+            'answerCallbackQuery', None, {
+                'error_code': 400,
+                'description': 'Bad Request: query is too old and response timeout expired or query ID is invalid'})
+        call = SimpleNamespace(data='wake', id='stale-test',
+            from_user=SimpleNamespace(id=777),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777, type='private')))
+        with patch.object(self.m.BOT, 'answer_callback_query', side_effect=error) as answer, \
+             patch.object(self.m.LOG, 'exception') as failed, \
+             patch.object(self.m.LOG, 'debug') as ignored:
+            self.m.callback(call)
+        answer.assert_called_once()
+        failed.assert_not_called()
+        ignored.assert_called_once()
+
+    def test_unexpected_wake_acknowledgement_error_is_logged(self):
+        from types import SimpleNamespace
+        error = self.m.telebot.apihelper.ApiTelegramException(
+            'answerCallbackQuery', None, {
+                'error_code': 403,
+                'description': 'Forbidden: bot was blocked by the user'})
+        call = SimpleNamespace(data='wake', id='failed-test',
+            from_user=SimpleNamespace(id=777),
+            message=SimpleNamespace(chat=SimpleNamespace(id=777, type='private')))
+        with patch.object(self.m.BOT, 'answer_callback_query', side_effect=error), \
+             patch.object(self.m.LOG, 'exception') as failed:
+            self.m.callback(call)
+        failed.assert_called_once_with('Telegram wake acknowledgement failed')
+
     def test_old_telegram_questionnaire_buttons_open_current_app(self):
         from types import SimpleNamespace
         for action in ('restart','restart_yes','answer:2:7'):

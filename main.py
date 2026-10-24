@@ -2280,6 +2280,17 @@ def callback(call):
         if call.message.chat.type == 'private' and call.from_user.id == chat:
             try:
                 BOT.answer_callback_query(call.id, text='FORMIQ на связи ✅')
+            except telebot.apihelper.ApiTelegramException as exc:
+                # A delayed wake callback may expire while a sleeping server starts.
+                # The webhook has already woken the service; do not treat this
+                # expected Telegram 400 as an application failure.
+                description = (exc.description or '').lower()
+                if exc.error_code == 400 and (
+                        'query is too old' in description
+                        or 'query id is invalid' in description):
+                    LOG.debug('Expired Telegram wake callback ignored')
+                else:
+                    LOG.exception('Telegram wake acknowledgement failed')
             except Exception:
                 LOG.exception('Telegram wake acknowledgement failed')
         return
