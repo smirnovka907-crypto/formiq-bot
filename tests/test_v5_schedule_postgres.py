@@ -538,6 +538,12 @@ class SchedulePostgresTests(unittest.TestCase):
         original_slots = self.rows(cycle)
         self.assertTrue(any(row[4] == 'retired' for row in original_slots))
         self.assertTrue(any(row[4] == 'manual' for row in original_slots))
+        retired_id = next(row[0] for row in original_slots if row[4] == 'retired')
+        # A stale client must never be able to resurrect this retired identity.
+        with self.assertRaisesRegex(ValueError, 'Дата не найдена'):
+            self.m.mini_aux(self.chat, 'reschedule', {
+                'id': retired_id, 'date': '2026-11-07'})
+        self.assertEqual(self.rows(cycle), original_slots)
         original_history = self.snapshot_history()
         with self.connect() as conn:
             before_cycles = conn.execute(
