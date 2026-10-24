@@ -69,7 +69,8 @@ function createClient(auth=true,shared={}){
     workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
-   }else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
+   }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
+   else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:history.filter(x=>!p.date||x.date.split('.').reverse().join('-')===p.date),next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');if(shared.trackHistory)history=[{id:81,date:'23.10.2026',title:'Кардио · Велосипед'},...history];response={ok:true,data:state()};}
@@ -213,6 +214,8 @@ async function run(){
   await app.click({cmd:'plan-back'});
   assert.match(app.root.innerHTML,/Начать тренировку/,'Return from plan to workouts');
  await app.click({nav:'progress'});
+ await settle();
+ assert.ok(app.requests.some(x=>x.action==='progress_series'),'Progress loads owner-scoped history separately');
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
  assert.match(app.root.innerHTML,/Изменить параметры/);
@@ -277,6 +280,13 @@ async function run(){
  await app.click({cmd:'nutrition-analyze'});
  assert.equal(reportCount(),1,'One report uploaded with consent');
  assert.match(app.root.innerHTML,/1900 ккал/);
+ const weighted=createClient(true,{progressSeries:[{
+  key:'leg_press',name:'Жим ногами',points:[
+   {date:'2026-10-19',weight:55},{date:'2026-10-21',weight:60}
+  ]}]});
+ await settle();await weighted.click({nav:'progress'});await settle();
+ assert.match(weighted.root.innerHTML,/fq-progress-chart/,'Only server-supplied values form the line');
+ assert.match(weighted.root.innerHTML,/60 кг/);
  const polished={fullscreen:true};
   const ux=createClient(true,polished);await settle();
   assert.equal(polished.fullscreenCalls,1,'Supported Telegram clients request true fullscreen');

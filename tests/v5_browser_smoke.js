@@ -67,6 +67,8 @@ async function run(){
     response={ok:true,history:profileState.history,next_offset:null};
    }else if(data.action==='history_month'){
     response={ok:true,dates:['2026-10-23']};
+   }else if(data.action==='progress_series'){
+    response={ok:true,exercises:profileState.finishedWeightHistory||[]};
    }else if(data.action==='detail'){
     const item=profileState.history.find(x=>x.id===data.id);
     response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
@@ -85,6 +87,8 @@ async function run(){
     profileState.workout=null;
     profileState.history.unshift({id:9,date:'23.10.2026',title:'Силовая · завершена в браузере'});
     profileState.stats.total++;
+    profileState.finishedWeightHistory=[{key:'leg_press',name:'Жим ногами',
+     points:[{date:'2026-10-20',weight:55},{date:'2026-10-23',weight:60}]}];
    }else if(data.action==='cardio'){
     assert.equal(data.type,'Велосипед');assert.equal(data.minutes,60);assert.equal(data.avg_hr,120);
     if(rejectCardioOnce){rejectCardioOnce=false;response={ok:false,error:'Тест: кардио не сохранено'}}
@@ -165,7 +169,8 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'plan-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="progress"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Прогресс');
-   assert.equal(await page.locator('.fq-empty-chart').count(),1,'No fabricated working-weight graph');
+   await page.locator('.fq-empty-chart').waitFor();
+   assert.equal(await page.locator('.fq-progress-chart').count(),0,'No fabricated working-weight graph');
    await checkLayout('progress');
    await page.screenshot({path:path.join(OUT,'progress-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="food"]').click();
@@ -210,6 +215,8 @@ async function run(){
    await page.getByRole('button',{name:'Завершить',exact:true}).click();
    await page.locator('.fq-live-dialog').getByRole('button',{name:'Завершить',exact:true}).click();
    await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
+   await page.locator('.fq-progress-chart').waitFor();
+   assert.match(await page.locator('.fq-progress-chart').getAttribute('aria-label'),/60 кг/);
    await page.locator('.bottom-nav [data-nav="home"]').click();
    const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
    assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');

@@ -9,7 +9,7 @@ const icon={plan:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3
 const nav=()=>`<nav class="bottom-nav">${[['home','Тренировки'],['food','Питание'],['progress','Прогресс']].map(([k,n])=>`<button class="nav-item ${(view===k||(view==='plan'&&k==='home'))?'active':''}" data-nav="${k}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${icon[k]}</svg><span>${n}</span></button>`).join('')}</nav>`;
 const page=(name,body)=>`${h()}<h1 class="title">${esc(name)}</h1>${body}`;
 const input=(name,id,type,extra='')=>`<label class="field"><span>${esc(name)}</span><input id="${id}" type="${type}" value="${esc(drafts[id]??'')}" autocomplete="off" ${extra}></label>`;
-let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false,nutritionAnswer='',nutritionBusy=false;
+let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,restFor='',restSkippedKey='',calendarOpen=false,month='',date='',week=0,cardioType='',typesOpen=false,monthMarks=new Set(),dayRows=null,allRows=[],nextOffset=0,historyBusy=false,drafts=Object.create(null),metricEdit=false,profileDraft=null,profileNotice='',staleSetRefresh=false,nutritionAnswer='',nutritionBusy=false,progressSeries=null,progressLoading=false,progressError='',progressSelected='';
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&!state?.needs_health_profile&&!state?.error);
 
 let onboardOpen=false,onboard=null;
@@ -396,13 +396,66 @@ function planPage(){
   '<section class="week-selector" aria-label="План тренировок">'+periods+'</section>'+
   button('Назад к тренировкам','plan-back');
 }
+function weightChart(points,exerciseName){
+ const data=(Array.isArray(points)?points:[]).filter(p=>
+  /^\d{4}-\d{2}-\d{2}$/.test(String(p.date))&&Number.isFinite(Number(p.weight))&&
+  Number(p.weight)>0&&Number(p.weight)<=500).slice(-8);
+ if(!data.length)return '<div class="fq-empty-chart">Для этого упражнения пока нет записанного веса.</div>';
+ const values=data.map(p=>Number(p.weight));
+ const lower=Math.min(...values),upper=Math.max(...values);
+ const yMin=Math.max(0,Math.floor((lower-2)/5)*5);
+ const yMax=Math.max(yMin+5,Math.ceil((upper+2)/5)*5);
+ const w=340,h=177,left=44,right=12,top=16,bottom=39;
+ const x=i=>left+(data.length===1?(w-left-right)/2:i*(w-left-right)/(data.length-1));
+ const y=v=>top+(yMax-v)/(yMax-yMin)*(h-top-bottom);
+ const format=v=>v.toLocaleString('ru-RU',{maximumFractionDigits:2});
+ const guides=Array.from({length:5},(_,i)=>{
+  const mass=yMin+(yMax-yMin)*i/4,yy=y(mass);
+  return '<line x1="'+left+'" y1="'+yy+'" x2="'+(w-right)+'" y2="'+yy+
+   '" stroke="#b3c0bc" stroke-opacity=".62"/>'+
+   '<text x="'+(left-8)+'" y="'+(yy+4)+'" fill="#556568" font-size="10" text-anchor="end">'+format(mass)+'</text>';
+ }).join('');
+ const path=data.length>1?'<polyline points="'+data.map((p,i)=>x(i)+','+y(values[i])).join(' ')+
+  '" fill="none" stroke="#526762" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>':'';
+ const marks=data.map((p,i)=>'<circle cx="'+x(i)+'" cy="'+y(values[i])+
+  '" r="4" fill="#526762" stroke="#f1f5f2" stroke-width="2"/>'+
+  '<text x="'+x(i)+'" y="'+(h-12)+'" text-anchor="middle" font-size="10" fill="#556467">'+
+  esc(p.date.slice(8,10)+'.'+p.date.slice(5,7))+'</text>').join('');
+ return '<svg class="chart-area fq-progress-chart" viewBox="0 0 '+w+' '+h+
+  '" role="img" aria-label="'+esc(exerciseName+' — '+data.map(p=>p.date+' '+format(Number(p.weight))+' кг').join('; '))+'">'+
+  '<text x="6" y="10" font-size="10" fill="#556568">кг</text>'+guides+path+marks+'</svg>';
+}
+async function loadProgressSeries(){
+ if(!ready()||progressLoading)return;
+ progressLoading=true;progressError='';
+ if(view==='progress'&&!onboardOpen)draw();
+ try{
+  const response=await request('progress_series');
+  progressSeries=Array.isArray(response.exercises)?response.exercises:[];
+ }catch(_error){
+  progressSeries=null;
+  progressError='Не удалось загрузить график. Открой «Прогресс» ещё раз.';
+ }finally{
+  progressLoading=false;
+  if(view==='progress'&&!onboardOpen)draw();
+ }
+}
 function progress(){
  const stats=state.stats||{},weight=state.metrics?.weight_kg;
  const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
  const shown=valid?esc(Number(weight).toLocaleString('ru-RU',{maximumFractionDigits:2}))+' кг':'—';
- const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>История подходов</small></div>'+
-  '<div class="chart-block fq-empty-chart" role="status">График появится, когда станут доступны сохранённые веса по датам. Никаких демонстрационных чисел.</div>'+
-  '<p class="chart-leg">Подходы и веса сохраняются в PostgreSQL.</p></section>';
+ const exercises=Array.isArray(progressSeries)?progressSeries:[];
+ const selected=exercises.find(e=>e.key===progressSelected)||exercises[0]||null;
+ const choices=selected?'<div class="segmented fq-progress-exercises" style="grid-template-columns:repeat('+
+  Math.min(4,exercises.length)+',minmax(0,1fr))">'+exercises.map(e=>
+   '<button type="button" class="'+(e.key===selected.key?'on':'')+'" data-cmd="progress-exercise" data-key="'+
+   esc(e.key)+'" aria-pressed="'+(e.key===selected.key)+'">'+esc(e.name)+'</button>').join('')+'</div>':'';
+ const chart=progressLoading?'<div class="chart-block fq-empty-chart" role="status">Загружаем сохранённые результаты…</div>':
+  progressError?'<div class="chart-block fq-empty-chart" role="alert">'+esc(progressError)+'</div>':
+  selected?choices+'<div class="chart-block">'+weightChart(selected.points,selected.name)+'</div>'+
+   '<p class="chart-leg">Максимальный сохранённый вес по каждому дню. Только завершённые тренировки.</p>':
+  '<div class="chart-block fq-empty-chart" role="status">Пока нет завершённых подходов с записанным весом.</div>';
+ const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>По записям подходов</small></div>'+chart+'</section>';
  const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Последнее измерение</small></div>'+
   '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong><span>'+
   (valid?'Последнее сохранённое значение · динамика пока недоступна':'Нет измерений')+'</span></div></section>';
@@ -519,7 +572,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress')loadProgressSeries();return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(element.dataset.onboardWeekday!==undefined){
@@ -536,6 +589,7 @@ app.addEventListener('click',async e=>{
   onboard[key]=value;
   draw();return;
  }
+ if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
  if(cmd==='plan-open'||cmd==='plan-back'){view=cmd==='plan-open'?'plan':'home';error='';draw();window.scrollTo(0,0);return}
   if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
@@ -641,7 +695,7 @@ app.addEventListener('click',async e=>{
  if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
