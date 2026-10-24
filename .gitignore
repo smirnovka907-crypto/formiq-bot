@@ -1,0 +1,17 @@
+# FORMIQ production backups: never add private database dumps to GitHub.
+*.fiqenc
+*.fiqenc.partial
+FORMIQ-private-backups/
+*.pgdump
+*.pgdump.gz
+
+# Local environment variables / credentials.
+.env
+.env.*
+!.env.example
+
+# Python and local development caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
