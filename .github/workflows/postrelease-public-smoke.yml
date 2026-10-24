@@ -1,0 +1,21 @@
+name: FORMIQ public production post-release smoke (no credentials)
+on:
+  push:
+    branches:
+      - audit/postrelease-v5-20261025
+  workflow_dispatch:
+jobs:
+  public-production-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile public-only probe
+        run: python -m py_compile scripts/postrelease_public_smoke.py
+      - name: Test currently LIVE Render endpoints without Telegram credentials
+        run: python scripts/postrelease_public_smoke.py
