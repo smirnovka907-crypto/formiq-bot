@@ -210,6 +210,60 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(manual[3], date(2026, 11, 5))
         self.assertIn(manual[4], (None, 'manual'))
 
+    def test_checked_in_migration_preserves_legacy_data_and_is_idempotent(self):
+        # The exact production preparation file is executed against this
+        # isolated schema, never against the Render database.
+        from pathlib import Path
+        migration = (Path(__file__).resolve().parents[1] /
+                     'migrations/20261023_weekday_schedule.sql').read_text()
+        statements = [piece.strip() for piece in migration.split(';') if piece.strip()]
+        self.assertEqual(statements[0].splitlines()[-1], 'BEGIN')
+        self.assertEqual(statements[-1], 'COMMIT')
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE profiles DROP COLUMN weekdays')
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+            conn.execute("""INSERT INTO profiles(chat_id,goal,level,days,equipment,
+                age_group,minutes,clearance) VALUES(%s,'general','beginner','2',
+                'gym','adult','45','none')""", (self.chat,))
+            conn.execute("""INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,
+                day_code,planned_date) VALUES(%s,1,2,'B',%s)""",
+                         (self.chat, date(2026, 11, 5)))
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,equipment)
+                VALUES(%s,45,'cycling')""", (self.chat,))
+        with self.connect() as conn:
+            profile_before = conn.execute(
+                'SELECT chat_id,goal,days,equipment FROM profiles').fetchall()
+            schedule_before = conn.execute(
+                'SELECT chat_id,cycle_id,week_no,day_code,planned_date '
+                'FROM scheduled_sessions').fetchall()
+            cardio_before = conn.execute(
+                'SELECT chat_id,minutes,equipment FROM cardio_sessions').fetchall()
+        # Run BEGIN/COMMIT from the file with autocommit, so the script
+        # transaction mirrors the real migration instead of nesting BEGIN.
+        for _ in range(2):
+            with self.connect() as conn:
+                conn.autocommit = True
+                for statement in statements:
+                    conn.execute(statement)
+            with self.connect() as conn:
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,goal,days,equipment FROM profiles').fetchall(),
+                    profile_before)
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,cycle_id,week_no,day_code,planned_date '
+                    'FROM scheduled_sessions').fetchall(), schedule_before)
+                self.assertEqual(conn.execute(
+                    'SELECT chat_id,minutes,equipment FROM cardio_sessions').fetchall(),
+                    cardio_before)
+                self.assertEqual(conn.execute(
+                    'SELECT weekdays FROM profiles').fetchone()[0], None)
+                self.assertEqual(conn.execute(
+                    'SELECT schedule_state FROM scheduled_sessions').fetchone()[0], None)
+        with self.connect() as conn:
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                conn.execute("""UPDATE scheduled_sessions SET schedule_state='deleted'
+                    WHERE chat_id=%s""", (self.chat,))
+
     def test_invalid_weekdays_do_not_write_profile_or_calendar(self):
         _, cycle, _ = self.save()
         before = self.rows(cycle)
@@ -292,9 +346,16 @@ class SchedulePostgresTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        for program in ('pg_dump', 'pg_restore'):
-            self.assertIsNotNone(shutil.which(program),
-                                 program + ' is required for an actual restore test')
+        docker_container = os.getenv('FORMIQ_TEST_PG_DOCKER_CONTAINER')
+        if docker_container:
+            # Never accept user-supplied host names or container references:
+            # GitHub Actions supplies the exact ephemeral postgres service ID.
+            self.assertRegex(docker_container, r'\\A[a-f0-9]{64}\\Z')
+            self.assertIsNotNone(shutil.which('docker'))
+        else:
+            for program in ('pg_dump', 'pg_restore'):
+                self.assertIsNotNone(shutil.which(program),
+                                     program + ' is required for an actual restore test')
         _, cycle, _ = self.save(tuple(range(7)))
         Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
         _, unchanged_cycle, _ = self.save((0,))
@@ -319,17 +380,38 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
         with tempfile.TemporaryDirectory(prefix='formiq-restore-') as directory:
             archive = str(Path(directory) / 'sample.backup')
-            subprocess.run(['pg_dump', '--dbname', TEST_URL, '--format=custom',
-                            '--schema', self.schema, '--file', archive],
-                           check=True, capture_output=True, timeout=60)
-            self.assertGreater(Path(archive).stat().st_size, 0)
-            # Destructive part is confined to this disposable test schema.
-            with psycopg.connect(TEST_URL) as conn:
-                conn.execute(sql.SQL('DROP SCHEMA {} CASCADE')
-                             .format(sql.Identifier(self.schema)))
-            subprocess.run(['pg_restore', '--dbname', TEST_URL, '--no-owner',
-                            '--no-acl', '--exit-on-error', archive],
-                           check=True, capture_output=True, timeout=60)
+            if docker_container:
+                # Executing in the disposable PG18 service avoids depending on
+                # the host runner's possibly older pg_dump binary.
+                archive = '/tmp/formiq-test-' + uuid.uuid4().hex + '.backup'
+                dump = ['docker', 'exec', docker_container, 'pg_dump',
+                        '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                        '--format=custom', '--schema', self.schema, '--file', archive]
+                restore = ['docker', 'exec', docker_container, 'pg_restore',
+                           '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                           '--no-owner', '--no-acl', '--exit-on-error', archive]
+            else:
+                dump = ['pg_dump', '--dbname', TEST_URL, '--format=custom',
+                        '--schema', self.schema, '--file', archive]
+                restore = ['pg_restore', '--dbname', TEST_URL, '--no-owner',
+                           '--no-acl', '--exit-on-error', archive]
+            try:
+                subprocess.run(dump, check=True, capture_output=True, timeout=60)
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'test',
+                                    '-s', archive],
+                                   check=True, capture_output=True, timeout=20)
+                else:
+                    self.assertGreater(Path(archive).stat().st_size, 0)
+                # Destructive part is confined to this disposable test schema.
+                with psycopg.connect(TEST_URL) as conn:
+                    conn.execute(sql.SQL('DROP SCHEMA {} CASCADE')
+                                 .format(sql.Identifier(self.schema)))
+                subprocess.run(restore, check=True, capture_output=True, timeout=60)
+            finally:
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'rm',
+                                    '-f', archive], capture_output=True, timeout=20)
         self.assertEqual(self.snapshot_history(), before_history)
         self.assertEqual(self.rows(cycle), before_calendar)
         self.assertEqual(self.m.profile(self.chat), before_profile)

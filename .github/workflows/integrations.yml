@@ -24,7 +24,7 @@ jobs:
       contents: read
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_DB: formiq_schedule_test
           POSTGRES_USER: formiq_test
@@ -75,8 +75,12 @@ jobs:
       - name: Compile bot
         if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
         run: python -m py_compile main.py welcome_art.py
-      - name: Run full static smoke and UX tests
+      - name: Run full static smoke and UX tests (PostgreSQL 18)
         if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
+        env:
+          # Use pg_dump/pg_restore from the matching PostgreSQL 18 service.
+          # Test credentials and archive remain in the disposable GitHub runner.
+          FORMIQ_TEST_PG_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
         run: |
           python tests/test_static.py
           python -m unittest discover -s tests -p 'test_*.py' -v
