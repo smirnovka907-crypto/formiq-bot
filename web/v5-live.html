@@ -417,4 +417,40 @@ body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-are
  .workout-entry .workout-cta{margin-top:10px}
  .workout-entry + .workout-secondary-actions{margin-top:9px!important}
 }
+
+/* FORMIQ onboarding v6: two sex choices, inline field errors, rose theme. */
+.fq-sex-options{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px}
+.fq-sex-options .choice{min-height:54px;font-weight:760}
+.fq-form-error{font-size:13px;line-height:1.4;color:#a73548;margin:7px 0 8px;font-weight:680}
+.fq-onboard-choice .fq-form-error{margin-top:8px}
+.fq-onboard-actions{display:flex;flex-direction:column;gap:9px;margin-top:18px}
+.fq-onboard-actions .button-main{min-height:56px}
+.field select{width:100%;min-height:50px;border:1px solid #b9c6c3;border-radius:12px;padding:11px 12px;background:#fdfefe;color:var(--ink)}
+.fq-period-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
+.fq-period-row span{font-size:14px;line-height:1.5}
+.fq-period-row button{min-height:40px;border:1px solid var(--line);border-radius:10px;background:#fff9;padding:8px 10px}
+body.theme-female{
+ --ink:#352a36;--secondary:#66555f;--faint:#76656f;--line:rgba(171,112,143,.26);
+ --silver:#f1dce7;--silver-dark:#ddbbcd;--ivory:#fff8fb;--pistachio:#b66d99;
+ --orange:#c57f9f;--shadow:0 13px 34px rgba(126,58,98,.07);
+ background:#ead6e2;color:var(--ink);
+}
+body.theme-female .app{background:linear-gradient(140deg,#fffbfd,#f7eaf1 48%,#fff8fc 99%);box-shadow:0 0 42px #714d6a22}
+body.theme-female .surface{background:rgba(255,250,254,.78);border-color:#e5bfd2}
+body.theme-female .surface.soft{background:rgba(255,245,251,.56)}
+body.theme-female .brand{color:#7c4d68;border-color:#dbabc8}
+body.theme-female .button-main{background:linear-gradient(135deg,#c77ba8,#934b7a);border-color:#97577d;color:white;box-shadow:0 5px 15px #a85a8833}
+body.theme-female .button-subtle,body.theme-female .profile-open,body.theme-female .back{background:linear-gradient(140deg,#fff8fc,#f1dae8);border-color:#d9adca;color:#693c5a}
+body.theme-female .choice.on,body.theme-female .weekday.on,body.theme-female .week-selector button.on{background:linear-gradient(130deg,#f4ccdf,#fbe7f0);border-color:#b976a1;color:#683951;box-shadow:inset 0 2px 5px #a65a8b21}
+body.theme-female .choice{border-color:#e0b9d0;background:#fff9fc;color:#684a5d}
+body.theme-female .field input,body.theme-female .field textarea,body.theme-female .field select{border-color:#d5a8c0;background:#fffbfd;color:#412b3a}
+body.theme-female .bottom-nav{background:rgba(250,234,244,.97);border-top-color:#dbb4ca}
+body.theme-female .nav-item{color:#806274}
+body.theme-female .nav-item.active{background:linear-gradient(135deg,#fff7fc,#edcddd);border-color:#ca94b2;color:#663b59}
+body.theme-female .modal-panel,body.theme-female .fq-live-dialog{background:linear-gradient(145deg,#fffbfd,#f5e3ed)}
+body.theme-female .fq-live-banner{background:#f8dfea;color:#583549}
+body.theme-female .cal-grid button.selected{background:#f3ccdf;border-color:#c58cab}
+body.theme-female :is(.input-note,.muted,.empty){color:#675360}
+body.theme-female :is(.section-label,.title){color:#392736}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
