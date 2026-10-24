@@ -720,6 +720,25 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(future.status_code,400)
             self.assertEqual(client.post('/mini/api',
                              json={'action':'period_list'}).json['periods'],before)
+        # Switching to the male Aluminium profile hides private female data,
+        # but must NOT delete it or allow further calendar writes.
+        data['metrics']['sex']='male'
+        self.m.save_onboarding(self.chat,data)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,400)
+            denied=client.post('/mini/api',json={'action':'period_save',
+                'start':'2026-10-04','end':'2026-10-07'})
+            self.assertEqual(denied.status_code,400)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM menstrual_periods WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],3)
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            restored=client.post('/mini/api',json={'action':'period_list'})
+            self.assertEqual(restored.status_code,200)
+            self.assertEqual(restored.json['periods'],before)
         # Different Telegram identity cannot read or update another person's entries.
         self.chat=999
         other=self.body((0,2));other['metrics']['sex']='female'
