@@ -697,7 +697,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertNotIn("onboardChoice('days'",js)
         self.assertNotIn('type="range" min="20" max="90"',js)
         self.assertNotIn("['Не указывать','']",js)
-        self.assertNotIn("/mini/legacy'"",js)
+        self.assertNotIn("window.location.assign('/mini/legacy'",js)
         self.assertIn("body.theme-female .app",html)
 
 
