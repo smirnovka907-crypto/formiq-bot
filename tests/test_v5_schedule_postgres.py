@@ -493,5 +493,35 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertFalse(any(r['date'] == '2026-10-20' and r['day'] == 'B' for r in calendar))
 
 
+    def test_readonly_rollback_gate_on_real_pg18_isolated_schema(self):
+        """Check real SQL + SELECT-only assessment without changing any records."""
+        from scripts.rollback_readonly_gate import inspect_legacy_rollback
+
+        with self.connect() as conn:
+            clean = inspect_legacy_rollback(conn)
+        self.assertEqual(clean['status'], 'candidate')
+
+        self.save((0, 2, 4))
+        before_rows = self.rows(self.m.get_cycle(self.chat, self.m.profile(self.chat))[0])
+        before_profile = self.m.profile(self.chat)
+        before_history = self.snapshot_history()
+        with self.connect() as conn:
+            report = inspect_legacy_rollback(conn)
+        self.assertEqual(report['status'], 'blocked')
+        self.assertTrue(report['weekday_choices_present'])
+        self.assertTrue(report['schedule_states_present'])
+        self.assertEqual(before_rows, self.rows(self.m.get_cycle(
+            self.chat, self.m.profile(self.chat))[0]))
+        self.assertEqual(before_profile, self.m.profile(self.chat))
+        self.assertEqual(before_history, self.snapshot_history())
+
+        # A broken one-column migration must never be called safe.
+        with self.connect() as conn:
+            conn.execute('ALTER TABLE scheduled_sessions DROP COLUMN schedule_state')
+        with self.connect() as conn:
+            damaged = inspect_legacy_rollback(conn)
+        self.assertEqual(damaged['reason'], 'partial_v5_schema')
+
+
 if __name__ == '__main__':
     unittest.main()
