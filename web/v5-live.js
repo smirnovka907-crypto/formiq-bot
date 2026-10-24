@@ -85,14 +85,14 @@ function onboardForm(){
   (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь разбор ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+' '+esc(d.aiResult.clarification_question||'')+'</div>'+onboardCheckbox('aiReviewed','Проверил предложенные области, характер симптомов и тревожные признаки; подтверждаю результат'):'' );
  }else limits='<p class="input-note">Если появятся ограничения, их можно добавить позже.</p>';
  const intro='<p class="intro">Единая анкета FORMIQ. Изменение параметров не удалит твою историю.</p>';
- const personal=block('<h2>Основные параметры</h2>'+onboardButtons('sex','Пол (необязательно)',[['Мужской','male'],['Женский','female'],['Не указывать','']])+'<div class="form-row">'+
+ const personal='<h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+onboardButtons('sex','Пол (необязательно)',[['Мужской','male'],['Женский','female'],['Не указывать','']])+'<div class="form-row">'+
   onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
-  onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Подтверждаю, что мне исполнилось 18 лет'));
- const training=block('<h2>Тренировки</h2>'+onboardButtons('goal','Цель',onboardChoices.goal)+
+  onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Подтверждаю, что мне исполнилось 18 лет');
+ const training='<h2 class="section-label">Тренировки</h2>'+onboardButtons('goal','Цель',onboardChoices.goal)+
   onboardChoice('level','Опыт',onboardChoices.level)+'<div class="fq-live-grid">'+
   onboardChoice('days','Тренировок в неделю',onboardChoices.days)+'</div>'+onboardWeekdays()+onboardDuration()+
   onboardButtons('equipment','Где тренируешься',onboardChoices.equipment)+
-  (d.equipment==='homegear'?'<label class="field"><span>Домашний инвентарь</span><textarea data-onboard="equipment_description" rows="2" maxlength="400">'+esc(d.equipment_description)+'</textarea></label>':''));
+  (d.equipment==='homegear'?'<label class="field"><span>Домашний инвентарь</span><textarea data-onboard="equipment_description" rows="2" maxlength="400">'+esc(d.equipment_description)+'</textarea></label>':'');
  const health=block('<h2>Самочувствие и ограничения</h2>'+
   onboardChoice('limitation','Есть боль, травмы или ограничения?',onboardChoices.limitation)+limits+
   onboardCheckbox('danger','Есть тревожные симптомы: боль в груди, обмороки или сильная необычная одышка')+
@@ -103,7 +103,7 @@ function onboardForm(){
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+button('Сохранить анкету','onboard-save',true)+
   (ready()?button('Отмена','onboard-cancel'):'')+'</div>');
- return page('Твой профиль',intro+personal+training+health+legal);
+ return page('Твой профиль',intro+block(personal+training)+health+legal);
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{};
@@ -245,7 +245,7 @@ function workout(){
  }else{
   const target=c.low===c.high?String(c.low):String(c.low)+'–'+String(c.high);
   const unit=c.unit==='reps'?'повторений':c.unit==='sec'?'секунд':'минут';
-  content='<section class="surface workout-entry" id="workout-entry"><span class="eyebrow">ТЕКУЩЕЕ УПРАЖНЕНИЕ</span>'+
+  content='<section class="surface workout-entry" id="workout-entry"><span class="eyebrow">УПРАЖНЕНИЕ '+esc(c.index||1)+' ИЗ '+esc(w.exercise_count||1)+'</span>'+
    '<h2 class="workout-exercise">'+esc(c.name)+'</h2>'+
    '<p class="subtitle">Подход '+esc(c.set_no)+' из '+esc(c.set_count)+' · цель '+esc(target)+' '+unit+'</p>'+
    (c.previous?'<p class="input-note" style="margin-top:12px">Прошлый результат: '+esc(c.previous)+'</p>':'')+
