@@ -403,8 +403,10 @@ function weightChart(points,exerciseName){
  if(!data.length)return '<div class="fq-empty-chart">Для этого упражнения пока нет записанного веса.</div>';
  const values=data.map(p=>Number(p.weight));
  const lower=Math.min(...values),upper=Math.max(...values);
- const yMin=Math.max(0,Math.floor((lower-2)/5)*5);
- const yMax=Math.max(yMin+5,Math.ceil((upper+2)/5)*5);
+ // Use a regular whole-kilogram tick grid, not decimal quarter ticks.
+ const tickStep=Math.max(5,5*Math.ceil((upper-lower+2)/15));
+ const yMin=Math.max(0,Math.floor((lower-1)/tickStep)*tickStep);
+ const yMax=yMin+4*tickStep;
  const w=340,h=177,left=44,right=12,top=16,bottom=39;
  const x=i=>left+(data.length===1?(w-left-right)/2:i*(w-left-right)/(data.length-1));
  const y=v=>top+(yMax-v)/(yMax-yMin)*(h-top-bottom);

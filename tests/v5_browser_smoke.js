@@ -207,6 +207,8 @@ async function run(){
    await page.locator('.bottom-nav [data-nav="home"]').click();
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
+   await page.locator('#reps').waitFor({state:'visible'});
+   await page.locator('.fq-live-overlay').waitFor({state:'detached'});
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
