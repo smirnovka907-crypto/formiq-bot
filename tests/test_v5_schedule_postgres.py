@@ -216,7 +216,11 @@ class SchedulePostgresTests(unittest.TestCase):
         from pathlib import Path
         migration = (Path(__file__).resolve().parents[1] /
                      'migrations/20261023_weekday_schedule.sql').read_text()
-        statements = [piece.strip() for piece in migration.split(';') if piece.strip()]
+        sql_without_comments = '\n'.join(
+            line for line in migration.splitlines()
+            if not line.lstrip().startswith('--'))
+        statements = [piece.strip() for piece in sql_without_comments.split(';')
+                      if piece.strip()]
         self.assertEqual(statements[0].splitlines()[-1], 'BEGIN')
         self.assertEqual(statements[-1], 'COMMIT')
         with self.connect() as conn:
@@ -350,7 +354,99 @@ class SchedulePostgresTests(unittest.TestCase):
         if docker_container:
             # Never accept user-supplied host names or container references:
             # GitHub Actions supplies the exact ephemeral postgres service ID.
-            self.assertRegex(docker_container, r'\\A[a-f0-9]{64}\\Z')
+            self.assertRegex(docker_container, r'^[0-9a-f]{64})
+            self.assertIsNotNone(shutil.which('docker'))
+        else:
+            for program in ('pg_dump', 'pg_restore'):
+                self.assertIsNotNone(shutil.which(program),
+                                     program + ' is required for an actual restore test')
+        _, cycle, _ = self.save(tuple(range(7)))
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        _, unchanged_cycle, _ = self.save((0,))
+        self.assertEqual(cycle, unchanged_cycle)
+        with self.connect() as conn:
+            wid = conn.execute("""INSERT INTO workouts(chat_id,cycle_id,week_no,
+                plan_day,status,started_at,finished_at,source)
+                VALUES(%s,%s,1,'A','finished',%s,%s,'template') RETURNING id""",
+                (self.chat, cycle, Clock.instant, Clock.instant)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,
+                exercise_key) VALUES(%s,0,'Жим ногами','3 × 10','leg_press')""", (wid,))
+            conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                target_min,target_max,unit,actual_value,state,weight_kg,completed_at)
+                VALUES(%s,0,1,10,12,'reps',12,'done',60,%s)""",
+                (wid, Clock.instant))
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment)
+                VALUES(%s,45,120,'cycling')""", (self.chat,))
+        before_history = self.snapshot_history()
+        before_profile = self.m.profile(self.chat)
+        before_calendar = self.rows(cycle)
+        self.assertTrue(any(row[4] == 'retired' for row in before_calendar))
+        self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
+        with tempfile.TemporaryDirectory(prefix='formiq-restore-') as directory:
+            archive = str(Path(directory) / 'sample.backup')
+            if docker_container:
+                # Executing in the disposable PG18 service avoids depending on
+                # the host runner's possibly older pg_dump binary.
+                archive = '/tmp/formiq-test-' + uuid.uuid4().hex + '.backup'
+                dump = ['docker', 'exec', docker_container, 'pg_dump',
+                        '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                        '--format=custom', '--schema', self.schema, '--file', archive]
+                restore = ['docker', 'exec', docker_container, 'pg_restore',
+                           '--username', 'formiq_test', '--dbname', 'formiq_schedule_test',
+                           '--no-owner', '--no-acl', '--exit-on-error', archive]
+            else:
+                dump = ['pg_dump', '--dbname', TEST_URL, '--format=custom',
+                        '--schema', self.schema, '--file', archive]
+                restore = ['pg_restore', '--dbname', TEST_URL, '--no-owner',
+                           '--no-acl', '--exit-on-error', archive]
+            try:
+                subprocess.run(dump, check=True, capture_output=True, timeout=60)
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'test',
+                                    '-s', archive],
+                                   check=True, capture_output=True, timeout=20)
+                else:
+                    self.assertGreater(Path(archive).stat().st_size, 0)
+                # Destructive part is confined to this disposable test schema.
+                with psycopg.connect(TEST_URL) as conn:
+                    conn.execute(sql.SQL('DROP SCHEMA {} CASCADE')
+                                 .format(sql.Identifier(self.schema)))
+                subprocess.run(restore, check=True, capture_output=True, timeout=60)
+            finally:
+                if docker_container:
+                    subprocess.run(['docker', 'exec', docker_container, 'rm',
+                                    '-f', archive], capture_output=True, timeout=20)
+        self.assertEqual(self.snapshot_history(), before_history)
+        self.assertEqual(self.rows(cycle), before_calendar)
+        self.assertEqual(self.m.profile(self.chat), before_profile)
+
+    def test_timezone_change_keeps_cycle_manual_move_and_protected_boundary(self):
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        _, cycle, _ = self.save((1, 3), zone='Asia/Tokyo')  # Locally October 20.
+        sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'B'))
+        self.m.mini_aux(self.chat, 'reschedule', {'id': sid, 'date': '2026-11-04'})
+        profile, changed_cycle, calendar = self.save((0, 2), zone='America/Los_Angeles')
+        self.assertEqual(changed_cycle, cycle, 'Changing timezone must not replace the cycle')
+        self.assertEqual(next(r for r in self.rows(cycle) if r[0] == sid)[3], date(2026, 11, 4))
+        self.assertIn(sid, {r['id'] for r in calendar})
+        # A count increase must not insert a slot on the old timezone's protected today,
+        # even if a later read regards it as tomorrow in the newly selected timezone.
+        self.chat = 778
+        Clock.instant = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
+        _, other_cycle, _ = self.save((6,), zone='Asia/Tokyo')
+        Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
+        profile, same_cycle, calendar = self.save((0, 1), zone='America/Los_Angeles')
+        self.assertEqual(same_cycle, other_cycle)
+        before = self.rows(other_cycle)
+        for _ in range(2):
+            calendar = self.m.scheduled_calendar(self.chat, profile, other_cycle)
+        self.assertEqual(self.rows(other_cycle), before)
+        self.assertFalse(any(r['date'] == '2026-10-20' and r['day'] == 'B' for r in calendar))
+
+
+if __name__ == '__main__':
+    unittest.main()
+)
             self.assertIsNotNone(shutil.which('docker'))
         else:
             for program in ('pg_dump', 'pg_restore'):
