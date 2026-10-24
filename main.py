@@ -342,6 +342,10 @@ def db():
 
 def init_db():
     with db() as c:
+        # Keep startup schema preparation fail-fast if another transaction
+        # holds DDL locks. These settings last only for this transaction.
+        c.execute("SET LOCAL lock_timeout = '5s'")
+        c.execute("SET LOCAL statement_timeout = '30s'")
         c.execute('''CREATE TABLE IF NOT EXISTS profile_equipment (
             chat_id BIGINT PRIMARY KEY, description TEXT NOT NULL DEFAULT '',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')
@@ -350,6 +354,7 @@ def init_db():
             equipment TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())''')
         for col in ('age_group', 'minutes', 'clearance'):
             c.execute(f'ALTER TABLE profiles ADD COLUMN IF NOT EXISTS {col} TEXT')
+        c.execute('ALTER TABLE profiles ADD COLUMN IF NOT EXISTS weekdays JSONB')
         c.execute('''CREATE TABLE IF NOT EXISTS workouts (
             id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL, plan_day TEXT NOT NULL,
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), finished_at TIMESTAMPTZ,
@@ -424,6 +429,8 @@ def init_db():
             UNIQUE(cycle_id,week_no,day_code))""")
         c.execute("""CREATE INDEX IF NOT EXISTS schedule_user_date
             ON scheduled_sessions(chat_id,planned_date)""")
+        c.execute("""ALTER TABLE scheduled_sessions ADD COLUMN IF NOT EXISTS schedule_state
+            TEXT CHECK (schedule_state IN ('auto','manual','retired'))""")
         c.execute("""CREATE TABLE IF NOT EXISTS custom_programs(
             chat_id BIGINT NOT NULL,day_code TEXT NOT NULL,
             exercise_keys JSONB NOT NULL,updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -557,6 +564,10 @@ def start_manual_workout(chat, title, keys, set_count):
         raise ValueError('Проверь выбранные упражнения')
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        p = profile_in(c,chat)
+        error = ready(p,chat)
+        if error:
+            raise ValueError(error)
         if c.execute("SELECT id FROM workouts WHERE chat_id=%s AND status='active' LIMIT 1",(chat,)).fetchone():
             raise ValueError('Сначала заверши текущую тренировку')
         cycle, week = cycle_status(c, chat, p)
@@ -908,17 +919,23 @@ def profile_hub(chat, mid=None):
          [('Открыть FORMIQ','mini')],mid)
 
 
-def profile(chat):
-    with db() as c:
-        r = c.execute('''SELECT p.goal,p.level,p.days,p.equipment,p.age_group,
-                                p.minutes,p.clearance,COALESCE(e.description,'')
-                         FROM profiles p LEFT JOIN profile_equipment e
-                         ON e.chat_id=p.chat_id WHERE p.chat_id=%s''', (chat,)).fetchone()
+def profile_in(c, chat):
+    """Read the authoritative profile within the caller's transaction/lock."""
+    r = c.execute('''SELECT p.goal,p.level,p.days,p.equipment,p.age_group,
+                            p.minutes,p.clearance,COALESCE(e.description,''),p.weekdays
+                     FROM profiles p LEFT JOIN profile_equipment e
+                     ON e.chat_id=p.chat_id WHERE p.chat_id=%s''', (chat,)).fetchone()
     if not r:
         return {}
     result = dict(zip(FIELDS, r[:len(FIELDS)]))
-    result['equipment_description'] = r[-1] if result.get('equipment') == 'homegear' else ''
+    result['equipment_description'] = r[len(FIELDS)] if result.get('equipment') == 'homegear' else ''
+    result['weekdays'] = list(r[len(FIELDS)+1]) if r[len(FIELDS)+1] is not None else None
     return result
+
+
+def profile(chat):
+    with db() as c:
+        return profile_in(c,chat)
 
 
 # Affected regions only; never infer a diagnosis from user-reported pain.
@@ -1044,18 +1061,26 @@ def ready(p, chat=None):
 
 def reset_profile(chat):
     with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        if profile_in(c,chat).get('weekdays') is not None:
+            return False
         c.execute('''INSERT INTO profiles(chat_id) VALUES(%s)
                      ON CONFLICT(chat_id) DO UPDATE SET goal=NULL,level=NULL,days=NULL,
                      equipment=NULL,age_group=NULL,minutes=NULL,clearance=NULL,
                      updated_at=NOW()''', (chat,))
+    return True
 
 
 def save_answer(chat, field, value):
     if field not in FIELDS:
-        return
+        return False
     with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        if profile_in(c,chat).get('weekdays') is not None:
+            return False
         c.execute('INSERT INTO profiles(chat_id) VALUES(%s) ON CONFLICT DO NOTHING', (chat,))
         c.execute(f'UPDATE profiles SET {field}=%s,updated_at=NOW() WHERE chat_id=%s', (value, chat))
+    return True
 
 
 def ask(chat, i, mid=None):
@@ -1079,6 +1104,17 @@ def show_profile(chat, mid=None):
 TRAINING_DAYS = 'ABCDEFG'
 
 
+def schedule_emergency_readonly():
+    """Operator-only emergency fallback for V5 schema; never use old scheduler."""
+    return os.environ.get('FORMIQ_SCHEDULE_SAFE_MODE') == '1'
+
+
+def require_schedule_writes_enabled():
+    if schedule_emergency_readonly():
+        raise ValueError('Расписание временно защищено. История и тренировки сохранены.')
+
+
+
 def sessions(p):
     """User-chosen active days; days 5–7 include lighter recovery sessions."""
     return max(1, min(7, int(p['days'])))
@@ -1097,6 +1133,101 @@ def session_offsets(count):
     }[count]
 
 
+def validate_weekdays(raw, count):
+    if not isinstance(raw,list) or len(raw)!=count or any(
+            type(day) is not int or not 0<=day<=6 for day in raw) or len(set(raw))!=len(raw):
+        raise ValueError('Выбери конкретные дни недели: столько же, сколько тренировок')
+    return sorted(raw)
+
+
+def selected_session_offsets(start_date, count, weekdays):
+    if weekdays is None:
+        return session_offsets(count)
+    selected = validate_weekdays(weekdays,count)
+    return tuple(sorted((day-start_date.weekday()) % 7 for day in selected))
+
+
+def schedule_reconciliation(rows, start_date, count, weekdays, today, infer_count=None):
+    """Compute changes to future automatic slots; never erase calendar identities.
+
+    NULL legacy rows are pinned unless first adoption supplies an exact, known
+    count-based baseline. Retirement is persistent, so hidden slots cannot return
+    when the local date advances. Any linked workout protects its calendar row.
+    """
+    offsets = selected_session_offsets(start_date,count,weekdays)
+    old_offsets = session_offsets(infer_count) if infer_count is not None else ()
+    existing = {(row[1],row[2]):row for row in rows}
+    updates, inserts = [], []
+    if weekdays is not None:
+        for sid,week,day,planned,state,linked in rows:
+            if planned<=today or linked or day not in TRAINING_DAYS or not 1<=week<=4:
+                continue
+            index = TRAINING_DAYS.index(day)
+            new_state = state
+            if state is None and index<len(old_offsets):
+                baseline = start_date+timedelta(days=(week-1)*7+old_offsets[index])
+                if planned==baseline:
+                    new_state = 'auto'
+            if new_state not in ('auto','retired'):
+                continue
+            new_date = planned
+            if index>=count:
+                new_state = 'retired'
+            else:
+                target = start_date+timedelta(days=(week-1)*7+offsets[index])
+                if target>today:
+                    new_date, new_state = target, 'auto'
+                else:
+                    # A newly chosen weekday already passed in this cycle
+                    # week. Do not keep an automatic slot on an unselected day.
+                    new_state = 'retired'
+            if (new_date,new_state)!=(planned,state):
+                updates.append((sid,new_date,new_state))
+    for week in range(1,5):
+        for index,offset in enumerate(offsets):
+            day = TRAINING_DAYS[index]
+            if (week,day) in existing:
+                continue
+            target = start_date+timedelta(days=(week-1)*7+offset)
+            if weekdays is not None and target<=today and not (
+                    not rows and start_date==today and target==today):
+                continue
+            inserts.append((week,day,target))
+    return updates,inserts
+
+
+def reconcile_schedule_in(c, chat, cycle, start_date, p, today, infer_count=None,
+                          reconcile_existing=False):
+    if schedule_emergency_readonly():
+        return  # Keep all calendar identities, including retired and manual slots.
+    if p.get('weekdays') is not None and not reconcile_existing:
+        return
+    rows = c.execute('''SELECT s.id,s.week_no,s.day_code,s.planned_date,s.schedule_state,
+        EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=s.chat_id AND w.cycle_id=s.cycle_id
+            AND w.week_no=s.week_no AND w.plan_day=s.day_code)
+        FROM scheduled_sessions s WHERE s.chat_id=%s AND s.cycle_id=%s
+        ORDER BY s.week_no,s.day_code FOR UPDATE OF s''',(chat,cycle)).fetchall()
+    updates,inserts = schedule_reconciliation(rows,start_date,sessions(p),p.get('weekdays'),
+        today,infer_count=infer_count)
+    # Calendar reads may fill missing future slots, but must not re-run a
+    # profile edit after its conservative old/new-timezone cutoff has passed.
+    for sid,new_date,new_state in updates if reconcile_existing else ():
+        c.execute('''UPDATE scheduled_sessions SET planned_date=%s,schedule_state=%s
+            WHERE id=%s AND chat_id=%s AND cycle_id=%s''',
+            (new_date,new_state,sid,chat,cycle))
+    for week,day,target in inserts:
+        c.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,day_code,
+            planned_date,schedule_state) VALUES(%s,%s,%s,%s,%s,'auto')
+            ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''',(chat,cycle,week,day,target))
+
+
+def same_plan_except_frequency(old_fingerprint, p):
+    old = old_fingerprint.split('|') if isinstance(old_fingerprint,str) else []
+    new = [str(p.get(field,'')) for field in FIELDS]
+    return len(old)==len(new) and all(old[i]==new[i]
+        for i,field in enumerate(FIELDS) if field!='days')
+
+
 def fingerprint(p):
     return '|'.join(str(p.get(f, '')) for f in FIELDS)
 
@@ -1105,18 +1236,25 @@ def cycle_status(c, chat, p):
     today = local_today(chat)
     last = c.execute('''SELECT id,starts_on,profile_fingerprint FROM training_cycles
                         WHERE chat_id=%s ORDER BY id DESC LIMIT 1''', (chat,)).fetchone()
-    if last and last[2] == fingerprint(p) and 0 <= (today - last[1]).days < 28:
-        return last[0], (today - last[1]).days // 7 + 1
+    # Changing between supported civil timezones can move "today" behind the
+    # unchanged cycle start by at most two dates. Preserve that cycle identity.
+    age = (today-last[1]).days if last else None
+    if last and last[2] == fingerprint(p) and -2<=age<28:
+        return last[0], max(1,age//7+1)
+    # In emergency mode do not invent a new cycle or reinterpret old slots.
+    require_schedule_writes_enabled()
     cycle_id = c.execute('''INSERT INTO training_cycles(chat_id,starts_on,profile_fingerprint)
                             VALUES(%s,%s,%s) RETURNING id''',
                          (chat, today, fingerprint(p))).fetchone()[0]
+    if p.get('weekdays') is not None:
+        reconcile_schedule_in(c,chat,cycle_id,today,p,today,reconcile_existing=True)
     return cycle_id, 1
 
 
 def get_cycle(chat, p):
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)', (chat,))
-        return cycle_status(c, chat, p)
+        return cycle_status(c, chat, profile_in(c,chat))
 
 
 def planned_next_in(c, chat, cycle_id, count):
@@ -1124,17 +1262,12 @@ def planned_next_in(c, chat, cycle_id, count):
     start = c.execute('SELECT starts_on FROM training_cycles WHERE id=%s AND chat_id=%s',
                       (cycle_id,chat)).fetchone()
     if not start: raise ValueError('Программа не найдена')
-    offsets=session_offsets(count)
-    for week in range(1,5):
-        for j, offset in enumerate(offsets):
-            day = TRAINING_DAYS[j]
-            scheduled = start[0]+timedelta(days=(week-1)*7+offset)
-            c.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,day_code,planned_date)
-                VALUES(%s,%s,%s,%s,%s) ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''',
-                (chat,cycle_id,week,day,scheduled))
+    p = profile_in(c,chat)
+    reconcile_schedule_in(c,chat,cycle_id,start[0],p,local_today(chat))
     # One planned slot can have only one finished workout. Manual entries do not consume slots.
     return c.execute('''SELECT s.day_code,s.week_no,s.planned_date
       FROM scheduled_sessions s WHERE s.chat_id=%s AND s.cycle_id=%s
+      AND s.schedule_state IS DISTINCT FROM 'retired'
       AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
         AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
         AND w.plan_day=s.day_code AND w.status='finished' AND w.source='template')
@@ -1184,7 +1317,9 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
     """Scale sessions 20–90 min; 5–7 weekly days mix strength and recovery."""
     kind = 'gym' if p['equipment'] == 'gym' else 'home'
     mode = p['equipment']
-    count = sessions(p)
+    # Manual calendar identities survive a frequency reduction. They must
+    # remain usable by every caller, including callers outside user_session.
+    count = max(sessions(p),TRAINING_DAYS.index(day)+1 if day in TRAINING_DAYS else 0)
     goal = p['goal'] if p.get('goal') in ROUTINES[kind] else 'general'
     mins = max(20, min(90, int(p['minutes'])))
     # 5–7 ACTIVE days are NOT 5–7 intense strength workouts.
@@ -1350,6 +1485,10 @@ def begin(chat, mood, mid=None, silent=False):
         return send(chat, error, [('📝 Анкета', 'restart')], mid)
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)', (chat,))
+        p = profile_in(c,chat)
+        error = ready(p,chat)
+        if error:
+            raise ValueError(error)
         old = c.execute("SELECT id FROM workouts WHERE chat_id=%s AND status='active' LIMIT 1", (chat,)).fetchone()
         if old:
             wid = old[0]
@@ -2160,6 +2299,17 @@ def callback(call):
         if call.message.chat.type == 'private' and call.from_user.id == chat:
             try:
                 BOT.answer_callback_query(call.id, text='FORMIQ на связи ✅')
+            except telebot.apihelper.ApiTelegramException as exc:
+                # A delayed wake callback may expire while a sleeping server starts.
+                # The webhook has already woken the service; do not treat this
+                # expected Telegram 400 as an application failure.
+                description = (exc.description or '').lower()
+                if exc.error_code == 400 and (
+                        'query is too old' in description
+                        or 'query id is invalid' in description):
+                    LOG.debug('Expired Telegram wake callback ignored')
+                else:
+                    LOG.exception('Telegram wake acknowledgement failed')
             except Exception:
                 LOG.exception('Telegram wake acknowledgement failed')
         return
@@ -2171,6 +2321,9 @@ def callback(call):
         return
     data, mid = call.data or '', call.message.message_id
     try:
+        if (data in ('restart','restart_yes') or data.startswith('answer:')) and \
+                profile(chat).get('weekdays') is not None:
+            return mini_entry(chat,mid)
         if data == 'wish':
             with db() as conn:conn.execute('INSERT INTO feedback_drafts(chat_id) VALUES(%s) ON CONFLICT(chat_id) DO UPDATE SET created_at=NOW()',(chat,))
             send(chat,'💡 Напиши одну идею следующим сообщением.\nБез личных данных.', [('↩️ Отмена','wish_cancel')], mid)
@@ -2212,7 +2365,8 @@ def callback(call):
             send(chat, 'Заполнить анкету заново? История останется.',
                  [('✅ Да', 'restart_yes'), ('↩️ Нет', 'menu')], mid)
         elif data == 'restart_yes':
-            reset_profile(chat)
+            if not reset_profile(chat):
+                return mini_entry(chat,mid)
             ask(chat, 0, mid)
         elif data.startswith('answer:'):
             _, idx, val = data.split(':', 2)
@@ -2226,7 +2380,8 @@ def callback(call):
             expected = next((j for j, f in enumerate(FIELDS) if not p.get(f)), len(FIELDS))
             if expected != i:
                 return send(chat, 'Кнопка анкеты устарела.', [('📝 Анкета', 'restart')], mid)
-            save_answer(chat, field, val)
+            if not save_answer(chat, field, val):
+                return mini_entry(chat,mid)
             ask(chat, i + 1, mid)
         elif data in ('readiness', 'begin', 'begin:next'):
             readiness(chat, mid)
@@ -2539,6 +2694,7 @@ def analyze_equipment_description(body):
 
 
 def save_onboarding(chat,body):
+    require_schedule_writes_enabled()
     vals=body.get('answers')
     if not isinstance(vals,dict):raise ValueError('Заполни анкету')
     if body.get('terms') is not True or body.get('privacy') is not True or body.get('health') is not True:
@@ -2552,6 +2708,7 @@ def save_onboarding(chat,body):
     for field in allowed_fields:
         choices={v for _,v in QUESTIONS[FIELDS.index(field)][2]}
         if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
+    selected_weekdays = validate_weekdays(vals['weekdays'],int(vals['days'])) if 'weekdays' in vals else None
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
     age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
@@ -2567,10 +2724,26 @@ def save_onboarding(chat,body):
         raise ValueError('Описание инвентаря: не более 400 символов')
     equipment_description=equipment_description.strip() if vals['equipment']=='homegear' else ''
     with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        previous = profile_in(c,chat)
+        previous_zone = c.execute('SELECT timezone FROM profile_metrics WHERE chat_id=%s',
+            (chat,)).fetchone()
+        old_zone = previous_zone[0] if previous_zone else user_tz
+        try:
+            old_today = datetime.now(ZoneInfo(old_zone)).date()
+        except (KeyError,TypeError,ValueError):
+            old_today = datetime.now(timezone.utc).date()
+        new_today = datetime.now(ZoneInfo(user_tz)).date()
+        protected_today = max(old_today,new_today)
+        if 'weekdays' not in vals:
+            selected_weekdays = previous.get('weekdays')
+            if selected_weekdays is not None:
+                selected_weekdays = validate_weekdays(selected_weekdays,int(vals['days']))
         c.execute('INSERT INTO profiles(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
         c.execute('''UPDATE profiles SET goal=%s,level=%s,days=%s,equipment=%s,
-            age_group=%s,minutes=%s,clearance=%s,updated_at=NOW() WHERE chat_id=%s''',
-            tuple(vals[k] for k in allowed_fields)+('yes' if health['affected'] else 'none',chat))
+            age_group=%s,minutes=%s,clearance=%s,weekdays=%s::jsonb,updated_at=NOW() WHERE chat_id=%s''',
+            tuple(vals[k] for k in allowed_fields)+('yes' if health['affected'] else 'none',
+                json.dumps(selected_weekdays) if selected_weekdays is not None else None,chat))
         c.execute('''INSERT INTO profile_equipment(chat_id,description) VALUES(%s,%s)
             ON CONFLICT(chat_id) DO UPDATE SET description=EXCLUDED.description,
             updated_at=NOW()''',(chat,equipment_description))
@@ -2592,6 +2765,20 @@ def save_onboarding(chat,body):
             updated_at=NOW()''',
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
+        if selected_weekdays is not None:
+            cycle = c.execute('''SELECT id,starts_on,profile_fingerprint FROM training_cycles
+                WHERE chat_id=%s ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
+            current = {**vals,'clearance':'yes' if health['affected'] else 'none',
+                       'weekdays':selected_weekdays}
+            if cycle and -2<=(new_today-cycle[1]).days<28 and \
+                    same_plan_except_frequency(cycle[2],current):
+                old_fields = cycle[2].split('|')
+                old_count = int(old_fields[FIELDS.index('days')])
+                reconcile_schedule_in(c,chat,cycle[0],cycle[1],current,protected_today,
+                    infer_count=old_count if previous.get('weekdays') is None else None,
+                    reconcile_existing=True)
+                c.execute('''UPDATE training_cycles SET profile_fingerprint=%s
+                    WHERE id=%s AND chat_id=%s''',(fingerprint(current),cycle[0],chat))
 
 
 # Проектные шаблоны документов: до публичного запуска необходимо заполнить
@@ -2650,14 +2837,16 @@ def day_title(p,day):
 
 
 def ensure_schedule(chat, cycle, count, start_date):
-    offsets=session_offsets(count)
+    if schedule_emergency_readonly():
+        return
     with db() as conn:
-        for week in range(1,5):
-            for j,offset in enumerate(offsets):
-                scheduled=start_date+timedelta(days=(week-1)*7+offset)
-                conn.execute('''INSERT INTO scheduled_sessions(chat_id,cycle_id,week_no,day_code,planned_date)
-                    VALUES(%s,%s,%s,%s,%s) ON CONFLICT(cycle_id,week_no,day_code) DO NOTHING''',
-                    (chat,cycle,week,TRAINING_DAYS[j],scheduled))
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        current = profile_in(conn,chat)
+        target = conn.execute('''SELECT starts_on,profile_fingerprint FROM training_cycles
+            WHERE id=%s AND chat_id=%s''',(cycle,chat)).fetchone()
+        if not target or target[1]!=fingerprint(current):
+            return
+        reconcile_schedule_in(conn,chat,cycle,target[0],current,local_today(chat))
 
 
 def scheduled_calendar(chat,p,cycle):
@@ -2670,9 +2859,10 @@ def scheduled_calendar(chat,p,cycle):
     with db() as conn:
         rows=conn.execute('''SELECT id,week_no,day_code,planned_date
             FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
+            AND schedule_state IS DISTINCT FROM 'retired'
             ORDER BY planned_date,week_no,day_code''',(chat,cycle)).fetchall()
         done=conn.execute('''SELECT week_no,plan_day,COUNT(*) FROM workouts
-            WHERE chat_id=%s AND cycle_id=%s AND status='finished'
+            WHERE chat_id=%s AND cycle_id=%s AND status='finished' AND source='template'
             GROUP BY week_no,plan_day''',(chat,cycle)).fetchall()
     remaining={(week,day):total for week,day,total in done}
     today=local_today(chat)
@@ -2889,6 +3079,45 @@ def history_day_bounds(local_date, zone):
     return a.astimezone(timezone.utc), b.astimezone(timezone.utc)
 
 
+def mini_progress_series(chat):
+    """Read real finished-set weights for the authenticated user, never demo data.
+
+    Bounded by date and exercise; no database writes or schema migration.
+    A point is the greatest saved weight for an exercise on the user's local day.
+    """
+    zone = history_local_zone(chat).key
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT i.exercise_key, (w.started_at AT TIME ZONE %s)::date AS local_day,
+                   MAX(s.weight_kg) AS best_kg
+            FROM workouts w
+            JOIN workout_items i ON i.workout_id = w.id
+            JOIN workout_sets s ON s.workout_id = i.workout_id
+                AND s.position = i.position
+            WHERE w.chat_id = %s AND w.status = 'finished'
+              AND s.state = 'done' AND s.unit = 'reps'
+              AND s.weight_kg > 0 AND s.weight_kg <= 500
+              AND i.exercise_key IS NOT NULL
+            GROUP BY i.exercise_key, 2
+            ORDER BY local_day DESC, i.exercise_key ASC LIMIT 240
+        """, (zone, chat)).fetchall()
+    series = {}
+    for key, local_day, weight in rows:
+        if key not in EX:
+            continue
+        if key not in series:
+            if len(series) >= 4:
+                continue
+            series[key] = []
+        if len(series[key]) < 8:
+            series[key].append({'date': local_day.isoformat(), 'weight': float(weight)})
+    return {'exercises': [
+        {'key': key, 'name': visible_exercise_name(EX[key][0]),
+         'points': list(reversed(points))}
+        for key, points in series.items()
+    ]}
+
+
 def mini_history_detail(chat,wid):
     zone = history_local_zone(chat)
     if wid < 0:
@@ -3005,7 +3234,7 @@ def mini_state(chat, just_finished=False):
     tier = tier_for(chat)
     result = {
         'profile': {k: LABELS.get((k, p.get(k)), '—') for k in FIELDS},
-        'profile_raw': {k:p.get(k) for k in FIELDS},
+        'profile_raw': {**{k:p.get(k) for k in FIELDS},'weekdays':p.get('weekdays')},
         'health_profile': h,
         'equipment_description': p.get('equipment_description',''),
         'needs_health_profile': not bool(h),
@@ -3058,8 +3287,9 @@ def mini_state(chat, just_finished=False):
             current = next((s for s in rows if s[5]=='pending'),None)
             workout = {'id':wid,'day':day,'week':week,'done':done,
                 'skipped':skipped,'total':len(rows),'exercise_count':len({s[0] for s in rows}),
-                'current':None, 'finished':False, 'legacy':not bool(rows), 'title':manual_title or day_title_for_code(chat,day),
-                'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
+                'current':None, 'finished':False, 'legacy':not bool(rows), 'title':manual_title or day_title(p,day),
+                'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0,
+                'exercises':mini_workout_exercises(rows)}
             if current:
                 pos, num, low, high, unit, _, name, key = current
                 info = EX.get(key, (name,'Двигайся плавно.','При боли остановись.'))
@@ -3128,9 +3358,14 @@ def mini_state(chat, just_finished=False):
         result['cycle_end']=(bounds[0]+timedelta(days=27)).isoformat() if bounds else None
         count = sessions(p)
         result['next_day'] = next_day_in_readonly(chat,cycle,count)
+        if result['next_day'] in tuple(TRAINING_DAYS):
+            count = max(count,TRAINING_DAYS.index(result['next_day'])+1)
         result['plan_names']=[day_title(p,day) for day in TRAINING_DAYS[:count]]
         result['custom']={day:get_custom(chat,day) for day in TRAINING_DAYS[:count]}
-        result['library']=[{'key':k,'name':v[0]} for k,v in EX.items() if valid_exercise(chat,k)]
+        # The dashboard already loaded both records. Do not open two extra
+        # PostgreSQL connections for every exercise in the library.
+        result['library']=[{'key':k,'name':v[0]} for k,v in EX.items()
+            if exercise_for_equipment(p.get('equipment'),k) and eligible_exercise(k,h)]
         result['plan'] = [[{
                 'key':key,'name':EX[key][0], 'sets':n,
                 'low':lo, 'high':hi, 'unit':unit
@@ -3141,6 +3376,12 @@ def mini_state(chat, just_finished=False):
 
 def next_day_in_readonly(chat, cycle, count):
     with db() as c:
+        c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        current = profile_in(c,chat)
+        latest = c.execute('''SELECT id,profile_fingerprint FROM training_cycles
+            WHERE chat_id=%s ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
+        if not latest or latest[0]!=cycle or latest[1]!=fingerprint(current):
+            return None
         return next_day_in(c,chat,cycle,count)
 
 
@@ -3173,24 +3414,27 @@ def mini_aux(chat,action,body):
         save_custom(chat,body.get('day'),body.get('keys'))
         return True
     if action=='reschedule':
+        require_schedule_writes_enabled()
         sid=body.get('id')
         raw=body.get('date')
         if type(sid) is not int or not isinstance(raw,str):raise ValueError('Выбери дату')
         try:new_date=date.fromisoformat(raw)
         except ValueError:raise ValueError('Неверная дата')
         with db() as conn:
+            conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
             target=conn.execute('''SELECT s.id,c.starts_on,s.cycle_id,s.week_no,s.day_code FROM scheduled_sessions s
                 JOIN training_cycles c ON c.id=s.cycle_id
-                WHERE s.id=%s AND s.chat_id=%s FOR UPDATE OF s''',(sid,chat)).fetchone()
+                WHERE s.id=%s AND s.chat_id=%s
+                 AND s.schedule_state IS DISTINCT FROM 'retired' FOR UPDATE OF s''',(sid,chat)).fetchone()
             if not target:raise ValueError('Дата не найдена')
             start=target[1]
             if conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s AND cycle_id=%s AND week_no=%s
-                AND plan_day=%s AND status='finished' AND source='template' LIMIT 1""",
+                AND plan_day=%s LIMIT 1""",
                 (chat,target[2],target[3],target[4])).fetchone():
-                raise ValueError('Завершённое занятие переносить нельзя')
+                raise ValueError('Начатое или завершённое занятие переносить нельзя')
             if not start<=new_date<=start+timedelta(days=27):
                 raise ValueError('Дата должна быть внутри 4-недельного цикла')
-            conn.execute('UPDATE scheduled_sessions SET planned_date=%s WHERE id=%s AND chat_id=%s',
+            conn.execute("UPDATE scheduled_sessions SET planned_date=%s,schedule_state='manual' WHERE id=%s AND chat_id=%s",
                 (new_date,sid,chat))
         return True
     if action=='cardio':
@@ -3502,29 +3746,20 @@ def mini_report():
 
 @APP.get('/mini/legacy')
 def mini_legacy_page():
-    markup = gzip.decompress(base64.b64decode(MINI_HTML_GZIP)).decode('utf-8')
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-381.css?v=38.1.0"></head>', 1)
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-3811.css?v=38.1.1"></head>', 1)
-    markup = markup.replace('</head>', '<link rel="stylesheet" href="/mini/ux-382.css?v=38.2.0"></head>', 1)
-    markup = markup.replace('</body>', '<script src="/mini/ux-381.js?v=38.1.0"></script><script src="/mini/ux-3811.js?v=38.1.1"></script><script src="/mini/ux-382.js?v=38.2.0"></script></body>', 1)
-    response = make_response(markup)
-    response.headers['Content-Type'] = 'text/html; charset=utf-8'
-    response.headers['Cache-Control'] = 'no-store'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Referrer-Policy'] = 'no-referrer'
-    return response
+    """Old saved links open the current interface and never launch 38.2."""
+    return mini_v5_staging()
 
 
 
 @APP.get('/mini')
 def mini_page():
-    """Public Aluminium v5 launcher. Legacy Mini App stays at /mini/legacy for safe fallback."""
+    """Public Aluminium v5 launcher."""
     return mini_v5_staging()
 
 
 @APP.get('/mini/v5')
 def mini_v5_staging():
-    """Opt-in Aluminium v5 bridge preview. Existing /mini and bot menus stay unchanged."""
+    """Serve the current Aluminium v5 interface at every Mini App entry point."""
     response = make_response(send_file(
         os.path.join(os.path.dirname(__file__), 'web', 'v5-live.html'),
         mimetype='text/html', max_age=0))
@@ -3728,6 +3963,20 @@ def workout_rest_remaining(conn, workout_id, user_profile):
     return max(0, int(duration - seconds_elapsed + 0.999))
 
 
+def mini_workout_exercises(rows):
+    """Summarize already-read active session sets without changing user data."""
+    summary = {}
+    for pos, number, low, high, unit, status, name, key in rows:
+        if pos not in summary:
+            summary[pos] = {'position': pos, 'name': visible_exercise_name(name),
+                            'done': 0, 'skipped': 0, 'total': 0}
+        row = summary[pos]
+        row['total'] += 1
+        row['done'] += status == 'done'
+        row['skipped'] += status == 'skipped'
+    return list(summary.values())
+
+
 def mini_workout_delta(chat):
     """One short database session: only the live workout; no full dashboard."""
     with db() as c:
@@ -3750,7 +3999,8 @@ def mini_workout_delta(chat):
         item={'id':wid,'day':day,'week':week,'done':done,'skipped':skipped,
               'total':len(rows),'exercise_count':len({r[0] for r in rows}),
               'current':None,'finished':False,'legacy':not bool(rows),'title':title,
-              'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
+              'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0,
+              'exercises':mini_workout_exercises(rows)}
         if current:
             pos,num,low,high,unit,_,name,key=current
             info=EX.get(key,(name,'Двигайся плавно.','При боли остановись.'))
@@ -3793,6 +4043,8 @@ def mini_api():
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':
             payload = {'ok': True, **mini_history_month(chat, data)}
+        elif action == 'progress_series':
+            payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'equipment_analyze':

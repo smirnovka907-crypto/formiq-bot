@@ -18,8 +18,9 @@ class Ux381Tests(unittest.TestCase):
         self.assertRegex(SOURCE, r"(?m)^VERSION = '[0-9]+\.[0-9]+\.[0-9]+'$")
         self.assertIn("@APP.get('/mini/ux-381.css')", SOURCE)
         self.assertIn("@APP.get('/mini/ux-381.js')", SOURCE)
-        self.assertIn("markup.replace('</head>'", SOURCE)
-        self.assertIn("markup.replace('</body>'", SOURCE)
+        # Historical assets remain available; public entry points now serve V5.
+        # Their actual responses and absence of legacy markup are tested in
+        # V5StagingContract.test_all_mini_entry_points_open_v5_without_382_fallback.
         self.assertIn("('record','skip','replace','start')", SOURCE)
 
     def test_css_three_themes_contrast_and_minimalism(self):

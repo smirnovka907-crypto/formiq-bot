@@ -20,9 +20,8 @@ class RouteTests(unittest.TestCase):
         client = self.app.test_client()
         page = client.get('/mini/legacy')
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b'ux-381.css', page.data)
-        self.assertIn(b'ux-381.js', page.data)
-        self.assertIn('Отзывы и предложения'.encode('utf-8'), page.data)
+        self.assertIn(b'v5-live.js', page.data)
+        self.assertNotIn(b'/mini/ux-381', page.data)
         for url, mime, snippet in [
             ('/mini/ux-381.css', 'text/css', b'.today-hero'),
             ('/mini/ux-381.js', 'javascript', b'health-refine'),
@@ -66,8 +65,8 @@ class RouteTests(unittest.TestCase):
         client=self.app.test_client()
         res=client.get('/mini/legacy')
         self.assertEqual(res.status_code,200)
-        self.assertIn(b'ux-3811.js',res.data)
-        self.assertIn(b'ux-3811.css',res.data)
+        self.assertIn(b'v5-live.js',res.data)
+        self.assertNotIn(b'/mini/ux-3811',res.data)
         js=client.get('/mini/ux-3811.js')
         self.assertEqual(js.status_code,200)
         self.assertIn(b'fq-feedback-quick',js.data)

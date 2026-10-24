@@ -1,4 +1,4 @@
-"""Read-only smoke checks for public Aluminium v5 and legacy fallback.
+"""Read-only smoke checks for public Aluminium v5 and old entry links.
 Never contact Telegram, PostgreSQL, or external APIs.
 """
 import importlib
@@ -21,7 +21,7 @@ class V5StagingContract(unittest.TestCase):
             cls.mod = importlib.import_module('main')
         cls.client = cls.mod.APP.test_client()
 
-    def test_v5_is_public_and_classic_fallback_keeps_existing_assets(self):
+    def test_all_mini_entry_points_open_v5_without_382_fallback(self):
         public = self.client.get('/mini')
         v5 = self.client.get('/mini/v5')
         legacy = self.client.get('/mini/legacy')
@@ -30,17 +30,20 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(legacy.status_code, 200)
         self.assertIn(b'v5-live.js', public.data)
         self.assertEqual(public.data, v5.data)
-        self.assertIn(b'/mini/ux-381.css', legacy.data)
-        self.assertNotIn(b'v5-live.js', legacy.data)
+        self.assertEqual(public.data, legacy.data)
+        for response in (public, v5, legacy):
+            self.assertNotIn(b'/mini/ux-382', response.data)
+            self.assertNotIn(b'/mini/ux-381', response.data)
         self.assertEqual(public.headers.get('Cache-Control'), 'no-store')
         self.assertEqual(public.headers.get('X-Content-Type-Options'), 'nosniff')
         self.assertEqual(public.headers.get('Referrer-Policy'), 'no-referrer')
 
-    def test_public_v5_keeps_legacy_onboarding_and_safe_nutrition_consent(self):
+    def test_public_v5_has_native_onboarding_and_safe_nutrition_consent(self):
         js = self.client.get('/mini/v5-live.js').data.decode('utf-8')
-        self.assertIn('href="/mini/legacy" data-legacy', js)
-        self.assertIn("window.location.assign('/mini/legacy'", js)
-        self.assertIn("window.location.hash||''", js)
+        self.assertIn("function onboardForm()", js)
+        self.assertIn("await send('onboarding'", js)
+        self.assertNotIn('href="/mini/legacy" data-legacy', js)
+        self.assertNotIn("window.location.assign('/mini/legacy'", js)
         self.assertIn("fetch('/mini/report'", js)
         self.assertIn("data.append('consent','yes')", js)
         self.assertIn("if(!consent)", js)
@@ -95,6 +98,40 @@ class V5StagingContract(unittest.TestCase):
             'viewport-fit=cover', 'FORMIQ · Aluminium v5',
         ):
             self.assertIn(token, html)
+
+    def test_dashboard_library_reuses_profile_and_health_without_per_exercise_reads(self):
+        """A large library must not create hundreds of PostgreSQL sessions."""
+        from contextlib import ExitStack
+        from datetime import date, timezone
+        from unittest.mock import MagicMock
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.execute.return_value.fetchone.side_effect = [
+            (0, 0, 0), (0,), None, None, (0,), (date(2026, 10, 23),),
+        ]
+        conn.execute.return_value.fetchall.return_value = []
+        p = {'goal':'general', 'level':'some', 'days':'2', 'equipment':'home',
+             'age_group':'adult', 'minutes':'40', 'clearance':'yes'}
+        limits = {'affected':['knee']}
+        replacements = {
+            'db': conn, 'profile': p, 'health_profile': limits, 'ready': None,
+            'tier_for': 'max', 'has_agreement': True, 'metrics': {},
+            'ai_state': (False, False), 'ai_quota': 10,
+            'history_local_zone': timezone.utc,
+            'get_cycle': (7, 1), 'scheduled_calendar': [],
+            'next_day_in_readonly': 'A', 'get_custom': None, 'user_session': [],
+        }
+        with ExitStack() as stack:
+            mocks = {name: stack.enter_context(patch.object(self.mod, name,
+                return_value=value)) for name, value in replacements.items()}
+            result = self.mod.mini_state(777)
+        keys = {item['key'] for item in result['library']}
+        self.assertIn('wall_push', keys)
+        self.assertNotIn('chair_squat', keys)  # Stored knee restriction.
+        self.assertNotIn('leg_press', keys)  # Stored home equipment.
+        mocks['profile'].assert_called_once_with(777)
+        mocks['health_profile'].assert_called_once_with(777)
+        self.assertEqual(mocks['db'].call_count, 3)
 
     def test_history_page_scoped_to_telegram_owner_and_paginated(self):
         from datetime import datetime, timezone
@@ -260,6 +297,41 @@ class V5StagingContract(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.mod.save_metrics(777, {'metrics': metrics})
                 conn.assert_not_called()
+
+    def test_onboarding_saves_health_and_profile_together_without_touching_history(self):
+        from unittest.mock import MagicMock
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        conn.execute.return_value.fetchone.return_value = None
+        payload = {
+            'answers': {'goal':'general', 'level':'some', 'days':'3', 'weekdays':[0,2,4],
+                'equipment':'home', 'age_group':'adult', 'minutes':'40'},
+            'metrics': {'age':34, 'height_cm':181, 'weight_kg':84.5},
+            'health_profile': {'affected':['knee'], 'pain_score':2,
+                'symptom_course':'stable', 'danger_signs':False,
+                'activity_cleared':True},
+            'timezone':'Europe/Moscow', 'terms':True, 'privacy':True, 'health':True,
+        }
+        with patch.object(self.mod, 'db', return_value=conn) as database:
+            self.mod.save_onboarding(777, payload)
+        database.assert_called_once_with()
+        calls = conn.execute.call_args_list
+        for call in calls:
+            query, params = call.args
+            self.assertIn(777, params)
+            self.assertNotIn('DELETE', query)
+            self.assertNotIn('workouts', query)
+            self.assertNotIn('cardio_sessions', query)
+        health_call = next(call for call in calls if 'INSERT INTO health_limits' in call.args[0])
+        self.assertEqual(health_call.args[1], (777, '["knee"]', 2, 'stable', False, True))
+        self.assertTrue(any('INSERT INTO profile_metrics' in call.args[0] for call in calls))
+        self.assertTrue(any('UPDATE profiles SET' in call.args[0] for call in calls))
+
+        payload['health_profile']['pain_score'] = 11
+        with patch.object(self.mod, 'db') as database:
+            with self.assertRaises(ValueError):
+                self.mod.save_onboarding(777, payload)
+        database.assert_not_called()
 
     def test_signed_profile_metric_api_response_keeps_history_unchanged(self):
         with patch.object(self.mod, 'mini_auth', return_value=777), \
