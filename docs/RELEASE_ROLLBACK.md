@@ -123,3 +123,41 @@ been shipped. Prefer a controlled forward fix on the V5 data model.
 Automated tests exercise the gate on the disposable PG18 `*_test` schema and
 verify that SQL write attempts fail inside the audit transaction. This is not a
 production backup or a dry run on real customer data.
+
+
+## Emergency V5-compatible fallback (`FORMIQ_SCHEDULE_SAFE_MODE=1`)
+
+PR #15 implements a reversible **schedule freeze** in the V5 application,
+rather than downgrading to legacy `main` which does not understand
+`weekdays` or `schedule_state='retired'`. This is an emergency
+**forward-compatible hotfix path**, not an old-code downgrade. Keep the V5
+database schema and all existing records intact.
+
+When the env flag equals exactly `1`:
+- Read/display existing calendar entries as stored, excluding `retired`.
+  Manual dates remain visible, and existing workout history remains in place.
+- Refuse onboarding edits and manual schedule moves with an explicit error.
+- Skip all automatic schedule reconciliation, inserting or retiring slots.
+- Refuse creation of a new training cycle, including after the old cycle
+  expires; never synthesize the next cycle from potentially mismatched data.
+- Existing completed/active workouts, weights and cardio are not deleted or
+  rewritten by this switch. Existing application APIs otherwise remain V5.
+  Training availability after cycle expiry is intentionally reduced.
+
+**Activation is a production configuration/redeployment action, NOT
+authorized in this preparation phase.** It must only be considered if a
+verified protected production backup and successful isolated restore exist,
+CI confirms exact release SHA, real operator approval is recorded and
+Render deployment is monitored. Changing this env value on Render may itself
+trigger a new deployment; never toggle it casually.
+
+To recover normal operation after the cause of the incident is addressed,
+restore the value to `0` (or remove it) in a separately approved deployment.
+Do not change `main`, drop columns, delete `retired` rows, reset user
+profiles, or restore an older snapshot over live user entries.
+
+Integration regression on disposable PostgreSQL 18 tests the freeze against
+manually rescheduled dates, retired future slots, the exact 4-week cycle ID,
+forbidden edits and frozen-after-expiry behavior. The real production
+backup/restore rehearsal and Android postrelease acceptance remain NO-GO
+until independently verified.
