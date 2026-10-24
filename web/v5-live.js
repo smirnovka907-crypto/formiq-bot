@@ -314,12 +314,29 @@ function currentMonth(){
  }catch(_e){return today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')}
 }
 const filtered=()=>date?(dayRows??(state?.history||[]).filter(x=>isoDate(x.date)===date)):(state?.history||[]);
-const historyRow=x=>`<button type="button" class="button-subtle" data-cmd="detail" data-id="${x.id}" style="display:block;width:100%;text-align:left;margin-top:8px"><strong>${esc(x.title)}</strong><small style="display:block">${esc(x.date)}</small></button>`;
+const historyRow=x=>'<button type="button" class="cardio-history-row fq-history-action" data-cmd="detail" data-id="'+esc(x.id)+'">'+
+ '<span><strong>'+esc(x.title)+'</strong><small>'+esc(x.date)+'</small></span>'+
+ '<span class="plan-chevron" aria-hidden="true">›</span></button>';
 function calendar(){
  if(!month)month=currentMonth();
- const [year,n]=month.split('-').map(Number),first=new Date(Date.UTC(year,n-1,1)),count=new Date(Date.UTC(year,n,0)).getUTCDate(),padding=(first.getUTCDay()+6)%7;
+ const [year,n]=month.split('-').map(Number);
+ const first=new Date(Date.UTC(year,n-1,1)),count=new Date(Date.UTC(year,n,0)).getUTCDate();
+ const padding=(first.getUTCDay()+6)%7;
  const highlighted=new Set([...monthMarks,...(state.history||[]).map(x=>isoDate(x.date))]);
- return `<div class="fq-live-calendar-controls">${button('‹','prev-month')}<strong>${first.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'})}</strong>${button('›','next-month')}</div><div class="fq-live-days">${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>`<small>${x}</small>`).join('')}${'<span></span>'.repeat(padding)}${Array.from({length:count},(_,i)=>{const day=`${month}-${String(i+1).padStart(2,'0')}`;return `<button type="button" class="fq-live-date ${highlighted.has(day)?'has-entry':''} ${date===day?'selected':''}" data-date="${day}" aria-label="${prettyDate(day)}">${i+1}</button>`}).join('')}</div>`;
+ return '<div class="history-cal-inline" id="history-calendar-grid" aria-label="Календарь тренировок">'+
+   '<div class="calendar-controls">'+
+   '<button type="button" data-cmd="prev-month" aria-label="Предыдущий месяц">‹</button>'+
+   '<strong>'+esc(first.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}))+'</strong>'+
+   '<button type="button" data-cmd="next-month" aria-label="Следующий месяц">›</button></div>'+
+   '<div class="history-cal-grid">'+
+   ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>'<span class="cal-weekday">'+x+'</span>').join('')+
+   '<span aria-hidden="true"></span>'.repeat(padding)+
+   Array.from({length:count},(_,i)=>{
+     const day=month+'-'+String(i+1).padStart(2,'0');
+     return '<button type="button" class="'+(highlighted.has(day)?'has-entry has-workout ':'')+
+       (date===day?'selected':'')+'" data-date="'+day+'" aria-label="'+prettyDate(day)+'">'+(i+1)+'</button>'
+   }).join('')+'</div>'+
+   '<p class="cal-help"><span class="history-legend-dot"></span> Отмечены дни с записями в дневнике.</p></div>';
 }
 async function fetchMonthMarks(){
  const requested=month;
@@ -339,8 +356,15 @@ async function loadHistoryPage(){
  finally{historyBusy=false}
 }
 function history(){
- return `<section class="surface" id="history-root"><div class="fq-live-history-head"><h2>История тренировок</h2>${button('По датам','calendar',false,`aria-expanded="${calendarOpen}"`)}</div>${calendarOpen?calendar():''}
- ${date?`<div class="fq-live-history-head"><strong>${prettyDate(date)}</strong>${button('Сбросить','reset-date')}</div>`:''}${filtered().slice(0,3).map(historyRow).join('')||'<p>За эту дату записей нет.</p>'}${button('Вся история','history-all')}</section>`;
+ return '<section class="surface" id="history-root">'+
+ '<div class="heading-row"><h2 style="margin:0;font-size:20px">История тренировок</h2>'+
+ button('По датам','calendar',false,'aria-expanded="'+calendarOpen+'" aria-controls="history-calendar-grid"')+
+ '</div>'+(calendarOpen?calendar():'')+
+ (date?'<div class="date-filter-summary"><strong>Дата: '+prettyDate(date)+'</strong>'+
+ button('Сбросить','reset-date')+'</div>':'')+
+ '<div class="cardio-history">'+(filtered().slice(0,3).map(historyRow).join('')||
+ '<p class="empty">За эту дату записей нет.</p>')+'</div>'+
+ '<div style="margin-top:13px">'+button('Вся история →','history-all')+'</div></section>';
 }
 function periodLabel(n){
  const start=state?.cycle_start;
@@ -412,19 +436,43 @@ function food(){
 }
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
- const names={'goal':'Цель тренировок','level':'Опыт','days':'Дни в неделю','equipment':'Место тренировок','age_group':'Возрастная группа','minutes':'Длительность','clearance':'Ограничения'};
- const savedWeekdays=state.profile_raw?.weekdays;
- const labels=Object.entries(state.profile||{}).map(([k,v])=>`<div class="fq-live-row"><span>${esc(names[k]||k)}</span><strong>${esc(v)}</strong></div>`).join('')+
-  (Array.isArray(savedWeekdays)?'<div class="fq-live-row"><span>Дни тренировок</span><strong>'+esc(savedWeekdays.map(day=>weekdayNames[day]).filter(Boolean).join(', '))+'</strong></div>':'');
- const data=state.metrics||{};
- const measure=metricEdit?`<div class="fq-live-grid">${fields.map(([key,label,min,max])=>`<label class="field"><span>${label}</span><input id="profile-${key}" data-metric="${key}" type="number" inputmode="${key==='age'?'numeric':'decimal'}" min="${min}" max="${max}" step="${key==='age'?'1':'0.1'}" autocomplete="off" placeholder="—" value="${esc(profileDraft?.[key]??'')}"></label>`).join('')}</div>
- <p class="input-note">Изменятся только исправленные значения. История тренировок сохраняется.</p><div class="fq-live-actions" style="margin-top:12px">${button('Сохранить','profile-metrics-save',true)}${button('Отмена','profile-metrics-cancel')}</div>`:
- `<div class="fq-live-list">${fields.map(([key,label])=>`<div class="fq-live-row"><span>${label}</span><strong>${data[key]===null||data[key]===undefined?'—':esc(data[key])}</strong></div>`).join('')}</div>${button('Изменить параметры','profile-metrics-edit')}`;
- return page('Твой профиль',block(`<h2>Анкета</h2>${labels}${button('Редактировать анкету','onboard-open',true)}`)+
- block(`<h2>Параметры</h2>${profileNotice?`<p role="status" class="fq-live-muted">${esc(profileNotice)}</p>`:''}${measure}`)+
- block('<h2>Самочувствие и ограничения</h2><p>Ограничения учитываются программой на сервере. Изменить их можно в анкете FORMIQ.</p>')+
- block(`<h2>Тарифы</h2><p>${esc(state.tier_name||'Тестовый доступ')}</p><p>Оплата не подключена.</p>`)+
- block('<h2>Подключения</h2><p>Garmin Connect · не подключено</p><p>FatSecret · не подключено</p>'));
+ const names={goal:'Цель тренировок',level:'Опыт',days:'Тренировок в неделю',equipment:'Место тренировок',
+  age_group:'Возрастная группа',minutes:'Длительность',clearance:'Ограничения'};
+ const rows=Object.entries(state.profile||{}).map(([k,v])=>
+  '<div class="fq-live-row"><span>'+esc(names[k]||k)+'</span><strong>'+esc(v)+'</strong></div>').join('')||
+  '<p class="empty">Анкета пока не заполнена.</p>';
+ const weekdays=state.profile_raw?.weekdays;
+ const days=Array.isArray(weekdays)?'<div class="fq-live-row"><span>Дни тренировок</span><strong>'+
+   esc(weekdays.map(d=>weekdayNames[d]).filter(Boolean).join(', '))+'</strong></div>':'';
+ const d=state.metrics||{};
+ const measure=metricEdit?'<div class="form-row fq-profile-metric-grid">'+
+  fields.map(([key,label,min,max])=>'<label class="field"><span>'+label+'</span>'+
+   '<input id="profile-'+key+'" data-metric="'+key+'" type="number" inputmode="'+
+    (key==='age'?'numeric':'decimal')+'" min="'+min+'" max="'+max+
+    '" step="'+(key==='age'?'1':'0.1')+'" autocomplete="off" placeholder="—" value="'+
+    esc(profileDraft?.[key]??'')+'"></label>').join('')+'</div>'+
+    '<p class="input-note" style="margin:11px 0">Изменятся только исправленные значения. История сохранится.</p>'+
+    '<div class="fq-live-actions">'+button('Сохранить','profile-metrics-save',true)+
+    button('Отмена','profile-metrics-cancel')+'</div>':
+    '<div class="fq-live-list">'+fields.map(([key,label])=>
+     '<div class="fq-live-row"><span>'+label+'</span><strong>'+
+     (d[key]===null||d[key]===undefined?'—':esc(d[key]))+'</strong></div>').join('')+'</div>'+
+     '<div style="margin-top:15px">'+button('Изменить параметры','profile-metrics-edit')+'</div>';
+ const questionnaire='<section class="surface"><h2 class="section-label" style="margin-top:0">Анкета и цель</h2>'+
+  '<div class="fq-live-list">'+rows+days+'</div><div class="workout-cta">'+
+  button('Редактировать анкету','onboard-open',true)+'</div></section>';
+ const body='<section class="surface"><h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+
+  (profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+measure+'</section>';
+ const health='<section class="surface"><h2 class="section-label" style="margin-top:0">Самочувствие и ограничения</h2>'+
+  '<p class="input-note">Ограничения проверяются сервером. Изменить их и отдельное согласие на Yandex AI можно в анкете.</p></section>';
+ const integrations='<section class="surface soft"><h2 class="section-label" style="margin-top:0">Подключения</h2>'+
+  '<div class="connection-row"><div><strong class="connection-title">Garmin Connect</strong>'+
+  '<p class="connection-hint">Данные устройства не синхронизируются.</p></div><span class="connection-status">Не подключён</span></div>'+
+  '<div class="connection-row"><div><strong class="connection-title">FatSecret</strong>'+
+  '<p class="connection-hint">Автоматический дневник пока недоступен.</p></div><span class="connection-status">Не подключён</span></div></section>';
+ return h()+'<span class="kicker">Настройки</span><h1 class="title">Твой профиль</h1>'+
+  '<p class="intro">Одна анкета — редактирование без потери истории.</p>'+
+  questionnaire+body+health+integrations;
 }
 function modalHTML(){
  if(!modal)return '';

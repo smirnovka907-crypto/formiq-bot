@@ -162,6 +162,7 @@ async function run(){
    assert.equal(await page.locator('.profile-open').evaluate(el=>getComputedStyle(el).position),'static',
     'Profile shortcut must scroll with header instead of covering content');
    await page.getByRole('button',{name:'Профиль'}).click();
+   assert.equal(await page.locator('.connection-row').count(),2,'Unconnected integrations have visible honest statuses');
    await page.getByRole('button',{name:'Редактировать анкету'}).click();
    assert.equal(await page.locator('.profile-open').isVisible(),false,
     'Profile shortcut must not cover editable questionnaire fields');

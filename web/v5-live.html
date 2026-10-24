@@ -304,4 +304,20 @@ input,select,textarea{max-width:100%}
 .nutrition-today{min-width:0}
 @media(max-width:375px){.nutrition-today{gap:12px}.nutrition-ring{width:94px;height:94px;border-width:10px}}
 
+
+/* Approved calendar and profile: mobile-size tested, state and data still from API. */
+.history-cal-inline{margin:13px 0 5px;padding:8px 0 2px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.history-cal-inline .calendar-controls{margin:3px 0 12px}
+.history-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-bottom:16px}
+.history-cal-grid>*{min-width:0;min-height:39px;display:flex;align-items:center;justify-content:center}
+.history-cal-grid .cal-weekday{min-height:24px}
+.history-cal-grid button{position:relative}
+.history-cal-grid button.has-entry:after{content:"";position:absolute;bottom:3px;left:calc(50% - 2.5px);width:5px;height:5px;border-radius:50%;background:#607d70}
+.fq-history-action{width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;text-align:left;color:var(--ink)}
+.fq-history-action .plan-chevron{font-size:22px;color:#617173}
+.fq-profile-metric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fq-profile-metric-grid input{font-size:16px;padding:11px 8px}
+.fq-profile-metric-grid .field{font-size:12px;min-width:0}
+@media(max-width:375px){.fq-profile-metric-grid{gap:6px}}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
