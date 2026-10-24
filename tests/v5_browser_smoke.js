@@ -325,6 +325,12 @@ async function run(){
    assert.ok(sexButtons.every(b=>Math.abs(b.top-sexButtons[0].top)<1),'All sex choices align in a single row');
    assert.ok(sexButtons.every(b=>Math.abs(b.width-sexButtons[0].width)<2&&Math.abs(b.height-sexButtons[0].height)<2),
      'All sex choices have symmetric geometry');
+   const equipmentButtons=await page.locator('.fq-equipment-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
+   assert.equal(equipmentButtons.length,3,'All supported training locations remain available');
+   assert.ok(equipmentButtons.every(b=>Math.abs(b.top-equipmentButtons[0].top)<1),
+     'Training locations do not leave a dangling third button');
+   assert.ok(equipmentButtons.every(b=>Math.abs(b.width-equipmentButtons[0].width)<2&&Math.abs(b.height-equipmentButtons[0].height)<2),
+     'Training location buttons are equal-size');
    await checkLayout('profile questionnaire');
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:path.join(OUT,'profile-'+size.width+'.png')});

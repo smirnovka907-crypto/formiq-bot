@@ -50,7 +50,7 @@ function onboardCheckbox(key,label){
 }
 
 function onboardButtons(key,label,options){
- return '<div class="fq-onboard-choice"><h3 class="section-label">'+esc(label)+'</h3><div class="option-grid'+(key==='sex'?' fq-sex-options':'')+'">'+
+ return '<div class="fq-onboard-choice"><h3 class="section-label">'+esc(label)+'</h3><div class="option-grid'+(key==='sex'?' fq-sex-options':key==='equipment'?' fq-equipment-options':'')+'">'+
  options.map(([name,val])=>'<button type="button" class="choice'+(String(onboard[key])===String(val)?' on':'')+
  '" data-onboard-pick="'+esc(key)+'" data-value="'+esc(val)+'" aria-pressed="'+(String(onboard[key])===String(val))+'">'+esc(name)+'</button>').join('')+'</div></div>';
 }
