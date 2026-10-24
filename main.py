@@ -2591,8 +2591,8 @@ def validate_health(raw):
         raise ValueError('Выбери ограничения из списка')
     score=onboarding_number(raw.get('pain_score'), 'интенсивность боли',0,10,whole=True)
     course=raw.get('symptom_course')
-    if course not in ('none','stable','recent','worsening'):
-        raise ValueError('Укажи, как давно беспокоят симптомы')
+    if course not in ('none','stable','recent','worsening','unspecified'):
+        raise ValueError('Проверь описание ограничений')
     danger=raw.get('danger_signs')
     cleared=raw.get('activity_cleared')
     if type(danger) is not bool or type(cleared) is not bool:
@@ -3475,15 +3475,18 @@ def period_save(chat,body):
     record=body.get('id')
     if record is not None and (type(record) is not int or record<1):
         raise ValueError('Неверная запись календаря')
-    with db() as conn:
-        if record is None:
-            conn.execute("""INSERT INTO menstrual_periods(chat_id,starts_on,ends_on)
-                VALUES(%s,%s,%s)""",(chat,start,end))
-        else:
-            result=conn.execute("""UPDATE menstrual_periods SET starts_on=%s,ends_on=%s
-                WHERE chat_id=%s AND id=%s""",(start,end,chat,record))
-            if result.rowcount!=1:
-                raise ValueError('Запись календаря не найдена')
+    try:
+        with db() as conn:
+            if record is None:
+                conn.execute("""INSERT INTO menstrual_periods(chat_id,starts_on,ends_on)
+                    VALUES(%s,%s,%s)""",(chat,start,end))
+            else:
+                result=conn.execute("""UPDATE menstrual_periods SET starts_on=%s,ends_on=%s
+                    WHERE chat_id=%s AND id=%s""",(start,end,chat,record))
+                if result.rowcount!=1:
+                    raise ValueError('Запись календаря не найдена')
+    except psycopg.errors.UniqueViolation:
+        raise ValueError('Запись на эту дату уже существует') from None
     return period_history(chat)
 
 
