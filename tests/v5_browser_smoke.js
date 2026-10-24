@@ -125,6 +125,36 @@ async function run(){
      safeAreaInset:{top:24,bottom:8},contentSafeAreaInset:{top:0,bottom:0}
     }};
    });
+   // Always pair the same viewport and UI state. Neither page is cropped or resized.
+   // The reference contains illustrative values, while the live page uses isolated signed API fixtures.
+   const pairedManifest=[];
+   const matchedShot=async(name,setupReference,options={})=>{
+    const ref=await context.newPage();
+    await ref.goto(base+'/approved-reference',{waitUntil:'load'});
+    await ref.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
+    if(setupReference)await setupReference(ref);
+    const align=async(p,selector)=>{
+     if(selector)await p.locator(selector).first().evaluate(el=>el.scrollIntoView({block:'start',behavior:'instant'}));
+     else await p.evaluate(y=>window.scrollTo({top:y,behavior:'instant'}),options.scrollY||0);
+    };
+    await align(ref,options.referenceAnchor);
+    await align(page,options.liveAnchor);
+    const refScroll=await ref.evaluate(()=>window.scrollY);
+    const realScroll=await page.evaluate(()=>window.scrollY);
+    const referenceFile='pair-approved-'+name+'-'+size.width+'.png';
+    const realFile='pair-live-'+name+'-'+size.width+'.png';
+    for(const [p,file] of [[ref,referenceFile],[page,realFile]]){
+     const bytes=await p.screenshot({path:path.join(OUT,file),fullPage:false,animations:'disabled'});
+     assert.equal(bytes.readUInt32BE(16),size.width,'Full-width screenshot, not cropped');
+     assert.equal(bytes.readUInt32BE(20),size.height,'Full-height viewport, not cropped');
+    }
+    pairedManifest.push({name,width:size.width,height:size.height,referenceFile,realFile,
+     referenceScrollY:refScroll,realScrollY:realScroll,
+     referenceAnchor:options.referenceAnchor||null,liveAnchor:options.liveAnchor||null,
+     mode:options.referenceAnchor||options.liveAnchor?'corresponding feature top':'same numeric scroll',
+     note:options.note||'Approved HTML demo vs isolated API fixture'});
+    await ref.close();
+   };
    // Store approved prototype beside the real-app screenshots for human review.
    // This reference route is test-only and never deployed to the Mini App.
    const reference=await context.newPage();
@@ -210,6 +240,7 @@ async function run(){
    assert.equal(await page.locator('.cardio-inline #cardio-min').count(),1);
    assert.equal(await page.locator('.cardio-inline #cardio-hr').count(),1);
    await page.screenshot({path:path.join(OUT,'home-'+size.width+'.png')});
+   await matchedShot('home',null);
    await page.locator('#cardio-min').focus();
    assert.equal(await page.evaluate(()=>document.body.classList.contains('cardio-typing')),true,'Typing class is set for inline cardio');
    assert.equal(await page.locator('.bottom-nav').evaluate(e=>getComputedStyle(e).visibility),'hidden','Bottom nav moves out of keyboard');
@@ -227,18 +258,22 @@ async function run(){
    assert.ok((await page.locator('.week-details').boundingBox()).width>=size.width-55,'Days expand across both columns');
    await checkLayout('plan');
    await page.screenshot({path:path.join(OUT,'plan-'+size.width+'.png')});
+   await matchedShot('plan-component',async ref=>{await ref.locator('.bottom-nav [data-nav="progress"]').click();await ref.locator('[data-week="1"]').first().click();},
+    {referenceAnchor:'.plan-grid',liveAnchor:'.fq-plan-period-grid',note:'Same expanded period component; approved prototype embeds the plan within Progress'});
    await page.locator('.bottom-nav [data-nav="progress"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Прогресс');
    await page.locator('.fq-empty-chart').waitFor();
    assert.equal(await page.locator('.fq-progress-chart').count(),0,'No fabricated working-weight graph');
    await checkLayout('progress');
    await page.screenshot({path:path.join(OUT,'progress-'+size.width+'.png')});
+   await matchedShot('progress',async ref=>ref.locator('.bottom-nav [data-nav="progress"]').click());
    await page.locator('.bottom-nav [data-nav="food"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Питание');
    assert.equal(await page.locator('.nutrition-ring b').textContent(),'—','Missing FatSecret cannot show fake calories');
    assert.equal(await page.locator('.macro').count(),3,'Three macro rows');
    await checkLayout('food');
    await page.screenshot({path:path.join(OUT,'food-'+size.width+'.png')});
+   await matchedShot('food',async ref=>ref.locator('.bottom-nav [data-nav="food"]').click());
    assert.equal(await page.locator('.profile-open').evaluate(el=>getComputedStyle(el).position),'static',
     'Profile shortcut must scroll with header instead of covering content');
    await page.getByRole('button',{name:'Профиль'}).click();
@@ -263,11 +298,16 @@ async function run(){
    await checkLayout('profile questionnaire');
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:path.join(OUT,'profile-'+size.width+'.png')});
+   await matchedShot('questionnaire-top',async ref=>ref.locator('[data-act="profile"]').first().click());
    await page.evaluate(()=>window.scrollTo(0,360));
    await page.screenshot({path:path.join(OUT,'profile-scroll-'+size.width+'.png')});
+   for(const y of [360,720,1200])await matchedShot('questionnaire-scroll-'+y,async ref=>ref.locator('[data-act="profile"]').first().click(),
+    {scrollY:y,note:'Same exact scroll offset; reference profile is an editable prototype, real form contains required consent'});
    await page.locator('.fq-weekday-options').scrollIntoViewIfNeeded();
    await checkLayout('weekday selector '+size.width);
    await page.screenshot({path:path.join(OUT,'weekdays-'+size.width+'.png')});
+   await matchedShot('questionnaire-weekdays',async ref=>ref.locator('[data-act="profile"]').first().click(),
+    {referenceAnchor:'.weekdays',liveAnchor:'.fq-weekday-options',note:'Weekday selector aligned to viewport top; real questionnaire requires explicit weekdays'});
    await page.getByRole('button',{name:'Отмена',exact:true}).click();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
@@ -281,6 +321,7 @@ async function run(){
    await checkFooterReachable(['skip-confirm','finish-confirm']);
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
+   await matchedShot('workout-entry',async ref=>{await ref.locator('[data-act="home-start"]').click();await ref.locator('#workout-entry').waitFor();});
    // The server-backed workout and unsaved input drafts survive temporary tab navigation.
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.locator('.bottom-nav [data-nav="food"]').click();
@@ -295,6 +336,10 @@ async function run(){
    await checkFooterReachable(['rest-skip','skip-confirm','finish-confirm']);
    await checkLayout('workout rest timer');
    await page.screenshot({path:path.join(OUT,'workout-rest-'+size.width+'.png')});
+   await matchedShot('workout-rest',async ref=>{
+    await ref.locator('[data-act="home-start"]').click();await ref.locator('#workout-weight').fill('60');await ref.locator('#workout-reps').fill('12');
+    await ref.locator('[data-act="set-done"]').click();await ref.locator('#rest-clock').waitFor();
+   });
    await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();
    assert.equal(await page.locator('#reps').inputValue(),'','Saved repetitions are cleared for the next set');
    await page.getByRole('button',{name:'Завершить',exact:true}).click();
@@ -304,6 +349,8 @@ async function run(){
    assert.match(await page.locator('.fq-progress-chart').getAttribute('aria-label'),/60 кг/);
    await checkLayout('real saved weight chart');
    await page.screenshot({path:path.join(OUT,'progress-real-weights-'+size.width+'.png')});
+   await matchedShot('progress-recorded',async ref=>ref.locator('.bottom-nav [data-nav="progress"]').click(),
+    {note:'Live chart uses actual isolated completed sets; approved example values are illustrative'});
    const monthReply=page.waitForResponse(resp=>{
     if(!resp.url().endsWith('/mini/api'))return false;
     try{return JSON.parse(resp.request().postData()||'{}').action==='history_month'}
@@ -315,12 +362,16 @@ async function run(){
    await page.evaluate(()=>document.querySelector('.history-cal-inline')?.scrollIntoView({block:'start'}));
    await checkLayout('history calendar');
    await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
+   await matchedShot('history-calendar',async ref=>{
+    await ref.locator('.bottom-nav [data-nav="progress"]').click();await ref.locator('[data-act="history-calendar"]').click();
+   },{referenceAnchor:'.history-cal-inline',liveAnchor:'.history-cal-inline'});
    await page.getByRole('button',{name:'Вся история →'}).click();
    await page.locator('.history-modal .history-scroll').waitFor();
    await page.locator('.history-modal .fq-history-action').first().waitFor(); // Snapshot real rows, not loading placeholder.
    await checkLayout('history bottom sheet');
    assert.equal(await page.locator('.history-modal [role="region"]').count(),1,'Scroll within history sheet');
    await page.screenshot({path:path.join(OUT,'history-modal-'+size.width+'.png')});
+   await matchedShot('history-modal',async ref=>{await ref.locator('.bottom-nav [data-nav="progress"]').click();await ref.locator('[data-act="history-open"]').click();});
    await page.getByRole('button',{name:'Закрыть историю'}).click();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
@@ -342,6 +393,11 @@ async function run(){
    await page.getByText('Записано в тестовом дневнике',{exact:true}).waitFor();
    assert.equal(profileState.history.filter(x=>x.id===10).length,1,'Retry of a rejected request creates one cardio entry');
    assert.equal(errors.length,0,'No JS errors: '+errors.join(' | '));
+   fs.writeFileSync(path.join(OUT,'paired-manifest-'+size.width+'.json'),JSON.stringify({
+    approved:'docs/design/FORMIQ_Aluminium_v5_approved.html',actual:'web/v5-live.html',
+    viewport:size,telegramSafeArea:{top:24,bottom:8},deviceScaleFactor:1,fullPage:false,
+    states:pairedManifest
+   },null,2));
    await context.close();
   }
   // One-time questionnaire is rendered in Aluminium v5, never legacy 38.2.
