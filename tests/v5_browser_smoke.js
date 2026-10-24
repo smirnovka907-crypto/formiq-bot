@@ -223,8 +223,15 @@ async function run(){
    assert.match(await page.locator('.fq-progress-chart').getAttribute('aria-label'),/60 кг/);
    await checkLayout('real saved weight chart');
    await page.screenshot({path:path.join(OUT,'progress-real-weights-'+size.width+'.png')});
+   const monthReply=page.waitForResponse(resp=>{
+    if(!resp.url().endsWith('/mini/api'))return false;
+    try{return JSON.parse(resp.request().postData()||'{}').action==='history_month'}
+    catch(_e){return false}
+   });
    await page.getByRole('button',{name:'По датам'}).click();
-   await page.locator('.history-cal-inline').scrollIntoViewIfNeeded();
+   await monthReply; // Wait for the owner-scoped month query before moving the viewport.
+   await page.waitForFunction(()=>!!document.querySelector('.history-cal-inline'));
+   await page.evaluate(()=>document.querySelector('.history-cal-inline')?.scrollIntoView({block:'start'}));
    await checkLayout('history calendar');
    await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="home"]').click();
