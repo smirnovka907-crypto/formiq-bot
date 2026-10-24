@@ -374,7 +374,7 @@ input,select,textarea{max-width:100%}
 @media(max-width:375px){.fq-plan-period-grid .week-range{font-size:12px}}
 /* Make actual cardio and strength input behavior match approved keyboard layout. */
 body.cardio-typing .bottom-nav{visibility:hidden}
-body.cardio-typing .view{padding-bottom:calc(100dvh + 220px)}
+/* Do not change document height on focus: a mobile button tap must not shift. */
 body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
 
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
