@@ -27,8 +27,9 @@
   календарь 4 недель, локальные даты и DST.
 - Сохранение истории, кардио, подходов и весов. Состояния `auto/manual/retired`,
   защита исторических и вручную перенесённых слотов.
-- Изолированные тесты PostgreSQL 16 в CI, JavaScript runtime/Chromium
-  360×740 и 393×852, API и миграции. Последний baseline:
+- Базовые тесты PR выполнялись на PostgreSQL 16; после задачи №1
+  полный CI переведён на **PostgreSQL 18**. JavaScript runtime/Chromium
+  360×740 и 393×852, API и миграции также проверяются. Старый baseline:
   [Actions 39990351894](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/39990351894),
   success, 103 Python-теста (по отчёту PR).
 - `render.android-test*.yaml` — НЕ развернуты; они предполагают иной бот
@@ -51,6 +52,32 @@
 4. Документируется последовательность выпуска и недеструктивного отката
    в `docs/RELEASE_ROLLBACK.md`.
 
+## Продолжение задачи №1: проверка на PostgreSQL 18
+
+- [623f03e](https://github.com/smirnovka907-crypto/formiq-bot/commit/623f03ebc4969f6ecac8b3cbf5f0b892f939bcf2):
+  GitHub Actions использует временный `postgres:18`; для dump/restore
+  применяются двоичные утилиты PG18 внутри контейнера, а не старые
+  системные версии runner. Добавлен тест **точного SQL файла миграции**
+  на пустых nullable полях старой схемы: повторное применение, сохранность
+  профиля/кардио/календаря, ограничение допустимых состояний.
+- [de3fa64](https://github.com/smirnovka907-crypto/formiq-bot/commit/de3fa64b79fbdbfcaf6aad0847fa0044c128601f),
+  [2cea8c5](https://github.com/smirnovka907-crypto/formiq-bot/commit/2cea8c5b5cd229040500e249cc2bc27bfc1677f3),
+  [1425122](https://github.com/smirnovka907-crypto/formiq-bot/commit/1425122d384e0ee559cd735f00880e1bcc59a41e):
+  исправления только CI/тестового файла, удаление дублированного фрагмента,
+  ранняя проверка Python-синтаксиса. Промежуточные workflow были красными;
+  результаты не выдавались за успешные.
+- [Actions 40051902656](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40051902656)
+  — **SUCCESS**, 108/108 Python-тестов, два новых теста
+  `test_checked_in_migration_preserves_legacy_data_and_is_idempotent`
+  и `test_isolated_pg_dump_restore_preserves_history_and_retired_slots`
+  успешно завершились на PostgreSQL 18; JS, браузер, API и Blueprint
+  также прошли.
+- Production PostgreSQL Render read-only: текущая версия `18.6`, SSL включён,
+  рабочие таблицы истории присутствуют. Новых колонок
+  `profiles.weekdays` и `scheduled_sessions.schedule_state` нет.
+- Никаких production DDL/DML, PR merge, Render deploy, бот-токенов/webhook,
+  платных ресурсов и новых Telegram-ботов.
+
 ## Разграничение уровней проверки
 
 - Код в PR: да. Ветка не объединена с main.
@@ -66,8 +93,10 @@
 
 ## Подтверждённые риски и блокеры
 
-- PostgreSQL **18** в production и **16** в текущем Actions-контейнере:
-  сопоставимость проверяется логикой тестов, но PG18 E2E до выпуска обязателен.
+- PostgreSQL **18.6** в production; изолированные автоматические тесты
+  на PostgreSQL **18** пройдены, в том числе backup/restore и
+  точный SQL миграции. Совместимость с **реальной копией production**
+  и восстановление её данных ещё не подтверждены.
 - **Render Free PostgreSQL не поддерживает встроенные backup или PITR**:
   https://render.com/docs/free и https://render.com/docs/postgresql-backups.
   Production pg_dump вне Render **не сделан**. Без защищённой локальной
@@ -77,6 +106,11 @@
 - Старое приложение не понимает `retired` и выбранные `weekdays`.
   Кодовый откат после реального переноса расписания небезопасен без
   совместимого хотфикса/заморозки изменений. Колонки не удалять.
+- Render Postgres `ipAllowList` в конфигурации содержит `0.0.0.0/0`:
+  внешняя сетевая поверхность открыта для соединений с аутентификацией.
+  База показывает `ssl=on`. Ограничение публичного доступа требуется
+  отдельно спланировать, чтобы не нарушить подключение текущего бота;
+  ни один сетевой параметр сейчас не менялся.
 - Render production logs: 23 октября два примера старого wake callback 400;
   веточное исправление ещё не опубликовано. Отдельно измерить задержку API
   `/mini/api` на холодном старте.
@@ -86,8 +120,9 @@
 
 ## Следующий этап / release gate
 
-1. Получить зелёный последний GitHub Actions, проверить реально выполненный
-   dump/restore в disposable test DB и логи PG-сервиса.
+1. **Выполнено в тестах:** успешный CI 40051902656 и фактический
+   pg_dump/restore в изолированной PostgreSQL 18. После следующего
+   коммита документации повторно проверить HEAD + workflow.
 2. По отдельному разрешению сделать защищённый backup production (read-only)
    и проверить восстановление копии в изолированной БД без записи в production.
 3. Подтвердить совместимый откат с `retired`/новыми weekdays и работу на PG18.
