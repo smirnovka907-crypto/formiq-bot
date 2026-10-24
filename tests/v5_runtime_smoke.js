@@ -200,7 +200,9 @@ async function run(){
  assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
  await app.click({cmd:'cardio'});
  assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
- assert.doesNotMatch(app.root.innerHTML,/id="cardio-min"/,"Cardio form closes after save");
+ assert.match(app.root.innerHTML,/class="surface cardio-inline"/,'Cardio stays embedded on workouts screen');
+ assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/,'Successful save clears cardio duration');
+ assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/,'Successful save clears heart rate');
  await app.click({cmd:'cardio-add'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
