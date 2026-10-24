@@ -594,6 +594,15 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(self.snapshot_history(), original_history)
 
 
+    def test_extended_120_minute_gym_session_is_not_clamped_to_90(self):
+        profile=dict(goal='general',level='experienced',days='3',
+                     equipment='gym',minutes='90')
+        standard=self.m.make_session(profile,1,'A',cycle_id=1)
+        extended=self.m.make_session({**profile,'minutes':'120'},1,'A',cycle_id=1)
+        self.assertLessEqual(len(standard),6)
+        self.assertGreaterEqual(len(extended),len(standard))
+        self.assertEqual(len(extended),7)
+
     def test_new_onboarding_uses_weekday_count_and_postgres_roundtrip(self):
         """Actual authenticated API (identity mocked) -> database -> state/reopen."""
         data=self.body((0, 2, 4), days=2)
