@@ -696,7 +696,7 @@ app.addEventListener('click',async e=>{
   const txt=String(onboard.description||'').trim();
   if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
   const analyzedForm=onboard;
-  const result=await send('health_analyze',{adult:true,privacy_ack:true,text:txt});
+  const result=await send('health_analyze',{adult:true,privacy_ack:true,ai_consent:true,text:txt});
   if(result?.analysis){
    if(onboard!==analyzedForm||String(onboard.description||'').trim()!==txt||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
