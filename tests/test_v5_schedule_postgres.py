@@ -354,7 +354,7 @@ class SchedulePostgresTests(unittest.TestCase):
         if docker_container:
             # Never accept user-supplied host names or container references:
             # GitHub Actions supplies the exact ephemeral postgres service ID.
-            self.assertRegex(docker_container, r'^[0-9a-f]{64})
+            self.assertRegex(docker_container, r'^[0-9a-f]{64}$')
             self.assertIsNotNone(shutil.which('docker'))
         else:
             for program in ('pg_dump', 'pg_restore'):
