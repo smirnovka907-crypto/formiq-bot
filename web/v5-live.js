@@ -263,9 +263,9 @@ function workout(){
   exercises.map(e=>'<div class="workout-plan-row '+(c&&Number(c.position)===Number(e.position)?'current':'')+'">'+
    '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
   '</section>':'';
- const footer=c?'<div class="fq-live-actions" style="margin-top:14px">'+
+ const footer=c?'<div class="fq-live-actions workout-secondary-actions" role="group" aria-label="Управление тренировкой" style="margin-top:14px">'+
   button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
- return h()+summary+content+overview+footer;
+ return h()+summary+content+footer+overview;
 }
 function training(){
  if(!ready()){onboardOpen=true;return onboardForm()}

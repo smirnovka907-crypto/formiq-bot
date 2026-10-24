@@ -225,17 +225,23 @@ async function run(){
     assert.ok(boxes.every(b=>b.inputWidth>90&&b.inputHeight>=49),'Inputs remain touch-accessible');
    };
    const checkFooterReachable=async(names)=>{
-    await page.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));
-    const positions=await page.evaluate(names=>{
-     const nav=document.querySelector('.bottom-nav'),top=nav?.getBoundingClientRect().top??innerHeight;
-     return {navTop:top,buttons:names.map(cmd=>{
-      const el=document.querySelector('[data-cmd="'+cmd+'"]'),box=el?.getBoundingClientRect();
-      return {cmd,exists:!!el,bottom:box?.bottom??Infinity,top:box?.top??Infinity,
-       width:box?.width??0,height:box?.height??0};
-     })};
-    },names);
-    assert.ok(positions.buttons.every(b=>b.exists&&b.height>=44&&b.width>=104&&b.bottom<=positions.navTop-3),
-      'Action buttons must remain above the fixed nav at bottom scroll: '+JSON.stringify(positions));
+    for(const cmd of names){
+     // Align the actual control inside the unobstructed safe viewport, not merely
+     // against the document bottom: actions now precede the exercise overview.
+     const position=await page.evaluate(cmd=>{
+      const el=document.querySelector('[data-cmd="'+cmd+'"]');
+      if(!el)return {cmd,exists:false};
+      const nav=document.querySelector('.bottom-nav');
+      const navTop=nav?.getBoundingClientRect().top??innerHeight;
+      const b=el.getBoundingClientRect();
+      const idealTop=Math.max(100,navTop-b.height-24);
+      if(b.bottom>navTop-3||b.top<0)window.scrollBy({top:b.top-idealTop,behavior:'instant'});
+      const rect=el.getBoundingClientRect(),bottom=nav?.getBoundingClientRect().top??innerHeight;
+      return {cmd,exists:true,top:rect.top,bottom:rect.bottom,height:rect.height,width:rect.width,navTop:bottom};
+     },cmd);
+     assert.ok(position.exists&&position.top>=0&&position.height>=44&&position.width>=104&&position.bottom<=position.navTop-3,
+       'All workout actions must be scroll-reachable above fixed tabs: '+JSON.stringify(position));
+    }
    };
    const checkLayout=async(location)=>{
     const result=await page.evaluate(()=>{
@@ -354,6 +360,8 @@ async function run(){
    assert.deepEqual(await page.locator('.bottom-nav .nav-item').allTextContents(),
     ['Тренировки','Питание','Прогресс'],'Approved three tabs remain visible during active sets');
    await checkInputAlignment();
+   assert.equal(await page.locator('.workout-secondary-actions').count(),1,
+     'Active actions grouped before the exercise summary');
    await checkFooterReachable(['skip-confirm','finish-confirm']);
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
@@ -370,6 +378,14 @@ async function run(){
    await page.locator('#rest-count').waitFor();
    assert.equal(await page.locator('.bottom-nav .nav-item').count(),3,'Three tabs during rest');
    await checkFooterReachable(['rest-skip','skip-confirm','finish-confirm']);
+   await page.evaluate(()=>window.scrollTo(0,0));
+   const restFirstView=await page.evaluate(()=>{
+    const nav=document.querySelector('.bottom-nav').getBoundingClientRect();
+    const btns=['skip-confirm','finish-confirm'].map(cmd=>document.querySelector('[data-cmd="'+cmd+'"]').getBoundingClientRect());
+    return {navTop:nav.top,buttons:btns.map(b=>({top:b.top,bottom:b.bottom}))};
+   });
+   assert.ok(restFirstView.buttons.every(b=>b.top>=0&&b.bottom<=restFirstView.navTop-3),
+     'Secondary rest controls must be visible without scrolling under fixed tabs: '+JSON.stringify(restFirstView));
    await checkLayout('workout rest timer');
    await page.screenshot({path:path.join(OUT,'workout-rest-'+size.width+'.png')});
    await matchedShot('workout-rest',async ref=>{
