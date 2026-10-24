@@ -18,10 +18,15 @@ PASS = 'a-long-private-passphrase-for-offline-backup-tests'
 
 class FakeDump:
     def __init__(self, *args, **kwargs):
-        self.argv = args[0]
-        self.env = kwargs['env']
+        self.argv = None
+        self.env = None
         self.stdout = BytesIO(b'PGDMP\x01 TEST-only fake contents not user records' * 10)
         self.returncode = 0
+
+    def spawn(self, argv, **kwargs):
+        self.argv = argv
+        self.env = kwargs['env']
+        return self
 
     def wait(self, timeout=None):
         return self.returncode
@@ -95,7 +100,7 @@ class BackupSafetyTests(unittest.TestCase):
         fake = FakeDump()
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(backup, 'check_client', side_effect=lambda cmd: cmd):
-                with patch.object(backup.subprocess, 'Popen', return_value=fake):
+                with patch.object(backup.subprocess, 'Popen', side_effect=fake.spawn):
                     with patch.object(backup, 'validate_archive') as validated:
                         filename, checksum = backup.create_backup(folder, uri, PASS)
                 self.assertTrue(filename.exists())
@@ -118,7 +123,7 @@ class BackupSafetyTests(unittest.TestCase):
         fake.returncode = 1
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(backup, 'check_client', side_effect=lambda cmd: cmd):
-                with patch.object(backup.subprocess, 'Popen', return_value=fake):
+                with patch.object(backup.subprocess, 'Popen', side_effect=fake.spawn):
                     with self.assertRaises(backup.BackupError):
                         backup.create_backup(folder, uri, PASS)
             self.assertEqual(list(Path(folder).iterdir()), [])
