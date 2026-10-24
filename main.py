@@ -1397,7 +1397,7 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
         new_keys.append(selected)
 
     # More time unlocks more exercises/sets rather than just saving the slider.
-    max_exercises = 3 if mins <= 25 else 4 if mins <= 45 else 5 if mins <= 65 else 6
+    max_exercises = 3 if mins <= 25 else 4 if mins <= 45 else 5 if mins <= 65 else 6 if mins < 100 else 7
     if custom_keys:
         max_exercises = min(6, len(new_keys))
     elif len(new_keys) < max_exercises:
