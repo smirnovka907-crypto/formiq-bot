@@ -131,6 +131,10 @@ async function run(){
    const matchedShot=async(name,setupReference,options={})=>{
     const ref=await context.newPage();
     await ref.goto(base+'/approved-reference',{waitUntil:'load'});
+    // The approved reference stores its demo workout in browser localStorage.
+    // Remove only that disposable preview key before each independent matched state.
+    await ref.evaluate(()=>localStorage.removeItem('formiq_preview_active_workout_v2'));
+    await ref.reload({waitUntil:'load'});
     await ref.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
     if(setupReference)await setupReference(ref);
     const align=async(p,selector)=>{
