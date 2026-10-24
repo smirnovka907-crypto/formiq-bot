@@ -131,15 +131,33 @@ def validate_archive(archive, passphrase):
     binary = check_client('pg_restore')
     p = subprocess.Popen([binary, '--list'], stdin=subprocess.PIPE,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    class ListOnlySink:
+        # pg_restore --list may finish after reading only the archive TOC.
+        # Still decrypt ALL encrypted data to authenticate its GCM tag.
+        def write(self, part):
+            if p.stdin and not p.stdin.closed:
+                try:
+                    p.stdin.write(part)
+                except BrokenPipeError:
+                    pass
+
     try:
-        decrypt_stream(archive, p.stdin, passphrase)
-        p.stdin.close()
+        decrypt_stream(archive, ListOnlySink(), passphrase)
+        try:
+            p.stdin.close()
+        except BrokenPipeError:
+            pass
         if p.wait(timeout=90) != 0:
             raise BackupError('PostgreSQL archive listing failed')
     except Exception:
         if p.stdin and not p.stdin.closed:
-            p.stdin.close()
-        p.kill() if p.poll() is None else None
+            try:
+                p.stdin.close()
+            except BrokenPipeError:
+                pass
+        if p.poll() is None:
+            p.kill()
         p.wait()
         raise
 
