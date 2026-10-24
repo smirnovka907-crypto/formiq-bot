@@ -3424,7 +3424,8 @@ def mini_aux(chat,action,body):
             conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
             target=conn.execute('''SELECT s.id,c.starts_on,s.cycle_id,s.week_no,s.day_code FROM scheduled_sessions s
                 JOIN training_cycles c ON c.id=s.cycle_id
-                WHERE s.id=%s AND s.chat_id=%s FOR UPDATE OF s''',(sid,chat)).fetchone()
+                WHERE s.id=%s AND s.chat_id=%s
+                 AND s.schedule_state IS DISTINCT FROM 'retired' FOR UPDATE OF s''',(sid,chat)).fetchone()
             if not target:raise ValueError('Дата не найдена')
             start=target[1]
             if conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s AND cycle_id=%s AND week_no=%s
