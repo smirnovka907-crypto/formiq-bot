@@ -3465,9 +3465,7 @@ def period_history(chat):
 
 
 def period_save(chat,body):
-    """Insert or correct only this user's period dates; no external AI."""
-    if metrics(chat).get('sex')!='female':
-        raise ValueError('В женском календаре нужно выбрать Женский пол')
+    """Store only actual periods, serialize with profile edits, never share with AI."""
     first,last=body.get('start'),body.get('end')
     if not isinstance(first,str) or not isinstance(last,str) or len(first)!=10 or len(last)!=10:
         raise ValueError('Выбери даты начала и окончания')
@@ -3477,11 +3475,31 @@ def period_save(chat,body):
         raise ValueError('Проверь даты календаря') from None
     if end<start or (end-start).days>14:
         raise ValueError('Дата окончания должна быть не раньше начала, период до 15 дней')
+    # These are *observed* entries, not predictions. Disallow absurd/future
+    # dates, which also prevents out-of-range forecast arithmetic near year 9999.
+    if start>datetime.now(timezone.utc).date() + timedelta(days=1) or \
+       end>datetime.now(timezone.utc).date() + timedelta(days=1):
+        raise ValueError('Указывай только уже начавшиеся периоды')
     record=body.get('id')
     if record is not None and (type(record) is not int or record<1):
         raise ValueError('Неверная запись календаря')
     try:
         with db() as conn:
+            # Onboarding uses the same advisory lock for this identity.
+            # The female access check and write must be atomic relative to
+            # changing profile sex, and two simultaneous writes must serialize.
+            conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+            sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',
+                                 (chat,)).fetchone()
+            if not sex_row or sex_row[0]!='female':
+                raise ValueError('Женский календарь доступен только в женском профиле')
+            overlap=conn.execute("""SELECT EXISTS(
+                SELECT 1 FROM menstrual_periods WHERE chat_id=%s
+                AND starts_on<=%s AND ends_on>=%s
+                AND (%s::bigint IS NULL OR id<>%s::bigint))""",
+                (chat,end,start,record,record)).fetchone()[0]
+            if overlap:
+                raise ValueError('Эти даты пересекаются с уже сохранённым периодом')
             if record is None:
                 conn.execute("""INSERT INTO menstrual_periods(chat_id,starts_on,ends_on)
                     VALUES(%s,%s,%s)""",(chat,start,end))
