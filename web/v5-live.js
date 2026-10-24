@@ -14,6 +14,7 @@ const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&state?.metrics?.age&
 // Server-side safety warnings prevent unsafe sessions, not access to the app.
 const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 let onboardOpen=false,onboard=null,onboardErrors={};
+let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false;
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -134,6 +135,37 @@ function onboardingPayload(){
   equipment_description:d.equipment==='home'?String(d.equipment_description).trim():'',
   terms:true,privacy:true,health:true};
 }
+
+async function loadFemalePeriods(){
+ if(state?.metrics?.sex!=='female')return;
+ periodBusy=true;
+ try{
+  const res=await request('period_list');
+  periodEntries=Array.isArray(res.periods)?res.periods:[];
+  periodPrediction=res.next_period||null;periodError='';
+ }catch(_e){periodError='Не удалось загрузить приватный календарь.'}
+ finally{periodBusy=false;draw()}
+}
+function femaleCalendar(){
+ if(state?.metrics?.sex!=='female')return '';
+ const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
+ const entries=(periodEntries||[]).map(p=>'<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
+  button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
+ const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
+  esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
+  '<p class="input-note">Прогноз появится после трёх последовательных записей с достаточно устойчивым интервалом.</p>';
+ return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
+  '<p class="input-note">Необязательный личный дневник. Данные видишь только ты, в ИИ они не отправляются.</p>'+
+  '<div class="fq-live-grid" style="margin-top:15px">'+
+  '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
+  '<label class="field"><span>Окончание</span><input id="period-end" type="date" value="'+esc(periodDraft.end)+'"></label></div>'+
+  (periodError?'<p role="alert" class="fq-form-error">'+esc(periodError)+'</p>':'')+
+  '<div class="workout-cta">'+button(periodEditing?'Сохранить исправление':'Добавить период','period-save',true)+
+  (periodEditing?button('Отмена','period-cancel'):'')+'</div>'+
+  '<h3 class="section-label">История</h3>'+(periodBusy?'<p>Загрузка...</p>':entries||'<p class="empty">Записей пока нет.</p>')+
+  estimate+'</section>';
+}
+
 function onboardChanged(e){
  const target=e.target;if(!onboard||!target)return;
  const field=target.dataset?.onboard;
@@ -479,7 +511,7 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+femaleCalendar()+
   '<section class="surface soft"><div class="heading-row"><h2 style="font-size:20px;margin:0">Garmin Connect</h2><span class="badge">Не подключён</span></div>'+
   '<p class="input-note" style="margin-top:13px">Показатели устройств не подменяются расчётами.</p></section>'+history();
 }
@@ -584,6 +616,7 @@ function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{
  onboardChanged(e);
  if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
@@ -603,9 +636,30 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress')loadProgressSeries();return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(cmd==='period-edit'){
+  const id=Number(element.dataset.periodId),record=periodEntries?.find(x=>x.id===id);
+  if(!record)return;
+  periodEditing=id;periodDraft={start:record.start,end:record.end};periodError='';draw();return;
+ }
+ if(cmd==='period-cancel'){
+  periodEditing=null;periodDraft={start:'',end:''};periodError='';draw();return;
+ }
+ if(cmd==='period-save'){
+  if(periodBusy)return;
+  if(!periodDraft.start||!periodDraft.end){periodError='Укажи обе даты.';draw();return}
+  if(periodDraft.end<periodDraft.start){periodError='Окончание не может быть раньше начала.';draw();return}
+  periodBusy=true;
+  try{
+   const response=await request('period_save',{...periodDraft,...(periodEditing?{id:periodEditing}:{})});
+   periodEntries=response.periods||[];periodPrediction=response.next_period||null;
+   periodEditing=null;periodDraft={start:'',end:''};periodError='';
+  }catch(e){periodError=e.message||'Не удалось сохранить даты.'}
+  finally{periodBusy=false;draw()}
+  return;
+ }
  if(element.dataset.onboardWeekday!==undefined){
   if(!onboardOpen||!onboard)return;
   const day=Number(element.dataset.onboardWeekday);
