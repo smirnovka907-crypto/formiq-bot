@@ -1104,6 +1104,17 @@ def show_profile(chat, mid=None):
 TRAINING_DAYS = 'ABCDEFG'
 
 
+def schedule_emergency_readonly():
+    """Operator-only emergency fallback for V5 schema; never use old scheduler."""
+    return os.environ.get('FORMIQ_SCHEDULE_SAFE_MODE') == '1'
+
+
+def require_schedule_writes_enabled():
+    if schedule_emergency_readonly():
+        raise ValueError('Расписание временно защищено. История и тренировки сохранены.')
+
+
+
 def sessions(p):
     """User-chosen active days; days 5–7 include lighter recovery sessions."""
     return max(1, min(7, int(p['days'])))
@@ -1187,6 +1198,8 @@ def schedule_reconciliation(rows, start_date, count, weekdays, today, infer_coun
 
 def reconcile_schedule_in(c, chat, cycle, start_date, p, today, infer_count=None,
                           reconcile_existing=False):
+    if schedule_emergency_readonly():
+        return  # Keep all calendar identities, including retired and manual slots.
     if p.get('weekdays') is not None and not reconcile_existing:
         return
     rows = c.execute('''SELECT s.id,s.week_no,s.day_code,s.planned_date,s.schedule_state,
@@ -1228,6 +1241,8 @@ def cycle_status(c, chat, p):
     age = (today-last[1]).days if last else None
     if last and last[2] == fingerprint(p) and -2<=age<28:
         return last[0], max(1,age//7+1)
+    # In emergency mode do not invent a new cycle or reinterpret old slots.
+    require_schedule_writes_enabled()
     cycle_id = c.execute('''INSERT INTO training_cycles(chat_id,starts_on,profile_fingerprint)
                             VALUES(%s,%s,%s) RETURNING id''',
                          (chat, today, fingerprint(p))).fetchone()[0]
@@ -2679,6 +2694,7 @@ def analyze_equipment_description(body):
 
 
 def save_onboarding(chat,body):
+    require_schedule_writes_enabled()
     vals=body.get('answers')
     if not isinstance(vals,dict):raise ValueError('Заполни анкету')
     if body.get('terms') is not True or body.get('privacy') is not True or body.get('health') is not True:
@@ -2821,6 +2837,8 @@ def day_title(p,day):
 
 
 def ensure_schedule(chat, cycle, count, start_date):
+    if schedule_emergency_readonly():
+        return
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         current = profile_in(conn,chat)
@@ -3396,6 +3414,7 @@ def mini_aux(chat,action,body):
         save_custom(chat,body.get('day'),body.get('keys'))
         return True
     if action=='reschedule':
+        require_schedule_writes_enabled()
         sid=body.get('id')
         raw=body.get('date')
         if type(sid) is not int or not isinstance(raw,str):raise ValueError('Выбери дату')
