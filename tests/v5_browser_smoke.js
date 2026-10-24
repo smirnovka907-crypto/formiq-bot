@@ -319,7 +319,7 @@ async function run(){
     'Profile shortcut must not cover editable questionnaire fields');
    await page.locator('[data-onboard-pick="goal"]').first().waitFor();
    assert.equal(await page.locator('a[href="/mini/legacy"]').count(),0,'No 38.2 redirect');
-   assert.equal(await page.locator('input#onboard-duration').count(),1,'Approved duration slider');
+   assert.equal(await page.locator('select[data-onboard="minutes"]').count(),1,'Approved 20–120 minute dropdown');
    assert.equal(await page.locator('[data-onboard-weekday]').count(),7,'Seven weekday controls');
    const weekdayRects=await page.locator('[data-onboard-weekday]').evaluateAll(buttons=>buttons.map(b=>b.getBoundingClientRect().toJSON()));
    assert.ok(weekdayRects.every(r=>r.height>=44),'Weekday controls have accessible touch height');
@@ -327,12 +327,12 @@ async function run(){
    await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').click();
    assert.equal(await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').getAttribute('aria-pressed'),'true');
    const sexButtons=await page.locator('.fq-sex-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
-   assert.equal(sexButtons.length,3,'Optional unspecified sex stays available');
+   assert.equal(sexButtons.length,2,'Exactly two gender choices');
    assert.ok(sexButtons.every(b=>Math.abs(b.top-sexButtons[0].top)<1),'All sex choices align in a single row');
    assert.ok(sexButtons.every(b=>Math.abs(b.width-sexButtons[0].width)<2&&Math.abs(b.height-sexButtons[0].height)<2),
      'All sex choices have symmetric geometry');
    const equipmentButtons=await page.locator('.fq-equipment-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
-   assert.equal(equipmentButtons.length,3,'All supported training locations remain available');
+   assert.equal(equipmentButtons.length,2,'Only home and gym choices');
    assert.ok(equipmentButtons.every(b=>Math.abs(b.top-equipmentButtons[0].top)<1),
      'Training locations do not leave a dangling third button');
    assert.ok(equipmentButtons.every(b=>Math.abs(b.width-equipmentButtons[0].width)<2&&Math.abs(b.height-equipmentButtons[0].height)<2),
@@ -495,9 +495,11 @@ async function run(){
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
   for(const field of ['adult','terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
-  await onboarding.locator('[data-onboard="days"]').selectOption('3');
+  await onboarding.locator('[data-onboard-pick="sex"][data-value="female"]').click();
+  await onboarding.locator('body.theme-female').waitFor();
+  await onboarding.locator('[data-onboard="minutes"]').selectOption('120');
   await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
-  await onboarding.getByRole('alert').filter({hasText:'Выбери конкретные дни тренировок'}).waitFor();
+  await onboarding.getByRole('alert').filter({hasText:'Выбери хотя бы один день недели'}).first().waitFor();
   assert.equal(posts.filter(p=>p.action==='onboarding').length,0,'Legacy/new blank weekdays must not be submitted');
   for(const day of [0,2,4])await onboarding.locator('[data-onboard-weekday="'+day+'"]').click();
   await onboarding.locator('[data-onboard-weekday="0"]').focus();
@@ -508,6 +510,10 @@ async function run(){
   await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
   await onboarding.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
+  assert.equal(posts.find(p=>p.action==='onboarding').answers.days,'3');
+  assert.equal(posts.find(p=>p.action==='onboarding').metrics.sex,'female');
+  assert.equal(posts.find(p=>p.action==='onboarding').answers.minutes,'120');
+  assert.equal(await onboarding.locator('body.theme-female').count(),1,'Pink theme persists after save');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
   await onboarding.getByRole('button',{name:'Профиль',exact:true}).click();
   await onboarding.getByText('Пн, Ср, Пт',{exact:true}).waitFor();
