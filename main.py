@@ -2614,8 +2614,12 @@ def analyze_health_description(chat, body):
     Never save raw health text; the user reviews fields before saving.
     Failure must never disable the deterministic health safety rules.
     """
+    # Server-side, per-request opt-in: a forged authenticated Mini App
+    # action must not send health notes to Yandex without separate consent.
+    if body.get('ai_consent') is not True:
+        raise ValueError('Для передачи описания в Yandex AI нужно отдельное согласие')
     if body.get('adult') is not True or body.get('privacy_ack') is not True:
-        raise ValueError('Перед анализом подтверди возраст 18+ и согласие на отправку описания в Яндекс ИИ')
+        raise ValueError('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности')
     raw=body.get('text')
     if not isinstance(raw,str) or not 8<=len(raw.strip())<=800:
         raise ValueError('Опиши особенности своими словами (8–800 символов)')
@@ -2721,18 +2725,19 @@ def save_onboarding(chat,body):
     if not isinstance(user_tz,str) or len(user_tz)>64:raise ValueError('Проверь часовой пояс')
     try:ZoneInfo(user_tz)
     except Exception:raise ValueError('Часовой пояс не распознан')
-    allowed_fields=('goal','level','days','equipment','age_group','minutes')
-    for field in allowed_fields:
-        choices={v for _,v in QUESTIONS[FIELDS.index(field)][2]}
-        if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
     selected_weekdays = None
     if 'weekdays' in vals:
         if not isinstance(vals['weekdays'],list) or not 1<=len(vals['weekdays'])<=7:
             raise ValueError('Выбери хотя бы один день тренировок')
-        # The authoritative count is derived server-side; never trust an old
-        # drop-down value that conflicts with the user's chosen weekdays.
-        vals={**vals,'days':str(len(vals['weekdays']))}
+        # Validate first and DERIVE the frequency before validating the
+        # profile fields. A legacy/stale days selector must never prevent a
+        # correct explicit weekday selection from completing onboarding.
         selected_weekdays = validate_weekdays(vals['weekdays'],len(vals['weekdays']))
+        vals={**vals,'days':str(len(selected_weekdays))}
+    allowed_fields=('goal','level','days','equipment','age_group','minutes')
+    for field in allowed_fields:
+        choices={v for _,v in QUESTIONS[FIELDS.index(field)][2]}
+        if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
     age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
