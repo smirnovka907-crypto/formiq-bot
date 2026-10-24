@@ -121,7 +121,10 @@ function onboardingPayload(){
  const reviewed=!!(d.aiResult&&d.aiReviewed);
  // A new unreviewed note is conservatively classified as "other" until a
  // professional or a separately authorized + confirmed AI analysis is available.
- const affected=reviewed?d.areas:(description&&!state?.health_description?['other']:Array.isArray(prior.affected)?prior.affected:[]);
+ const previousAreas=Array.isArray(prior.affected)?prior.affected:[];
+ const noteChanged=!!description&&description!==(state?.health_description||'');
+ const affected=reviewed?d.areas:
+  (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
