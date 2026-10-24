@@ -148,7 +148,20 @@ async function run(){
      assert.equal(bytes.readUInt32BE(16),size.width,'Full-width screenshot, not cropped');
      assert.equal(bytes.readUInt32BE(20),size.height,'Full-height viewport, not cropped');
     }
+    // Preserve the complete document for every distinct screen, not merely the
+    // visible 740/852 px viewport. Only repeated scroll checkpoints are omitted.
+    const fullPage=!name.startsWith('questionnaire-scroll-')&&name!=='questionnaire-weekdays';
+    const fullReferenceFile=fullPage?'pair-approved-'+name+'-'+size.width+'-full.png':null;
+    const fullRealFile=fullPage?'pair-live-'+name+'-'+size.width+'-full.png':null;
+    const fullPageHeights=[];
+    if(fullPage)for(const [p,file] of [[ref,fullReferenceFile],[page,fullRealFile]]){
+     const image=await p.screenshot({path:path.join(OUT,file),fullPage:true,animations:'disabled'});
+     assert.equal(image.readUInt32BE(16),size.width,'Uncropped full-page screenshot has native width');
+     assert.ok(image.readUInt32BE(20)>=size.height,'Uncropped document must include entire viewport');
+     fullPageHeights.push(image.readUInt32BE(20));
+    }
     pairedManifest.push({name,width:size.width,height:size.height,referenceFile,realFile,
+     fullReferenceFile,fullRealFile,fullPageHeights,
      referenceScrollY:refScroll,realScrollY:realScroll,
      referenceAnchor:options.referenceAnchor||null,liveAnchor:options.liveAnchor||null,
      mode:options.referenceAnchor||options.liveAnchor?'corresponding feature top':'same numeric scroll',
@@ -395,7 +408,7 @@ async function run(){
    assert.equal(errors.length,0,'No JS errors: '+errors.join(' | '));
    fs.writeFileSync(path.join(OUT,'paired-manifest-'+size.width+'.json'),JSON.stringify({
     approved:'docs/design/FORMIQ_Aluminium_v5_approved.html',actual:'web/v5-live.html',
-    viewport:size,telegramSafeArea:{top:24,bottom:8},deviceScaleFactor:1,fullPage:false,
+    viewport:size,telegramSafeArea:{top:24,bottom:8},deviceScaleFactor:1,viewportPngUncropped:true,fullPagePngUncropped:true,
     states:pairedManifest
    },null,2));
    await context.close();
