@@ -75,7 +75,7 @@ function createClient(auth=true,shared={}){
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');if(shared.trackHistory)history=[{id:81,date:'23.10.2026',title:'Кардио · Велосипед'},...history];response={ok:true,data:state()};}
    else if(p.action==='health_analyze'){
-     assert.equal(p.adult,true);assert.equal(p.privacy_ack,true);
+     assert.equal(p.adult,true);assert.equal(p.privacy_ack,true);assert.equal(p.ai_consent,true,'No Yandex health request without opt-in');
      response={ok:true,analysis:{affected:['knee'],pain_score:3,symptom_course:'stable',danger_signs:false,short_summary:'Беспокоит колено'}};
     }
     else if(p.action==='onboarding'){
@@ -386,6 +386,8 @@ async function run(){
   assert.doesNotMatch(ai.root.innerHTML,/data-onboard="aiReviewed"/);
   await ai.click({cmd:'onboard-ai'});
   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
+  assert.ok(ai.requests.filter(x=>x.action==='health_analyze')
+    .every(x=>x.ai_consent===true),'Only explicit consent reaches Yandex health analysis');
   assert.match(ai.root.innerHTML,/Проверь результат ИИ/);
   await ai.click({cmd:'onboard-save'});
   assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
