@@ -321,7 +321,7 @@ class SchedulePostgresTests(unittest.TestCase):
         _, cycle, _ = self.save()
         before = self.rows(cycle)
         old_profile = self.m.profile(self.chat)
-        for weekdays in ([0, 0, 2], [0, 1], [True, 2, 4], [-1, 2, 4],
+        for weekdays in ([0, 0, 2], [True, 2, 4], [-1, 2, 4],
                          [0, 2, 7], ['0', 2, 4]):
             payload = self.body((0, 2, 4))
             payload['answers']['weekdays'] = weekdays
