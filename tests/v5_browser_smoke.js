@@ -75,12 +75,12 @@ async function run(){
    }else if(data.action==='start'){
     assert.equal(data.mood,'normal');
     profileState.workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',
-     current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90}};
+     exercises:[{position:0,name:'Жим ногами',done:0,skipped:0,total:2}],current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90}};
     response={ok:true,patch:{workout:profileState.workout}};
    }else if(data.action==='record'){
     assert.equal(data.expected_workout,9);assert.equal(data.expected_set,1);
     assert.equal(data.reps,12);assert.equal(data.weight,60);
-    profileState.workout={...profileState.workout,done:1,rest_remaining_seconds:89,
+    profileState.workout={...profileState.workout,done:1,exercises:[{position:0,name:'Жим ногами',done:1,skipped:0,total:2}],rest_remaining_seconds:89,
      current:{...profileState.workout.current,set_no:2}};
     response={ok:true,patch:{workout:profileState.workout}};
    }else if(data.action==='finish'){
@@ -135,6 +135,25 @@ async function run(){
     await reference.locator('.bottom-nav [data-nav="'+nav+'"]').click();
     await reference.screenshot({path:path.join(OUT,'approved-'+name+'-'+size.width+'.png')});
    }
+   await reference.locator('[data-act="history-calendar"]').click();
+   await reference.locator('.history-cal-inline').scrollIntoViewIfNeeded();
+   await reference.screenshot({path:path.join(OUT,'approved-calendar-'+size.width+'.png')});
+   await reference.locator('[data-act="history-calendar"]').click();
+   await reference.locator('[data-week="1"]').first().click();
+   await reference.locator('.plan-period-days').scrollIntoViewIfNeeded();
+   await reference.screenshot({path:path.join(OUT,'approved-plan-'+size.width+'.png')});
+   await reference.locator('.bottom-nav [data-nav="home"]').click();
+   await reference.locator('[data-act="profile"]').first().click();
+   await reference.screenshot({path:path.join(OUT,'approved-profile-'+size.width+'.png')});
+   await reference.locator('.bottom-nav [data-nav="home"]').click();
+   await reference.locator('[data-act="home-start"]').click();
+   await reference.locator('#workout-entry').waitFor();
+   await reference.screenshot({path:path.join(OUT,'approved-workout-entry-'+size.width+'.png')});
+   await reference.locator('#workout-weight').fill('60');
+   await reference.locator('#workout-reps').fill('12');
+   await reference.locator('[data-act="set-done"]').click();
+   await reference.locator('#rest-clock').waitFor();
+   await reference.screenshot({path:path.join(OUT,'approved-workout-rest-'+size.width+'.png')});
    await reference.close();
    await page.goto(base+'/',{waitUntil:'load'});
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
@@ -209,6 +228,7 @@ async function run(){
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
    await page.locator('#reps').waitFor({state:'visible'});
    await page.locator('.fq-live-overlay').waitFor({state:'detached'});
+   assert.equal(await page.locator('.workout-plan-list .workout-plan-row').count(),1,'Actual workout exercise overview');
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');

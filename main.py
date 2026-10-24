@@ -3270,7 +3270,8 @@ def mini_state(chat, just_finished=False):
             workout = {'id':wid,'day':day,'week':week,'done':done,
                 'skipped':skipped,'total':len(rows),'exercise_count':len({s[0] for s in rows}),
                 'current':None, 'finished':False, 'legacy':not bool(rows), 'title':manual_title or day_title(p,day),
-                'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
+                'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0,
+                'exercises':mini_workout_exercises(rows)}
             if current:
                 pos, num, low, high, unit, _, name, key = current
                 info = EX.get(key, (name,'Двигайся плавно.','При боли остановись.'))
@@ -3942,6 +3943,20 @@ def workout_rest_remaining(conn, workout_id, user_profile):
     return max(0, int(duration - seconds_elapsed + 0.999))
 
 
+def mini_workout_exercises(rows):
+    """Summarize already-read active session sets without changing user data."""
+    summary = {}
+    for pos, number, low, high, unit, status, name, key in rows:
+        if pos not in summary:
+            summary[pos] = {'position': pos, 'name': visible_exercise_name(name),
+                            'done': 0, 'skipped': 0, 'total': 0}
+        row = summary[pos]
+        row['total'] += 1
+        row['done'] += status == 'done'
+        row['skipped'] += status == 'skipped'
+    return list(summary.values())
+
+
 def mini_workout_delta(chat):
     """One short database session: only the live workout; no full dashboard."""
     with db() as c:
@@ -3964,7 +3979,8 @@ def mini_workout_delta(chat):
         item={'id':wid,'day':day,'week':week,'done':done,'skipped':skipped,
               'total':len(rows),'exercise_count':len({r[0] for r in rows}),
               'current':None,'finished':False,'legacy':not bool(rows),'title':title,
-              'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0}
+              'rest_remaining_seconds':workout_rest_remaining(c,wid,p) if current and done else 0,
+              'exercises':mini_workout_exercises(rows)}
         if current:
             pos,num,low,high,unit,_,name,key=current
             info=EX.get(key,(name,'Двигайся плавно.','При боли остановись.'))

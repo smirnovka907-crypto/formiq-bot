@@ -96,6 +96,16 @@ class SchedulePostgresTests(unittest.TestCase):
                     for table in ('workouts', 'workout_items', 'workout_sets',
                                   'cardio_sessions', 'pending_inputs', 'rest_timers')}
 
+    def test_active_workout_overview_uses_saved_set_rows(self):
+        rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),
+                (0, 2, 8, 12, 'reps', 'pending', 'Жим ногами', 'leg_press'),
+                (1, 1, 10, 10, 'reps', 'skipped', 'Тяга блока', 'lat_pull'),
+                (1, 2, 10, 10, 'reps', 'pending', 'Тяга блока', 'lat_pull')]
+        result = self.m.mini_workout_exercises(rows)
+        self.assertEqual([(x['done'],x['skipped'],x['total']) for x in result],
+                         [(1,0,2),(0,1,2)])
+        self.assertEqual(result[0]['name'],'Жим ногами')
+
     def test_onboarding_api_reopen_and_four_weeks_for_all_counts(self):
         client = self.m.APP.test_client()
         for count in range(1, 8):

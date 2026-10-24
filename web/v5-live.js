@@ -257,9 +257,15 @@ function workout(){
    '</div><p class="input-note" style="margin:13px 0 0">Отдых после подхода: '+esc(c.rest_seconds||0)+' сек. При боли прекрати упражнение.</p>'+
    '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div></section>';
  }
+ const exercises=Array.isArray(w.exercises)?w.exercises:[];
+ const overview=exercises.length?'<section class="surface soft workout-plan-list">'+
+  '<h2 style="font-size:17px;margin:0 0 10px">План упражнений</h2>'+
+  exercises.map(e=>'<div class="workout-plan-row '+(c&&Number(c.position)===Number(e.position)?'current':'')+'">'+
+   '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
+  '</section>':'';
  const footer=c?'<div class="fq-live-actions" style="margin-top:14px">'+
   button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
- return h()+summary+content+footer;
+ return h()+summary+content+overview+footer;
 }
 function training(){
  if(!ready()){onboardOpen=true;return onboardForm()}
