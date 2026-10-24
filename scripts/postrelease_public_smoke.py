@@ -47,6 +47,7 @@ def ensure(condition, reason):
 def main():
     try:
         status, _, body = public_request('/')
+        print('health_status:', status, flush=True)
         ensure(status == 200 and b'FORMIQ 38.3.3 online' in body,
                'Public health endpoint did not return expected released version')
         print('health: HTTP 200, FORMIQ 38.3.3')
@@ -87,10 +88,11 @@ def main():
 
         print('PASS: public production HTTP smoke, read-only / no Telegram identity')
         return 0
-    except Exception:
-        # Never print HTTP responses, request headers, URLs with private tokens.
-        print('FAIL: public production HTTP smoke; inspect expected statuses safely',
-              file=sys.stderr)
+    except Exception as exc:
+        # Only public endpoint status, static assertion label or exception class.
+        # Never log response bodies, private URLs, headers or credentials.
+        reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+        print('FAIL: public postrelease smoke:', reason, file=sys.stderr)
         return 1
 
 
