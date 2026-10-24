@@ -139,6 +139,10 @@ async function run(){
    await reference.locator('.history-cal-inline').scrollIntoViewIfNeeded();
    await reference.screenshot({path:path.join(OUT,'approved-calendar-'+size.width+'.png')});
    await reference.locator('[data-act="history-calendar"]').click();
+   await reference.locator('[data-act="history-open"]').click();
+   await reference.locator('.history-modal .history-scroll').waitFor();
+   await reference.screenshot({path:path.join(OUT,'approved-history-modal-'+size.width+'.png')});
+   await reference.locator('[data-act="history-close"]').click();
    await reference.locator('[data-week="1"]').first().click();
    await reference.locator('.plan-period-days').scrollIntoViewIfNeeded();
    await reference.screenshot({path:path.join(OUT,'approved-plan-'+size.width+'.png')});
@@ -256,6 +260,12 @@ async function run(){
    await page.evaluate(()=>document.querySelector('.history-cal-inline')?.scrollIntoView({block:'start'}));
    await checkLayout('history calendar');
    await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
+   await page.getByRole('button',{name:'Вся история →'}).click();
+   await page.locator('.history-modal .history-scroll').waitFor();
+   await checkLayout('history bottom sheet');
+   assert.equal(await page.locator('.history-modal [role="region"]').count(),1,'Scroll within history sheet');
+   await page.screenshot({path:path.join(OUT,'history-modal-'+size.width+'.png')});
+   await page.getByRole('button',{name:'Закрыть историю'}).click();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
    assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');

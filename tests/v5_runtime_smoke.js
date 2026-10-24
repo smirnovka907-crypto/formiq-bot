@@ -260,6 +260,9 @@ async function run(){
  assert.ok(app.requests.some(x=>x.action==='history_page'&&x.date==='2026-10-23'));
  await app.click({cmd:'history-all'});
  assert.ok(app.requests.some(x=>x.action==='history_page'&&x.offset===0));
+ assert.match(app.root.innerHTML,/class="fq-live-dialog history-modal"/,'History uses approved bottom sheet');
+ assert.match(app.root.innerHTML,/role="region" aria-label="Список сохранённых занятий"/);
+ assert.match(app.root.innerHTML,/Закрыть историю/);
  await app.click({cmd:'detail',id:'8'});
  assert.ok(app.requests.some(x=>x.action==='detail'&&x.id===8));
  assert.match(app.root.innerHTML,/12 повт/);

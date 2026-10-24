@@ -343,4 +343,17 @@ input,select,textarea{max-width:100%}
 .workout-plan-list .workout-plan-row strong{white-space:nowrap;color:var(--ink);font-size:14px;font-variant-numeric:tabular-nums}
 .workout-plan-list .workout-plan-row.current{color:var(--ink);font-weight:730}
 .workout-plan-list .workout-plan-row.current strong{color:#526762}
+
+/* V5 history: match approved compact calendar trigger and full-history bottom sheet. */
+#history-root .heading-row{gap:7px}
+#history-root .heading-row h2{font-size:19px!important;letter-spacing:-.45px;line-height:1.2;min-width:0}
+#history-root [data-cmd="calendar"]{width:auto;min-height:37px;min-width:92px;flex:0 0 auto;padding:8px 11px;font-size:13px;border-radius:10px}
+#history-root [data-cmd="calendar"]:after{content:"▦";font-size:13px;margin-left:5px;color:#536763}
+.fq-live-dialog.history-modal{padding-bottom:max(22px,env(safe-area-inset-bottom))}
+.history-modal .history-top{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.history-modal .history-top h2{font-size:20px;margin:0;line-height:1.2}
+.history-modal .history-close{border:1px solid #b9c3c1;background:linear-gradient(155deg,#fdfefe,#e6ebea);border-radius:10px;min-height:39px;padding:8px 10px;font-size:13px;font-weight:720;flex:none}
+.history-modal .history-scroll{max-height:min(490px,58dvh);margin:14px 0;overflow-y:auto;overscroll-behavior:contain;border-top:1px solid var(--line)}
+.history-modal .history-scroll .cardio-history{margin-top:0;border-top:0}
+.history-modal .history-scroll .cardio-history-row{min-height:70px}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>

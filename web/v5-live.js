@@ -551,9 +551,18 @@ function modalHTML(){
  if(modal==='mood')content=`<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
  if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
- if(modal==='history')content=`<div class="fq-live-topline"><h2>История</h2>${button('Закрыть','close')}</div>${allRows.map(historyRow).join('')||'<p>Записей нет.</p>'}${nextOffset!==null?button('Загрузить ещё','history-more'):''}`;
+ if(modal==='history'){
+  const rows=allRows.map(historyRow).join('');
+  const body=rows||'<p class="empty">'+(nextOffset!==null?'Загружаем сохранённые занятия…':'В дневнике нет записей за выбранную дату.')+'</p>';
+  content='<div class="history-top"><h2>История тренировок</h2>'+
+   '<button type="button" class="history-close" data-cmd="close" aria-label="Закрыть историю">Закрыть</button></div>'+
+   '<p class="input-note">'+(date?'Записи за '+prettyDate(date):'Силовые и кардио из твоего дневника')+'.</p>'+
+   '<div class="history-scroll" role="region" aria-label="Список сохранённых занятий" tabindex="0">'+
+     '<div class="cardio-history">'+body+'</div></div>'+
+   (nextOffset!==null?button('Загрузить ещё','history-more'):'');
+ }
  if(modal==='detail')content=`<div class="fq-live-topline"><h2>${esc(detail?.title)}</h2>${button('Закрыть','close')}</div><p>${esc(detail?.date)}</p>${(detail?.items||[]).map(x=>`<div class="fq-live-row"><span>${esc(x.name)}</span><strong>${esc(x.result)}</strong></div>`).join('')}`;
- return `<div class="fq-live-overlay"><div class="fq-live-dialog" role="dialog" aria-modal="true">${content}</div></div>`;
+ return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
