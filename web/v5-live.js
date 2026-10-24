@@ -122,8 +122,8 @@ function onboardingPayload(){
  // A new unreviewed note is conservatively classified as "other" until a
  // professional or a separately authorized + confirmed AI analysis is available.
  const affected=reviewed?d.areas:(description&&!state?.health_description?['other']:Array.isArray(prior.affected)?prior.affected:[]);
- const course=reviewed?(affected.length?(d.course||'stable'):'none'):
-  (affected.includes('other')?'stable':prior.symptom_course||'none');
+ const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
+  (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
