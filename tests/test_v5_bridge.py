@@ -107,7 +107,7 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchone.side_effect = [
-            (0, 0, 0), (0,), None, None, (0,), (date(2026, 10, 23),),
+            (0, 0, 0), (0,), None, None, (0,), None, (date(2026, 10, 23),),
         ]
         conn.execute.return_value.fetchall.return_value = []
         p = {'goal':'general', 'level':'some', 'days':'2', 'equipment':'home',
@@ -131,7 +131,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertNotIn('leg_press', keys)  # Stored home equipment.
         mocks['profile'].assert_called_once_with(777)
         mocks['health_profile'].assert_called_once_with(777)
-        self.assertEqual(mocks['db'].call_count, 3)
+        self.assertEqual(mocks['db'].call_count, 4)
 
     def test_history_page_scoped_to_telegram_owner_and_paginated(self):
         from datetime import datetime, timezone
@@ -306,7 +306,7 @@ class V5StagingContract(unittest.TestCase):
         payload = {
             'answers': {'goal':'general', 'level':'some', 'days':'3', 'weekdays':[0,2,4],
                 'equipment':'home', 'age_group':'adult', 'minutes':'40'},
-            'metrics': {'age':34, 'height_cm':181, 'weight_kg':84.5},
+            'metrics': {'age':34, 'height_cm':181, 'weight_kg':84.5, 'sex':'male'},
             'health_profile': {'affected':['knee'], 'pain_score':2,
                 'symptom_course':'stable', 'danger_signs':False,
                 'activity_cleared':True},
