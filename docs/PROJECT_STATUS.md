@@ -520,3 +520,69 @@ production и единственный Telegram-бот не менялись.
   но не запуск новых платных ресурсов и не продакшен-релиз.
 - Выпуск по-прежнему **NO-GO**. `main`, production база,
   webhook и единственный `@formiqcoachbot` не менялись.
+
+
+## Production backup: инструмент подготовлен, фактического архива нет — 24.10.2026
+
+**Сверка перед работой:** PR №15 был Draft на SHA
+`ecd9a27d4da4e7d347018a85ffda85476d69de25`,
+[CI №40116476510](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40116476510)
+SUCCESS; `main` и production Render Live на
+`11551f4305212236ee312b4e970eeb4f040c76a9`.
+`formiq-db` available, PostgreSQL 18.6, Free,
+`expiresAt=2026-11-19T19:50:15Z`, 25 public tables,
+столбцы V5 миграции `weekdays`/`schedule_state` в production отсутствуют.
+
+**Граница доступных подключений:** Render connector имеет read-only SQL
+и метаданные, но не `pg_dump`, SSH, файл-экспорт или private
+backup storage; Free Render web не поддерживает Shell/one-off jobs,
+Free PostgreSQL не имеет managed backups.
+GitHub Actions может тестировать шифрование и isolated PG18, но
+нет подтверждённых production credentials в защищённых Actions secrets
+и приватного долговременного приёмника архива. Даже шифрованный dump
+с персональными данными **не выкладывать в публичные GitHub artifacts**.
+
+**Реальный production backup: НЕ СОЗДАН. Restore реальной копии: НЕТ.
+Отдельная безопасная миграция на восстановленной production копии: НЕТ.**
+
+Подготовлены **только на ветке PR №15**:
+- `scripts/formiq_pg_backup.py`: приватный локальный `pg_dump` PG18,
+  source Render `formiq_db` only, SSL, read-only транзакция,
+  скрытый ввод External URL, отсутствие URL/пароля в argv/логах,
+  потоковое AES-256-GCM + scrypt шифрование, приватный путь вне GitHub,
+  контроль GCM tag и `pg_restore --list`, SHA256 ciphertext,
+  очистка `.partial` при ошибке.
+  Restore разрешён **только на localhost** в пустую PG18 базу
+  с суффиксом `_restore`, через `pg_restore --single-transaction`
+  без `--clean`, `--create` и `DROP`. Никаких действий
+  по отношению к production через restore.
+- `requirements-backup.txt` — зависимость шифрования отдельно от
+  production requirements.
+- `tests/test_production_backup_local.py` — **offline**
+  security regression: неверные адреса, утечки аргументов,
+  GCM tampering, удаление частичных файлов и запрет remote restore.
+  Ни один тест не подключается к production.
+- `docs/PRODUCTION_BACKUP_RUNBOOK.md` — доверенный локальный
+  исполняющий канал, приватная зашифрованная копия вне машины,
+  real restore, миграция на копии и защита до 19 ноября.
+- CI `.github/workflows/integrations.yml` устанавливает
+  `requirements-backup.txt` лишь для тестового runner;
+  архивы и реальные credentials в CI не передаются.
+  **Последний CI проверять по новому HEAD, без предположения PASS**.
+
+**Минимальное действие владельца, когда готово окружение:** на личном
+компьютере с PostgreSQL client 18 / Python получить External Database
+URL из Render `formiq-db → Connect` **без передачи в чат** и
+запустить подготовленный `python scripts/formiq_pg_backup.py backup`
+со скрытым вводом URL и парольной фразы. Хранить пароль отдельно;
+передать только зашифрованный файл в собственное приватное off-device
+хранилище с MFA; проверить SHA256. Без такого локального
+исполняющего канала подтвердить production backup технически невозможно.
+
+**План хранения:** ежедневно, + непосредственно до миграции;
+как минимум 7 дневных / 4 недельных защищённых копии,
+monthly isolated restore и проверка перед релизом.
+База Free истекает 19.11.2026; требуется отдельное согласование
+устойчивого PostgreSQL plan до этой даты. Без решения срока действия
+дамп не сохранит доступность рабочего бота. **Release NO-GO**;
+Android Telegram WebView на коде PR не проверен.
