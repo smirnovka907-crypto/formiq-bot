@@ -384,12 +384,24 @@ function periodLabel(n){
  return `Период ${n}`;
 }
 
+function periodShortLabel(i){
+ const start=state?.cycle_start;
+ if(!start||!/^\d{4}-\d{2}-\d{2}$/.test(start))return 'Период '+i;
+ const base=new Date(start+'T12:00:00Z');
+ if(Number.isNaN(base.getTime()))return 'Период '+i;
+ const a=new Date(base.getTime()+(i-1)*7*86400000),b=new Date(a.getTime()+6*86400000);
+ const month=d=>new Intl.DateTimeFormat('ru-RU',{month:'long',timeZone:'UTC'}).format(d);
+ return a.getUTCFullYear()===b.getUTCFullYear()&&a.getUTCMonth()===b.getUTCMonth()
+  ?a.getUTCDate()+'–'+b.getUTCDate()+' '+month(a)
+  :a.getUTCDate()+' '+month(a)+' — '+b.getUTCDate()+' '+month(b);
+}
+
 function planPage(){
  const rows=state?.calendar||[];
  const periods=[1,2,3,4].map(i=>{
   const dates=rows.filter(r=>r.week===i);
-  const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-expanded="'+(week===i)+'">'+
-   '<span><span class="week-range">'+esc(periodLabel(i))+'</span><small class="week-meta">'+
+  const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-label="'+esc(periodLabel(i))+'" aria-expanded="'+(week===i)+'">'+
+   '<span><span class="week-range">'+esc(periodShortLabel(i))+'</span><small class="week-meta">'+
    dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
   const entries=dates.map(r=>'<div class="plan-entry"><span><strong>'+esc(r.title)+'</strong><small>'+
     esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
@@ -399,7 +411,7 @@ function planPage(){
  }).join('');
  return h()+'<span class="kicker">Расписание</span><h1 class="title">Твой план</h1>'+
   '<p class="intro">Четыре периода. Выбери период, чтобы увидеть свои занятия.</p>'+
-  '<section class="week-selector" aria-label="План тренировок">'+periods+'</section>'+
+  '<section class="week-selector fq-plan-period-grid" aria-label="План тренировок">'+periods+'</section>'+
   button('Назад к тренировкам','plan-back');
 }
 function weightChart(points,exerciseName){
@@ -565,6 +577,7 @@ function modalHTML(){
  return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
+ document.body?.classList?.remove('cardio-typing','workout-typing');
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
  app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${onboardOpen?onboardForm():view==='home'?training():view==='plan'?planPage():view==='progress'?progress():view==='food'?food():profile()}</main>${ready()&&!onboardOpen&&(view==='profile'||!active())?nav():''}${modalHTML()}`;
@@ -580,10 +593,16 @@ app.addEventListener('input',e=>{
 app.addEventListener('change',onboardChanged);
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
+ if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
+ if(['reps','weight'].includes(e.target.id))document.body?.classList?.add('workout-typing');
  const field=e.target,card=e.target.closest('.surface');
  if(!card)return;
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
  shift();setTimeout(shift,130);setTimeout(shift,320);
+});
+app.addEventListener('focusout',e=>{
+ if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.remove('cardio-typing');
+ if(['reps','weight'].includes(e.target.id))document.body?.classList?.remove('workout-typing');
 });
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);

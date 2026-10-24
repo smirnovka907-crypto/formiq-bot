@@ -356,4 +356,25 @@ input,select,textarea{max-width:100%}
 .history-modal .history-scroll{max-height:min(490px,58dvh);margin:14px 0;overflow-y:auto;overscroll-behavior:contain;border-top:1px solid var(--line)}
 .history-modal .history-scroll .cardio-history{margin-top:0;border-top:0}
 .history-modal .history-scroll .cardio-history-row{min-height:70px}
+
+/* Compact 2x2 weekly period grid follows the approved Aluminium v5 reference. */
+.week-selector.fq-plan-period-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:5px 0 19px}
+.fq-plan-period-grid>.week-group{display:contents}
+.fq-plan-period-grid>.week-group:nth-child(1)>button{grid-area:1 / 1}
+.fq-plan-period-grid>.week-group:nth-child(2)>button{grid-area:1 / 2}
+.fq-plan-period-grid>.week-group:nth-child(3)>button{grid-area:2 / 1}
+.fq-plan-period-grid>.week-group:nth-child(4)>button{grid-area:2 / 2}
+.fq-plan-period-grid>.week-group>button{width:100%;height:63px;min-height:63px;padding:8px 7px;border:1px solid #c0c9c7!important;border-radius:13px!important;
+ background:rgba(255,255,255,.34)!important;text-align:center;justify-content:center;box-shadow:none!important}
+.fq-plan-period-grid>.week-group>button.on{background:linear-gradient(135deg,#d7dedc,#e8eeec)!important;
+ border-color:#8c9b98!important;box-shadow:inset 0 2px 5px #55656026!important}
+.fq-plan-period-grid .week-range{font-size:13px;line-height:1.27;letter-spacing:0;overflow-wrap:anywhere}
+.fq-plan-period-grid .week-meta,.fq-plan-period-grid .week-chevron{display:none}
+.fq-plan-period-grid .week-details{grid-area:3 / 1 / 4 / 3;padding:9px 0 0}
+@media(max-width:375px){.fq-plan-period-grid .week-range{font-size:12px}}
+/* Make actual cardio and strength input behavior match approved keyboard layout. */
+body.cardio-typing .bottom-nav{visibility:hidden}
+body.cardio-typing .view{padding-bottom:calc(100dvh + 220px)}
+body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
