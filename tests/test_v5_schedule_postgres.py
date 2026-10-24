@@ -678,6 +678,20 @@ class SchedulePostgresTests(unittest.TestCase):
             invalid=client.post('/mini/api',json={'action':'period_save',
                     'start':'2026-10-01','end':'2026-09-30'})
             self.assertEqual(invalid.status_code,400)
+            # A mistaken overlapping date must not alter real private history.
+            before=client.post('/mini/api',json={'action':'period_list'}).json['periods']
+            collision=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2026-07-02','end':'2026-07-04'})
+            self.assertEqual(collision.status_code,400)
+            self.assertIn('пересекаются',collision.json['error'])
+            bad_edit=client.post('/mini/api',json={'action':'period_save',
+                    'id':ident,'start':'2026-07-04','end':'2026-07-07'})
+            self.assertEqual(bad_edit.status_code,400)
+            future=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2099-05-10','end':'2099-05-13'})
+            self.assertEqual(future.status_code,400)
+            self.assertEqual(client.post('/mini/api',
+                             json={'action':'period_list'}).json['periods'],before)
         # Different Telegram identity cannot read or update another person's entries.
         self.chat=999
         other=self.body((0,2));other['metrics']['sex']='female'
