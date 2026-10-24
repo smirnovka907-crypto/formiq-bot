@@ -396,6 +396,8 @@ async function run(){
    await monthReply; // Wait for the owner-scoped month query before moving the viewport.
    await page.waitForFunction(()=>!!document.querySelector('.history-cal-inline'));
    await page.evaluate(()=>document.querySelector('.history-cal-inline')?.scrollIntoView({block:'start'}));
+   const calendarTouch=await page.locator('.history-cal-inline .calendar-controls button, .history-cal-inline .history-cal-grid button').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().height));
+   assert.ok(calendarTouch.every(h=>h>=44),'Calendar arrows and every day must be >=44 px');
    await checkLayout('history calendar');
    await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
    await matchedShot('history-calendar',async ref=>{
@@ -406,6 +408,13 @@ async function run(){
    await page.locator('.history-modal .fq-history-action').first().waitFor(); // Snapshot real rows, not loading placeholder.
    await checkLayout('history bottom sheet');
    assert.equal(await page.locator('.history-modal [role="region"]').count(),1,'Scroll within history sheet');
+   const sheet=await page.locator('.history-modal').evaluate(e=>{
+    const r=e.getBoundingClientRect();
+    const btn=e.querySelector('.history-close').getBoundingClientRect();
+    return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,buttonHeight:btn.height};
+   });
+   assert.ok(sheet.left>=-.5&&sheet.right<=size.width+.5&&sheet.top>=0&&sheet.bottom<=size.height+1&&sheet.buttonHeight>=44,
+     'History dialog/close button must fit the viewport and be touchable: '+JSON.stringify(sheet));
    await page.screenshot({path:path.join(OUT,'history-modal-'+size.width+'.png')});
    await matchedShot('history-modal',async ref=>{await ref.locator('.bottom-nav [data-nav="progress"]').click();await ref.locator('[data-act="history-open"]').click();});
    await page.getByRole('button',{name:'Закрыть историю'}).click();
