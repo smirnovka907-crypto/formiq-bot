@@ -135,10 +135,13 @@ async function run(){
    };
    await checkLayout('home '+size.width);
    const exercise=await page.locator('.exercise').first().evaluate(e=>{
-    const a=e.querySelector('.exercise-index'),b=e.querySelector('.exercise-name'),c=e.querySelector('.exercise-reps');
-    return [a,b,c].map(n=>Math.round(n.getBoundingClientRect().top));
+    const a=e.querySelector('.exercise-name'),b=e.querySelector('.exercise-reps');
+    return [a,b].map(n=>Math.round(n.getBoundingClientRect().top));
    });
-   assert.ok(Math.max(...exercise)-Math.min(...exercise)<3,'Exercise number/name/reps must be aligned '+exercise);
+   assert.ok(Math.max(...exercise)-Math.min(...exercise)<3,'Exercise name and target must align '+exercise);
+   assert.equal(await page.locator('.cardio-inline').count(),1,'Cardio must be embedded on the workouts screen');
+   assert.equal(await page.locator('.cardio-inline #cardio-min').count(),1);
+   assert.equal(await page.locator('.cardio-inline #cardio-hr').count(),1);
    await page.screenshot({path:path.join(OUT,'home-'+size.width+'.png')});
    await page.getByRole('button',{name:'Мой план'}).click();
    await page.getByRole('button',{name:/19.10.2026/}).first().click();
@@ -189,13 +192,10 @@ async function run(){
    await page.locator('.fq-live-dialog').getByRole('button',{name:'Завершить',exact:true}).click();
    await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
    await page.locator('.bottom-nav [data-nav="home"]').click();
-   await page.getByRole('button',{name:'Записать кардио',exact:true}).click();
-   // The enclosing field label is part of the button's accessible name in Chromium.
-   const cardioTypes=page.locator('.fq-live-dialog [data-cmd="cardio-types"]');
-   await cardioTypes.waitFor();
+   const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
    assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');
    await cardioTypes.click();
-   await page.getByRole('button',{name:'Велосипед',exact:true}).click();
+   await page.locator('.cardio-inline [data-cmd="cardio-type"][data-type="Велосипед"]').click();
    await page.locator('#cardio-min').fill('60');await page.locator('#cardio-hr').fill('120');
    rejectCardioOnce=true;
    await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
@@ -203,7 +203,8 @@ async function run(){
    assert.equal(await page.locator('#cardio-min').inputValue(),'60','Failed save preserves cardio minutes');
    assert.equal(await page.locator('#cardio-hr').inputValue(),'120','Failed save preserves heart rate');
    await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
-   await page.locator('.fq-live-dialog').waitFor({state:'detached'});
+   assert.equal(await page.locator('.cardio-inline').count(),1,'Cardio editor remains available after save');
+   assert.equal(await page.locator('#cardio-min').inputValue(),'','Saved cardio must clear editor');
    await page.locator('.bottom-nav [data-nav="progress"]').click();
    await page.getByRole('button',{name:/Кардио · Велосипед · 60 мин/}).click();
    await page.getByText('Записано в тестовом дневнике',{exact:true}).waitFor();

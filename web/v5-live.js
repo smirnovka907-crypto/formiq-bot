@@ -226,34 +226,83 @@ async function send(action,more={}){
 }
 function workout(){
  const w=state.workout,c=w.current;
+ const done=Number(w.done||0),total=Number(w.total||0);
+ const summary='<span class="kicker">Силовая тренировка</span><h1 class="title">'+esc(w.title||'Тренировка')+'</h1>'+
+  '<p class="intro workout-intro">Выполнено '+done+' из '+total+' подходов · результат хранится в дневнике.</p>';
  let content='';
- if(!c)content=block(`<h2>Все подходы завершены</h2>${button('Завершить тренировку','finish-confirm',true)}`);
- else if(restUntil>Date.now()&&restFor===nextKey()){
- const seconds=Math.ceil((restUntil-Date.now())/1000);
- content=block(`<span class="eyebrow">ОТДЫХ ПО ПРОГРАММЕ</span><div id="rest-count" class="fq-live-rest-number">${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}</div><p>${esc(c.name)}</p>${button('Пропустить отдых','rest-skip')}`);
- }else content=block(`<span class="eyebrow">ТЕКУЩЕЕ УПРАЖНЕНИЕ</span><h2 class="workout-exercise">${esc(c.name)}</h2><p class="subtitle">Подход ${c.set_no} из ${c.set_count} · цель ${c.low}–${c.high} ${c.unit==='reps'?'повт.':c.unit==='sec'?'сек':'мин'}</p>
- ${c.previous?`<p class="fq-live-muted">Прошлый результат: ${esc(c.previous)}</p>`:''}<p class="fq-live-muted">${esc(c.tip||'')}</p>
- <div class="fq-live-grid">${input(c.unit==='reps'?'Повторения':'Время','reps','number','min="1" max="300" inputmode="numeric"')}${c.unit==='sec'?'<span></span>':input('Вес, кг (необяз.)','weight','number','min="0" max="500" step="0.1" inputmode="decimal"')}</div>
- <p class="input-note">Рекомендованный отдых — ${c.rest_seconds||0} секунд. При боли прекрати движение.</p>${button('Подход выполнен','record',true)}
- <div class="fq-live-actions" style="margin-top:10px">${button('Пропустить упражнение','skip-confirm')}${button('Завершить','finish-confirm')}</div>`);
- return page('Тренировка',`<p class="fq-live-banner">Результаты сохраняются в PostgreSQL через защищённый API FORMIQ.</p>${block(`<span class="eyebrow">${esc(w.title||'Занятие')}</span><h2>${w.done||0} из ${w.total||0} подходов</h2>`)}${content}`);
+ if(!c){
+  content='<section class="surface workout-entry"><span class="eyebrow">ТРЕНИРОВКА ЗАВЕРШЕНА</span>'+
+    '<h2 class="workout-exercise" style="font-size:25px">Все подходы обработаны</h2>'+
+    '<p class="input-note">Сохрани результаты в истории тренировок.</p>'+
+    button('Завершить тренировку','finish-confirm',true)+'</section>';
+ }else if(restUntil>Date.now()&&restFor===nextKey()){
+  const seconds=Math.ceil((restUntil-Date.now())/1000);
+  content='<section class="surface rest-panel"><span class="eyebrow">ОТДЫХ ПО ПРОГРАММЕ · '+
+   esc(c.rest_seconds||0)+' сек</span><div id="rest-count" class="rest-number" role="timer" aria-live="off">'+
+   String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')+
+   '</div><p class="subtitle">Следующий подход: '+esc(c.name)+'</p>'+
+   button('Пропустить отдых','rest-skip')+'</section>';
+ }else{
+  const target=c.low===c.high?String(c.low):String(c.low)+'–'+String(c.high);
+  const unit=c.unit==='reps'?'повторений':c.unit==='sec'?'секунд':'минут';
+  content='<section class="surface workout-entry" id="workout-entry"><span class="eyebrow">ТЕКУЩЕЕ УПРАЖНЕНИЕ</span>'+
+   '<h2 class="workout-exercise">'+esc(c.name)+'</h2>'+
+   '<p class="subtitle">Подход '+esc(c.set_no)+' из '+esc(c.set_count)+' · цель '+esc(target)+' '+unit+'</p>'+
+   (c.previous?'<p class="input-note" style="margin-top:12px">Прошлый результат: '+esc(c.previous)+'</p>':'')+
+   (c.tip?'<p class="input-note" style="margin-top:8px">'+esc(c.tip)+'</p>':'')+
+   '<div class="workout-input-grid">'+
+   (c.unit==='reps'?input('Вес, кг · необязательно','weight','number','min="0" max="500" step="0.1" inputmode="decimal"'):
+     '<div class="metric"><span>Выполняй упражнение по плану</span></div>')+
+   input(c.unit==='reps'?'Повторений':'Время','reps','number','min="1" max="300" inputmode="numeric"')+
+   '</div><p class="input-note" style="margin:13px 0 0">Отдых после подхода: '+esc(c.rest_seconds||0)+' сек. При боли прекрати упражнение.</p>'+
+   '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div></section>';
+ }
+ const footer=c?'<div class="fq-live-actions" style="margin-top:14px">'+
+  button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
+ return h()+summary+content+footer;
 }
 function training(){
  if(!ready()){onboardOpen=true;return onboardForm()}
  if(active())return workout();
- const ix='ABCDEFG'.indexOf(state.next_day||''),items=state.plan?.[ix]||[];
- const next=(state.calendar||[]).find(row=>row.status==='planned'&&row.day===state.next_day);
- const exercises=items.map((e,i)=>'<div class="exercise"><span class="exercise-index">'+
-  String(i+1).padStart(2,'0')+'</span><span class="exercise-name">'+esc(e.name)+'</span>'+
-  '<span class="exercise-reps">'+esc(e.sets)+' × '+esc(e.low)+'–'+esc(e.high)+'</span></div>').join('');
- const trainingCard=block('<span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span>'+
-  '<h2>'+esc(state.plan_names?.[ix]||state.goal||'Тренировка')+'</h2>'+
-  '<p class="subtitle">'+esc(next?.date_ru||'По плану')+'</p><div class="divider"></div>'+
-  exercises+button('Начать тренировку','mood',true));
- const cardioCard=block('<h2 style="font-size:21px;margin:0">Кардио</h2>'+
-  '<p class="subtitle" style="margin:12px 0">Если сделал кардио вне плана, запиши его в дневник.</p>'+
-  button('Записать кардио','cardio-add'));
- return page('Сегодня','<p class="intro">Главное на сегодня — без лишнего.</p>'+trainingCard+button('Мой план','plan-open')+cardioCard);
+ const nextDay=String(state.next_day||''),ix='ABCDEFG'.indexOf(nextDay);
+ const items=ix>=0&&Array.isArray(state.plan?.[ix])?state.plan[ix]:[];
+ const next=(state.calendar||[]).find(row=>row.status==='planned'&&row.day===nextDay);
+ const title=state.plan_names?.[ix]||next?.title||'Тренировка';
+ const timeZone=state?.metrics?.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone;
+ let dayLabel='';
+ try{dayLabel=new Intl.DateTimeFormat('ru-RU',{weekday:'long',day:'numeric',month:'long',timeZone}).format(new Date())}
+ catch(_e){dayLabel=new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'long'}).format(new Date())}
+ const exercises=items.map(e=>'<div class="exercise"><span class="exercise-name">'+esc(e.name)+
+  '</span><span class="exercise-reps">'+esc(e.sets)+' × '+esc(e.low)+(e.high!==e.low?'–'+esc(e.high):'')+'</span></div>').join('');
+ const trainingCard='<section class="surface"><div class="heading-row"><span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span></div>'+
+  '<div class="heading-row"><h2>'+esc(title)+'</h2></div>'+
+  '<p class="subtitle">'+esc(next?.date_ru||'Дата уточняется по плану')+'</p><div class="divider"></div>'+
+  (exercises||'<p class="empty">План упражнений пока не сформирован.</p>')+
+  (items.length?'<div class="workout-cta">'+button('Начать тренировку','mood',true)+'</div>':'')+
+  '</section>';
+ const selected=cardioType||'Выбрать вид кардио';
+ const cardioCard='<section class="surface cardio-inline" id="cardio-entry">'+
+  '<div class="heading-row"><h2 style="margin:0;font-size:21px">Записать кардио</h2></div>'+
+  '<p class="input-note" style="margin:9px 0 15px">Кардио вне плана можно сохранить здесь, без отдельного экрана.</p>'+
+  '<div class="field"><span>Вид кардио</span>'+
+  button(selected,'cardio-types',false,'aria-expanded="'+typesOpen+'" aria-controls="cardio-type-options"')+
+  '</div>'+
+  (typesOpen?'<div class="cardio-choices cardio-inline-choices" id="cardio-type-options">'+
+   ['Ходьба','Бег','Велосипед','Плавание','Другое'].map(type=>
+     button(type,'cardio-type',false,'data-type="'+esc(type)+'" aria-pressed="'+(cardioType===type)+'"')).join('')+
+   '</div>':'')+
+  '<div class="cardio-input-grid">'+
+    input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric" placeholder="60"')+
+    '<label class="field"><span>Средний пульс <small>необязательно</small></span>'+
+    '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
+  '</div><div style="margin-top:15px">'+button('Сохранить кардио','cardio',true)+'</div>'+
+  '<p class="input-note" style="margin-top:11px">Запись сохраняется в PostgreSQL. Garmin не подключён.</p></section>';
+ const plan='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 12px">Тренировочный план</h2>'+
+  '<p class="subtitle" style="margin-bottom:14px">Расписание и упражнения на четыре недели.</p>'+
+  button('Мой план','plan-open')+'</section>';
+ return h()+'<span class="kicker">'+esc(dayLabel)+'</span><h1 class="title">Сегодня</h1>'+
+  '<p class="intro">Главное на сегодня — без лишнего.</p>'+
+  trainingCard+cardioCard+plan;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};

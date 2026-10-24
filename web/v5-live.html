@@ -276,4 +276,24 @@ input,select,textarea{max-width:100%}
 .profile-open{position:static;flex-shrink:0}
 .fq-weekday-options{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
 .fq-weekday-options .choice{min-width:0;min-height:44px;padding:9px 0;font-size:13px}
+
+/* Aluminium v5 approved — real training view, server-backed workout and inline cardio. */
+.exercise{grid-template-columns:minmax(0,1fr) auto}
+.exercise-name{grid-column:auto;overflow-wrap:anywhere}
+.exercise-reps{grid-column:auto}
+.cardio-inline [data-cmd="cardio-types"]{min-height:50px;width:100%;justify-content:center;margin:0}
+.cardio-inline .cardio-choices{display:grid;grid-template-columns:1fr;gap:7px;margin:10px 0 4px}
+.cardio-inline [data-cmd="cardio-type"]{min-height:46px;justify-content:flex-start;margin:0}
+.cardio-inline .cardio-input-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:14px}
+.cardio-inline .field{min-width:0}
+.cardio-inline .cardio-input-grid .field>span{min-height:34px}
+.cardio-inline .cardio-input-grid small{font-size:11px;font-weight:500}
+.cardio-inline{scroll-margin-top:12px}
+.workout-entry{scroll-margin-top:8px}
+.workout-entry .workout-input-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:19px}
+.workout-entry .workout-input-grid .field{min-width:0}
+.workout-entry .workout-input-grid input{font-size:16px;width:100%}
+.rest-panel .rest-number{font-size:64px;font-weight:810;letter-spacing:-2px;text-align:center;margin:20px 0 10px;font-variant-numeric:tabular-nums}
+@media(max-width:375px){.workout-entry .workout-input-grid,.cardio-inline .cardio-input-grid{gap:8px}.cardio-inline .cardio-input-grid .field{font-size:12px}}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
