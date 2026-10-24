@@ -74,7 +74,7 @@ jobs:
           python scripts/validate_android_test_blueprint.py --profile kirill
       - name: Compile bot
         if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
-        run: python -m py_compile main.py welcome_art.py
+        run: python -m py_compile main.py welcome_art.py tests/test_v5_schedule_postgres.py
       - name: Run full static smoke and UX tests (PostgreSQL 18)
         if: ${{ !cancelled() && steps.runtime_dependencies.outcome == 'success' }}
         env:
