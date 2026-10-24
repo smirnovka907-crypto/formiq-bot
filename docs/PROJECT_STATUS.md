@@ -406,3 +406,13 @@ backup/restore и отдельного разрешения нельзя. Тек
 - [GitHub Actions `40112328733`](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40112328733) = **SUCCESS** на точном функциональном SHA `6915bb055cbe5be55645f347dcc94455e976ea4b`: 110 Python-тестов, JavaScript/runtime, API, изолированная PostgreSQL 18, Chromium 360×740 и 393×852. Артефакт `formiq-v5-mobile-layout` ID `12565994867` содержит 14 пар состояний × 2 viewport + оригинальные full-page PNG и `paired-manifest-360/393.json`; эталон и реальная версия не обрезаются и сняты в сопоставимых состояниях. Внешняя галерея собирается только из этих CI-скриншотов.
 - Текущее состояние: все заявленные проверки мобильной геометрии **в тестовом Chromium** зелёные; окончательная пиксельная приёмка владельцем в реальном Telegram WebView Android отсутствует. Отличия демонстрационных значений, обязательных согласий, расположения плана и поддержка Telegram safe area остаются сознательными.
 - **Не изменены:** `main`, production Render, PostgreSQL, пользовательская история, единственный `@formiqcoachbot`, webhook и токены. PR №15 всё ещё Draft. Для выпуска необходимы отдельно проверенные backup/restore production, совместимый rollback, Android и разрешение владельца.
+
+
+## Финальный аудит готовности PR №15 — 24 октября 2026
+
+- Документ: [PR15_RELEASE_READINESS_20261024.md](PR15_RELEASE_READINESS_20261024.md).
+- Проверенный **исходный** HEAD до документирования: `3e024d14136c90ce012c19098a96c3f9348e2c28`; [GitHub Actions №40112661035](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40112661035) **SUCCESS**. Архив `formiq-v5-mobile-layout` №12567277005: 142 файла, пары 360/393 px. Осмотренные состояния полей, пола, подходов/отдыха не имеют блокирующего перекрытия; реальный Android ещё не проверен.
+- `main` и Render production: `11551f4305212236ee312b4e970eeb4f040c76a9` (Live), PR #15 Draft и не опубликован. PostgreSQL production: PG18.6 available/SSL on, новых `weekdays`/`schedule_state` нет — проверено read-only SQL.
+- **Блокеры NO-GO:** нет защищённого production backup и restore его копии; не подготовлен безопасный rollback на старый планировщик после `retired`; нет Telegram Android WebView приёмки PR; нет разрешения владельца.
+- Инфраструктурные риски: Free PG истекает **19.11.2026**, открыт allowlist `0.0.0.0/0`, production Flask development server. Без разрешения ничего не менялось.
+- Историческая инструкция запуска *второго Telegram-бота* помечена устаревшей. Тестирование новой версии через **единственный** `@formiqcoachbot` станет возможно только после отдельного согласованного развёртывания. После этого документа проверить CI по новому HEAD.
