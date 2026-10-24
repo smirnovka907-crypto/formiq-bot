@@ -357,31 +357,58 @@ function periodLabel(n){
 function planPage(){
  const rows=state?.calendar||[];
  const periods=[1,2,3,4].map(i=>{
-  const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-expanded="'+(week===i)+'"><span class="week-range">'+esc(periodLabel(i))+'</span></button>';
-  const dates=rows.filter(r=>r.week===i).map(r=>'<div class="plan-entry"><span><strong>'+esc(r.title)+'</strong><small>'+esc(r.date_ru)+' · '+(r.status==='done'?'Выполнено':'По плану')+'</small></span></div>').join('');
-  return '<div class="week-group">'+toggle+(week===i?'<div class="week-details">'+(dates||'<p class="empty">Нет занятий</p>')+'</div>':'')+'</div>';
- });
- return page('Твой план',button('Назад к тренировкам','plan-back')+'<p class="intro">Нажми на период — занятия раскроются прямо под ним.</p><section class="week-selector">'+periods.join('')+'</section>');
+  const dates=rows.filter(r=>r.week===i);
+  const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-expanded="'+(week===i)+'">'+
+   '<span><span class="week-range">'+esc(periodLabel(i))+'</span><small class="week-meta">'+
+   dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
+  const entries=dates.map(r=>'<div class="plan-entry"><span><strong>'+esc(r.title)+'</strong><small>'+
+    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
+    '</small></span><span class="plan-chevron" aria-hidden="true">›</span></div>').join('');
+  return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
+   (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
+ }).join('');
+ return h()+'<span class="kicker">Расписание</span><h1 class="title">Твой план</h1>'+
+  '<p class="intro">Четыре периода. Выбери период, чтобы увидеть свои занятия.</p>'+
+  '<section class="week-selector" aria-label="План тренировок">'+periods+'</section>'+
+  button('Назад к тренировкам','plan-back');
 }
 function progress(){
- const stats=state.stats||{};
- return page('Прогресс','<p class="intro">Результаты, сохранённые в твоём дневнике.</p>'+
-  block('<h2>Результаты</h2><div class="summary-grid">'+
-   '<div class="metric"><span>Тренировок</span><strong>'+esc(stats.total||0)+'</strong></div>'+
-   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets||0)+'</strong></div></div>')+
-  block('<h2>Garmin Connect</h2><p class="fq-live-muted">Синхронизация пока не подключена. Данные Garmin не подменяются расчётными.</p>')+
-  history());
+ const stats=state.stats||{},weight=state.metrics?.weight_kg;
+ const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
+ const shown=valid?esc(Number(weight).toLocaleString('ru-RU',{maximumFractionDigits:2}))+' кг':'—';
+ const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>История подходов</small></div>'+
+  '<div class="chart-block fq-empty-chart" role="status">График появится, когда станут доступны сохранённые веса по датам. Никаких демонстрационных чисел.</div>'+
+  '<p class="chart-leg">Подходы и веса сохраняются в PostgreSQL.</p></section>';
+ const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Последнее измерение</small></div>'+
+  '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong><span>'+
+  (valid?'Последнее сохранённое значение · динамика пока недоступна':'Нет измерений')+'</span></div></section>';
+ const summary='<section class="surface"><h2 style="font-size:20px;margin:0 0 14px">Результаты</h2>'+
+  '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
+  '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
+ return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+
+  '<section class="surface soft"><div class="heading-row"><h2 style="font-size:20px;margin:0">Garmin Connect</h2><span class="badge">Не подключён</span></div>'+
+  '<p class="input-note" style="margin-top:13px">Показатели устройств не подменяются расчётами.</p></section>'+history();
 }
 function food(){
- return page('Питание',
- block(`<h2>Анализ питания</h2><p class="fq-live-muted">Добавь скриншот JPG/PNG или CSV-отчёт из FatSecret. ИИ покажет показатели только если они присутствуют в отчёте.</p>
- <label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>
- <label class="field" style="display:flex;align-items:flex-start;gap:12px;margin-top:12px"><input id="nutrition-consent" type="checkbox" style="width:22px;min-width:22px;height:22px;margin:0"><span>Разрешаю отправить выбранный отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>
- <p class="input-note">Отдельное согласие на использование ИИ требуется в профиле. Автоматическая синхронизация FatSecret пока не подключена.</p>
- <p id="nutrition-error" class="fq-live-error" role="alert"></p>
- ${button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')}
- ${nutritionAnswer?`<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">${esc(nutritionAnswer)}</p>`:''}`)
- +block('<h2>FatSecret</h2><p>Автоматическая синхронизация пока не подключена. Когда она появится, здесь будут персональные калории и БЖУ.</p><div class="metric"><span>Калории · белки · жиры · углеводы</span><strong>— / — / — / —</strong><span>Нет синхронизированных данных</span></div>'));
+ const today='<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПИТАНИЕ</span>'+
+  '<div class="nutrition-today" style="margin-top:15px"><div class="nutrition-ring"><b>—</b><span>ккал</span></div>'+
+  '<div><h3>Нет данных</h3><p>Автоматический дневник пока не подключён. Калории и норму не придумываем.</p></div></div></section>';
+ const macros='<section class="surface"><h2 style="font-size:21px;margin:0 0 18px">Белки, жиры, углеводы</h2>'+
+  ['Белки','Жиры','Углеводы'].map(label=>'<div class="macro"><strong>'+label+'</strong><span>— г · нет данных</span></div>').join('')+'</section>';
+ const meals='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 10px">Приёмы пищи</h2>'+
+  '<p class="empty">Записей пока нет. FatSecret не синхронизирован.</p></section>';
+ const report='<section class="surface"><h2 style="font-size:21px;margin:0 0 10px">Анализ отчёта</h2>'+
+  '<p class="input-note" style="margin:0 0 17px">Выбери реальный CSV или изображение FatSecret. Покажем только то, что есть в отчёте.</p>'+
+  '<label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
+  '<label class="checkbox-line" style="margin-top:15px"><input id="nutrition-consent" type="checkbox">'+
+  '<span>Разрешаю отправить отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>'+
+  '<p class="input-note" style="margin:11px 0">Отдельное согласие на ИИ можно изменить в анкете.</p>'+
+  '<p id="nutrition-error" class="fq-live-error" role="alert"></p>'+
+  button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
+  (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
+ return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
+  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report;
 }
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];

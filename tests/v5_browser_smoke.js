@@ -150,10 +150,13 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'plan-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="progress"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Прогресс');
+   assert.equal(await page.locator('.fq-empty-chart').count(),1,'No fabricated working-weight graph');
    await checkLayout('progress');
    await page.screenshot({path:path.join(OUT,'progress-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="food"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Питание');
+   assert.equal(await page.locator('.nutrition-ring b').textContent(),'—','Missing FatSecret cannot show fake calories');
+   assert.equal(await page.locator('.macro').count(),3,'Three macro rows');
    await checkLayout('food');
    await page.screenshot({path:path.join(OUT,'food-'+size.width+'.png')});
    assert.equal(await page.locator('.profile-open').evaluate(el=>getComputedStyle(el).position),'static',
