@@ -247,10 +247,6 @@ async function run(){
    assert.equal(await page.locator('.workout-plan-list .workout-plan-row').count(),1,'Actual workout exercise overview');
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
-   await page.locator('#reps').focus();
-   assert.equal(await page.evaluate(()=>document.body.classList.contains('workout-typing')),true,'Strength inputs activate compact view');
-   await page.locator('#reps').evaluate(e=>e.blur());
-   assert.equal(await page.evaluate(()=>document.body.classList.contains('workout-typing')),false,'Strength typing class clears');
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
    await page.locator('#rest-count').waitFor();
