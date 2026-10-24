@@ -507,6 +507,9 @@ class SchedulePostgresTests(unittest.TestCase):
         before_history = self.snapshot_history()
         with self.connect() as conn:
             report = inspect_legacy_rollback(conn)
+            with self.assertRaises(psycopg.errors.ReadOnlySqlTransaction):
+                conn.execute('UPDATE profiles SET days=days')
+            conn.rollback()
         self.assertEqual(report['status'], 'blocked')
         self.assertTrue(report['weekday_choices_present'])
         self.assertTrue(report['schedule_states_present'])
