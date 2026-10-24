@@ -607,3 +607,103 @@ Android Telegram WebView на коде PR не проверен.
 - **Последний HEAD CI после этого документа перепроверить отдельно**.
   Ни один production backup/restore не сделан, нет private offsite
   архива, миграция production не выполнялась. **NO-GO**.
+
+
+## FORMIQ Aluminium v5 — проверка после фактической публикации (25 октября 2026)
+
+**Проверено напрямую по GitHub / Render, не по устаревшим планам:**
+
+- **Опубликовано:** [merge-коммит `6b41d48f1a062ad317bac0533fceeb1af8224416`](https://github.com/smirnovka907-crypto/formiq-bot/commit/6b41d48f1a062ad317bac0533fceeb1af8224416);
+  `main` совпадает с ним, PR #15 **merged** 2026-10-24 21:47:38 UTC
+  (2026-10-25 по Helsinki). Единственный `@formiqcoachbot`.
+- **CI исходного production SHA:** [GitHub Actions #40135780693](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40135780693),
+  **SUCCESS**, head SHA в точности `6b41d48f1a062ad317bac0533fceeb1af8224416`.
+  Job `integration-tests` прошёл: JS, Python, API, isolated PostgreSQL 18,
+  mobile Chromium screenshots/E2E (360×740 и 393×852). Это проверка CI,
+  **не** реальная Telegram Android WebView приёмка.
+- **Render:** production service `formiq-bot`, workspace
+  `tea-dbbqvfm1egvs73b0sokg`, deploy
+  `dep-dbeiev8473hc7396248g` **LIVE**, SHA точно
+  `6b41d48f1a062ad317bac0533fceeb1af8224416`;
+  завершён 2026-10-24 21:48:44 UTC, без повторной публикации.
+  В логах `FORMIQ 38.3.3 ready; Yandex configured=True`, HTTP 200 для
+  `/mini`, `/mini/v5-live.js`, авторизованные `POST /mini/api` 200,
+  `POST /telegram-webhook` 200. Error-level logs после публикации
+  в проверенном временном окне отсутствуют.
+- **Наблюдаемые замечания логов:** 2 ответа `POST /mini/api` с HTTP 400
+  (2026-10-24 22:01:54–55 UTC), **неизвестно** какая именно валидация;
+  без пользовательских запросов нельзя считать их доказанной ошибкой.
+  Один `Slow Mini App action=state duration_ms=1704`.
+  Два `GET /favicon.ico` с 404 — не блокирует Mini App.
+  Flask выдал предупреждение о **development server** в production:
+  технический эксплуатационный риск, требует отдельно проработанного
+  совместимого WSGI-старта; никаких настроек Render здесь не меняли.
+- **PostgreSQL read-only проверка:** `formiq-db` available, PostgreSQL
+  18.6, 25 публичных таблиц. Новые `profiles.weekdays` и
+  `scheduled_sessions.schedule_state` **присутствуют** (V5 additive
+  init_db миграция отражена в структуре). В проверенный момент:
+  `profiles=1`, `profile_metrics=1`, `user_agreements=1`,
+  `training_cycles=1`, `scheduled_sessions=16`,
+  `workouts=1`, `workout_items=3`, `workout_sets=6`,
+  `cardio_sessions=0`. Профиль, цикл и тренировка имеют дату
+  сохранения **до** release — свидетельство сохранения хотя бы части
+  прежних записей. Подходов с фактическими весами и завершёнными
+  значениями пока 0; старое расписание не помечено `retired`/`manual`,
+  `weekdays` в существующем профиле NULL (ещё не выбраны).
+  Проверены **0 orphan records** по связям
+  `workout_items → workouts`, `workout_sets → workout_items`,
+  `scheduled_sessions → training_cycles`.
+  **Абсолютное отсутствие потерь установить нельзя**: отсутствует
+  проверенный pre-release row-count snapshot / резервная копия.
+- **Публичные HTTP и авторизация:** новый безопасный probe
+  `scripts/postrelease_public_smoke.py` в отдельной ветке
+  `audit/postrelease-v5-20261025`, не использует cookies, Telegram
+  initData, production secrets или идентификаторы пользователей:
+  `GET /`, `/mini`, `/mini/v5`, `/mini/legacy`,
+  `/mini/v5-live.js` — **200**, все Mini App entrypoints имеют
+  одинаковый HTML Aluminium v5, с формой `onboardForm()`,
+  без перехода в 38.2; безавторизационный
+  `POST /mini/api` с `action=state` — **401**.
+  [GitHub Actions #40138304670](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40138304670)
+  **SUCCESS** на sha `b979266e32384bc63dd2658c4f44a0f1c366c3e2`.
+  Это только public-safe проверка, она не подтверждает рабочие
+  пользовательские POST-сценарии Telegram.
+- **Backup/restore:** владелец разрешил релиз без backup и принял риск
+  тестовых данных. На момент аудита **нет подтверждения production
+  backup / восстановления**. Render PostgreSQL Free истекает
+  **2026-11-19T19:50:15Z**: срок всё ещё актуален.
+
+### Android — ожидает проверки владельцем в единственном боте
+
+1. Открыть `@formiqcoachbot` → **FormIQ**, проверить, что запускается
+   полноэкранная Aluminium v5, без 38.2 и без второго бота.
+2. Если анкета уже заполнена: проверить старые значения и историю,
+   открыть редактирование внутри Mini App. При чистом запуске пройти
+   единственную анкету; пульс в покое не спрашивать.
+3. Сохранить профиль, выбрать **конкретные дни недели** (и нужное
+   количество занятий), закрыть и снова открыть приложение; проверить,
+   что выбор сохранился и нет перехода в старую анкету.
+4. В разделе **Тренировки → План** проверить четырёхнедельный календарь,
+   тренировки на выбранные дни и перенос будущего занятия; прошлые
+   завершённые/ручные слоты не должны исчезать.
+5. Начать тренировку, ввести повторы/вес, записать подход, проверить
+   отдых, пропуск, завершение. Проверить сохранение веса и истории
+   после повторного открытия, не удалять старые данные.
+6. Записать кардио, проверить отображение истории, прогресса и реальных
+   данных (нулевые состояния допустимы); «Питание» не должно показывать
+   вымышленные калории/FatSecret/Garmin.
+7. Проверить ровно **три** нижние вкладки
+   «Тренировки», «Питание», «Прогресс»; профиль внутри Mini App,
+   скролл, клавиатуру, нижний safe area и Android Back.
+8. Если появляется ошибка при сохранении, отметить точное действие
+   и сообщаемый UI-текст (не передавать initData, токены или личные
+   медицинские данные); особенно проверить два замеченных
+   HTTP 400. Внешний вид утверждает владелец на реальном Android.
+
+**Статусы:** release — **ОПУБЛИКОВАН** и Live;
+backend/CI — **ПРОВЕРЕНЫ**; реальный Android —
+**НЕ ПРОВЕРЕН**; production backup —
+**НЕ ПОДТВЕРЖДЁН**. Повторный deploy / миграция / rollback
+не выполнялись. Текущий отчёт готовится в отдельной ветке и
+черновом PR, не включает никаких изменений `main` до отдельного
+разрешения владельца.
