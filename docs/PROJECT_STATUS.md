@@ -449,3 +449,54 @@ PostgreSQL 18.6 и фактическое восстановление вне pr
 имеет `expiresAt=19.11.2026`. Никаких дополнительных Telegram-ботов,
 платных ресурсов, webhook/token edits, изменений `main`, production
 Render/PostgreSQL или пользовательской истории.
+
+
+## Production backup / restore и совместимый аварийный режим — 24.10.2026
+
+**Разрешено владельцем:** выполнить защищённый production backup/restore и
+подготовить выпуск. **Не разрешены:** merge `main`, production-миграция,
+Render deploy, изменения webhook/токена, платные ресурсы или удаление данных.
+
+**Проверено заново:**
+- PR #15 был Draft на `527d9b4345cbf336555b6c48f1bb20a627a24c4f`;
+  [Actions #40114704529](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40114704529)
+  **SUCCESS** на том же SHA. `main` и Render Live продолжают исполнять
+  `11551f4305212236ee312b4e970eeb4f040c76a9`, авторазвёртывание
+  из `main`. PostgreSQL 18.6 / Free / available, истекает
+  **2026-11-19 19:50:15 UTC**, 25 public tables; `profiles.weekdays` и
+  `scheduled_sessions.schedule_state` в production отсутствуют.
+- **Production backup НЕ СОЗДАН; restore НЕ ПРОВЕРЕН.**
+  Доступный Render connector даёт только read-only SQL по базе и метаданные
+  сервиса; у него нет shell/SSH/pg_dump, прямого encrypted export,
+  безопасного объекта хранения и операции pg_restore. Выполнять
+  `SELECT *` через чат/инструмент ради «резервной копии» опасно и
+  неполноценно; запрещено сохранять данные в GitHub Actions/artifacts.
+  Нужен согласованный **безопасный исполняющий канал** для `pg_dump`
+  PostgreSQL 18, внешнее зашифрованное хранилище и отдельная изолированная
+  база/локальный PG18 для реального restore. Даже проверка схемы
+  в production **не является** резервной копией.
+- Подготовлен обратимый **V5-compatible emergency fallback** в `main.py`:
+  при операторском `FORMIQ_SCHEDULE_SAFE_MODE=1` отключает все
+  автоматические изменения расписания и создание новых циклов,
+  отклоняет редактирование анкеты и ручной перенос; чтение сохранённых
+  слотов исключает `retired`, `manual` сохраняется, прежняя история
+  тренировок, подходы, веса, кардио не удаляются.
+  Активация флага в Render может вызывать redeploy; **не активировался**.
+  Это совместимая аварийная заморозка, а не возврат к
+  несовместимому `main` и не полная репетиция rollback на реальных данных.
+- Добавлен реальный PostgreSQL 18 regression test
+  `test_emergency_v5_fallback_freezes_schedule_but_keeps_history`:
+  покрыты выбор дней, сохранение manual/retired, блокирование записи
+  расписания, отказ от создания цикла после истечения 28 дней,
+  неизменность истории и идентификаторов.
+  [Actions #40116070978](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40116070978)
+  **SUCCESS** на SHA `af56cf0c35162685a3c4072284312389787c5ada`.
+- Описание аварийного режима в `docs/RELEASE_ROLLBACK.md`.
+  После документальных коммитов необходим повторный CI **точного HEAD**.
+
+**GO / NO-GO: NO-GO** — до фактически созданной и проверенной защищённой
+копии production; успешного восстановления в изолированной PG18;
+репетиции миграции на восстановленной копии; финального принятия rollback
+и реального Telegram Android WebView на `@formiqcoachbot`
+после отдельного разрешения на выпуск. Пользовательская история в
+production и единственный Telegram-бот не менялись.
