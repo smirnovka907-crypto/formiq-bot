@@ -416,3 +416,36 @@ backup/restore и отдельного разрешения нельзя. Тек
 - **Блокеры NO-GO:** нет защищённого production backup и restore его копии; не подготовлен безопасный rollback на старый планировщик после `retired`; нет Telegram Android WebView приёмки PR; нет разрешения владельца.
 - Инфраструктурные риски: Free PG истекает **19.11.2026**, открыт allowlist `0.0.0.0/0`, production Flask development server. Без разрешения ничего не менялось.
 - Историческая инструкция запуска *второго Telegram-бота* помечена устаревшей. Тестирование новой версии через **единственный** `@formiqcoachbot` станет возможно только после отдельного согласованного развёртывания. После этого документа проверить CI по новому HEAD.
+
+
+## Следующий этап аудита — защита от небезопасного rollback (24.10.2026)
+
+- Подтверждено повторно: `main` и Render production Live SHA
+  `11551f4305212236ee312b4e970eeb4f040c76a9`; PR №15 остаётся Draft,
+  без объединения. Проверен [Actions №40113807091](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40113807091):
+  **SUCCESS** на предыдущем документальном SHA `534421d`.
+- Добавлен `scripts/rollback_readonly_gate.py`: fail-closed проверка
+  **только изолированной копии** PostgreSQL, без DML/DDL. Известные
+  `weekdays` или `schedule_state` блокируют возврат к старому планировщику;
+  нецелая схема/ошибка соединения также блокируют. Личные строки и секреты
+  в результат не выводятся; production DSN специально отклоняется.
+- Добавлены `tests/test_rollback_gate.py` и интеграционный тест в
+  `tests/test_v5_schedule_postgres.py` для настоящего PostgreSQL 18
+  (изолированная схема, сравнение сохранности истории, проверка отклонения
+  SQL записи read-only транзакцией).
+- [Actions №40114458062](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40114458062):
+  **SUCCESS** для `4a6cc3363cfb1a3ebce34a19ddb88e1341ca103f`,
+  включая первичные unit/PG18 regression-проверки. Последующие коммиты
+  усилили проверку недопущения утечки DSN и явного запрета записи:
+  **их CI нужно отдельно сверить по последнему SHA**.
+- Описан порядок запуска, интерпретация статусов и ограничения в
+  `docs/RELEASE_ROLLBACK.md`. `candidate` — только отсутствие обнаруженных
+  маркеров новой схемы, **не** разрешение на production downgrade.
+
+**Остающиеся release blockers:** защищённая копия действующей production
+PostgreSQL 18.6 и фактическое восстановление вне production не выполнены;
+полноценный совместимый rollback/hotfix не создан; Telegram Android WebView
+на коде PR и визуальное одобрение владельца отсутствуют. База Render Free
+имеет `expiresAt=19.11.2026`. Никаких дополнительных Telegram-ботов,
+платных ресурсов, webhook/token edits, изменений `main`, production
+Render/PostgreSQL или пользовательской истории.
