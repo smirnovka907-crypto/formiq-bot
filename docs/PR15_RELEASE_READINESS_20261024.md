@@ -125,3 +125,38 @@ and a separately approved deploy. Chromium tests are preparatory only.
 **Decision remains NO-GO until the real encrypted production backup,
 real restore rehearsal, exact migration test, verified safe fallback and
 separate owner release approval are independently recorded.**
+
+
+## 7. Backup execution channel prepared, production still not backed up (2026-10-24)
+
+A **local**, encryption-first PostgreSQL 18 tool was added to PR #15:
+`scripts/formiq_pg_backup.py`, `requirements-backup.txt`,
+`tests/test_production_backup_local.py`, `.gitignore` safeguards, and
+`docs/PRODUCTION_BACKUP_RUNBOOK.md`. It uses the owner's locally entered
+Render External URL without printing/passing credentials in process argv,
+a read-only `pg_dump`, streaming AES-256-GCM with scrypt and an off-repository
+private output directory. Verification authenticates GCM and parses archive TOC
+without persisting an unencrypted dump. Restore is only allowed on a
+pre-existing empty PostgreSQL 18 `localhost` database ending `_restore`,
+with no `--clean`/`--create`. Offline security tests are synthetic only.
+
+**Important:** no production backup was executed using connected ChatGPT tools:
+Render Free has no managed backups or Shell/SSH, Render connection here is
+read-only SQL, and no private object store / production pg_dump execution
+channel is connected. Real archive checksum, upload verification, restored
+user rows and restore duration are **unknown**. The owner must run this
+prepared local script on a trusted PC, obtaining the Render External URL
+*inside their own Render account*, without sharing credentials in chat.
+Encrypted file goes to owner-controlled private off-device storage with MFA,
+password phrase retained separately. See runbook for exact steps. Never
+store customer data in GitHub artifacts or PR attachments.
+
+Free Render PostgreSQL `expiresAt=2026-11-19T19:50:15Z`. Requires
+separate owner decision to upgrade the existing database or otherwise
+establish durable storage before expiration. Daily encrypted snapshots and
+periodic isolated restore checks are recommended; copies alone do not keep
+the Telegram service online after Free expiry.
+
+**NO-GO** until first real encrypted dump, copied private storage,
+isolated restore, migration + fallback rehearsals on real data, exact CI
+and separately approved production deployment and Android acceptance.
