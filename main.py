@@ -3080,9 +3080,9 @@ def mini_progress_series(chat):
               AND s.state = 'done' AND s.unit = 'reps'
               AND s.weight_kg > 0 AND s.weight_kg <= 500
               AND i.exercise_key IS NOT NULL
-            GROUP BY i.exercise_key, (w.started_at AT TIME ZONE %s)::date
+            GROUP BY i.exercise_key, 2
             ORDER BY local_day DESC, i.exercise_key ASC LIMIT 240
-        """, (zone, chat, zone)).fetchall()
+        """, (zone, chat)).fetchall()
     series = {}
     for key, local_day, weight in rows:
         if key not in EX:
