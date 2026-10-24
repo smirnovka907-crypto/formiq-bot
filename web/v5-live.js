@@ -594,7 +594,6 @@ app.addEventListener('change',onboardChanged);
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
- if(['reps','weight'].includes(e.target.id))document.body?.classList?.add('workout-typing');
  const field=e.target,card=e.target.closest('.surface');
  if(!card)return;
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
@@ -602,7 +601,6 @@ app.addEventListener('focusin',e=>{
 });
 app.addEventListener('focusout',e=>{
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.remove('cardio-typing');
- if(['reps','weight'].includes(e.target.id))document.body?.classList?.remove('workout-typing');
 });
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
