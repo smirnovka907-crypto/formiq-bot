@@ -594,5 +594,112 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(self.snapshot_history(), original_history)
 
 
+    def test_new_onboarding_uses_weekday_count_and_postgres_roundtrip(self):
+        """Actual authenticated API (identity mocked) -> database -> state/reopen."""
+        data=self.body((0, 2, 4), days=2)
+        data['answers']['minutes']='120'
+        data['answers']['equipment']='home'
+        data['metrics']['sex']='female'
+        data['equipment_description']='гантели, коврик, резинки'
+        data['health_description']=''
+        data['health_storage_consent']=False
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            response=self.m.APP.test_client().post('/mini/api',
+                          json={'action':'onboarding',**data})
+        self.assertEqual(response.status_code,200,response.get_json())
+        state=response.get_json()['data']
+        self.assertEqual(state['metrics']['sex'],'female')
+        self.assertEqual(state['profile_raw']['days'],'3')
+        self.assertEqual(state['profile_raw']['weekdays'],[0,2,4])
+        self.assertEqual(state['profile_raw']['minutes'],'120')
+        self.assertEqual(state['profile_raw']['equipment'],'homegear')
+        self.assertEqual(state['equipment_description'],'гантели, коврик, резинки')
+        self.assertTrue(state['agreed'])
+        self.assertIsNone(state['error'])
+        self.assertEqual(len(state['calendar']),12)
+        # Reopen without creating a duplicate cycle or losing the profile.
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            reloaded=self.m.APP.test_client().post('/mini/api',json={'action':'state'})
+        self.assertEqual(reloaded.status_code,200,reloaded.get_json())
+        self.assertEqual(reloaded.json['data']['profile_raw']['weekdays'],[0,2,4])
+        self.assertEqual(reloaded.json['data']['metrics']['sex'],'female')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM training_cycles WHERE chat_id=%s',
+                                          (self.chat,)).fetchone()[0],1)
+
+    def test_health_description_needs_explicit_storage_consent(self):
+        data=self.body((0,2))
+        data['health_description']='Есть травма колена, пока не знаю нагрузку'
+        data['health_storage_consent']=False
+        with self.assertRaisesRegex(ValueError,'Подтверди сохранение'):
+            self.m.save_onboarding(self.chat,data)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM profiles').fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT count(*) FROM profile_health_notes').fetchone()[0],0)
+        data['health_storage_consent']=True
+        self.m.save_onboarding(self.chat,data)
+        self.assertEqual(self.m.mini_state(self.chat)['health_description'],data['health_description'])
+        data['health_description']=''
+        self.m.save_onboarding(self.chat,data)
+        # Editing an unrelated answer must not erase stored sensitive notes.
+        self.assertEqual(self.m.mini_state(self.chat)['health_description'],
+                         'Есть травма колена, пока не знаю нагрузку')
+
+    def test_private_female_period_dates_prediction_and_edit(self):
+        data=self.body((0,2))
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        client=self.m.APP.test_client()
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).json['periods'],[])
+            saved=[]
+            for day in ('2026-07-01','2026-07-29','2026-08-26'):
+                start=date.fromisoformat(day)
+                end=(start+timedelta(days=4)).isoformat()
+                response=client.post('/mini/api',
+                          json={'action':'period_save','start':day,'end':end})
+                self.assertEqual(response.status_code,200,response.get_json())
+                saved.append(response.json['periods'][0])
+            self.assertEqual(response.json['next_period']['date'],'2026-09-23')
+            ident=saved[1]['id']
+            revised=client.post('/mini/api',json={'action':'period_save','id':ident,
+                           'start':'2026-07-30','end':'2026-08-02'})
+            self.assertEqual(revised.status_code,200,revised.get_json())
+            self.assertTrue(any(x['start']=='2026-07-30' for x in revised.json['periods']))
+            invalid=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2026-10-01','end':'2026-09-30'})
+            self.assertEqual(invalid.status_code,400)
+        # Different Telegram identity cannot read or update another person's entries.
+        self.chat=999
+        other=self.body((0,2));other['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,other)
+        with patch.object(self.m,'mini_auth',return_value=999):
+            listing=client.post('/mini/api',json={'action':'period_list'})
+            self.assertEqual(listing.status_code,200)
+            self.assertEqual(listing.json['periods'],[])
+            stolen=client.post('/mini/api',json={'action':'period_save',
+                'id':ident,'start':'2026-07-01','end':'2026-07-05'})
+            self.assertEqual(stolen.status_code,400)
+        with patch.object(self.m,'mini_auth',return_value=None):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,401)
+
+    def test_v6_onboarding_frontend_contract(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        js=(root/'web'/'v5-live.js').read_text('utf-8')
+        html=(root/'web'/'v5-live.html').read_text('utf-8')
+        self.assertIn("String(count),weekdays:",js)
+        self.assertIn("onboardChoices.minutes",js)
+        self.assertIn("function femaleCalendar()",js)
+        self.assertIn("period_list",js)
+        self.assertIn("body?.classList?.toggle('theme-female'",js)
+        self.assertIn("data-onboard-pick",js)
+        self.assertNotIn("onboardChoice('days'",js)
+        self.assertNotIn('type="range" min="20" max="90"',js)
+        self.assertNotIn("['Не указывать','']",js)
+        self.assertNotIn("/mini/legacy'"",js)
+        self.assertIn("body.theme-female .app",html)
+
+
 if __name__ == '__main__':
     unittest.main()
