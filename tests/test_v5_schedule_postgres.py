@@ -268,6 +268,45 @@ class SchedulePostgresTests(unittest.TestCase):
                 conn.execute("""UPDATE scheduled_sessions SET schedule_state='deleted'
                     WHERE chat_id=%s""", (self.chat,))
 
+    def test_progress_weights_are_real_bounded_owner_scoped_and_read_only(self):
+        # All inserts are in this UUID test schema, never in production.
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO profile_metrics(chat_id,timezone)
+                VALUES(%s,'Europe/Helsinki')""", (self.chat,))
+            for chat, stamp, kg, status, set_state in (
+                    (self.chat, '2026-10-19T10:00:00Z', 55, 'finished', 'done'),
+                    (self.chat, '2026-10-19T12:00:00Z', 60, 'finished', 'done'),
+                    (self.chat, '2026-10-21T10:00:00Z', 65, 'finished', 'done'),
+                    (self.chat, '2026-10-22T10:00:00Z', 80, 'active', 'done'),
+                    (self.chat, '2026-10-23T10:00:00Z', 95, 'finished', 'pending'),
+                    (self.chat + 1, '2026-10-24T10:00:00Z', 500, 'finished', 'done')):
+                wid = conn.execute("""INSERT INTO workouts(chat_id,plan_day,status,
+                    started_at,finished_at) VALUES(%s,'A',%s,%s,%s) RETURNING id""",
+                    (chat,status,stamp,stamp if status == 'finished' else None)).fetchone()[0]
+                conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,
+                    target,exercise_key) VALUES(%s,0,'Жим ногами','3 x 10','leg_press')""",
+                    (wid,))
+                conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                    target_min,target_max,unit,actual_value,state,weight_kg)
+                    VALUES(%s,0,1,10,12,'reps',12,%s,%s)""",
+                    (wid,set_state,kg))
+        before = self.snapshot_history()
+        client = self.m.APP.test_client()
+        with patch.object(self.m, 'mini_auth', return_value=self.chat):
+            result = client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(result.status_code,200,result.get_json())
+        self.assertEqual(result.get_json()['exercises'][0]['points'],[
+            {'date':'2026-10-19','weight':60.0},
+            {'date':'2026-10-21','weight':65.0},
+        ])
+        self.assertEqual(self.snapshot_history(),before)
+        with patch.object(self.m,'mini_auth',return_value=self.chat+1):
+            other=client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(other.get_json()['exercises'][0]['points'][0]['weight'],500.0)
+        with patch.object(self.m,'mini_auth',return_value=None):
+            denied=client.post('/mini/api',json={'action':'progress_series'})
+        self.assertEqual(denied.status_code,401)
+
     def test_invalid_weekdays_do_not_write_profile_or_calendar(self):
         _, cycle, _ = self.save()
         before = self.rows(cycle)

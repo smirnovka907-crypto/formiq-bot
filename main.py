@@ -3061,6 +3061,45 @@ def history_day_bounds(local_date, zone):
     return a.astimezone(timezone.utc), b.astimezone(timezone.utc)
 
 
+def mini_progress_series(chat):
+    """Read real finished-set weights for the authenticated user, never demo data.
+
+    Bounded by date and exercise; no database writes or schema migration.
+    A point is the greatest saved weight for an exercise on the user's local day.
+    """
+    zone = history_local_zone(chat).key
+    with db() as conn:
+        rows = conn.execute("""
+            SELECT i.exercise_key, (w.started_at AT TIME ZONE %s)::date AS local_day,
+                   MAX(s.weight_kg) AS best_kg
+            FROM workouts w
+            JOIN workout_items i ON i.workout_id = w.id
+            JOIN workout_sets s ON s.workout_id = i.workout_id
+                AND s.position = i.position
+            WHERE w.chat_id = %s AND w.status = 'finished'
+              AND s.state = 'done' AND s.unit = 'reps'
+              AND s.weight_kg > 0 AND s.weight_kg <= 500
+              AND i.exercise_key IS NOT NULL
+            GROUP BY i.exercise_key, (w.started_at AT TIME ZONE %s)::date
+            ORDER BY local_day DESC, i.exercise_key ASC LIMIT 240
+        """, (zone, chat, zone)).fetchall()
+    series = {}
+    for key, local_day, weight in rows:
+        if key not in EX:
+            continue
+        if key not in series:
+            if len(series) >= 4:
+                continue
+            series[key] = []
+        if len(series[key]) < 8:
+            series[key].append({'date': local_day.isoformat(), 'weight': float(weight)})
+    return {'exercises': [
+        {'key': key, 'name': visible_exercise_name(EX[key][0]),
+         'points': list(reversed(points))}
+        for key, points in series.items()
+    ]}
+
+
 def mini_history_detail(chat,wid):
     zone = history_local_zone(chat)
     if wid < 0:
@@ -3968,6 +4007,8 @@ def mini_api():
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':
             payload = {'ok': True, **mini_history_month(chat, data)}
+        elif action == 'progress_series':
+            payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'equipment_analyze':
