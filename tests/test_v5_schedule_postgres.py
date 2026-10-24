@@ -367,7 +367,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(snapshot(), before)
         self.assertEqual(self.m.get_cycle(self.chat, self.m.profile(self.chat))[0], cycle)
 
-    def test_concurrent_save_and_manual_reschedule_keep_manual_date(self):
+    def test_concurrent_save_and_manual_reschedule_preserves_one_safe_state(self):
         stale_profile, cycle, _ = self.save()
         Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
         sid = next(r[0] for r in self.rows(cycle) if (r[1], r[2]) == (3, 'C'))
@@ -377,14 +377,28 @@ class SchedulePostgresTests(unittest.TestCase):
             self.m.save_onboarding(self.chat, self.body((1, 3)))
         def move_manually():
             barrier.wait(timeout=10)
-            self.m.mini_aux(self.chat, 'reschedule', {'id': sid, 'date': '2026-11-05'})
+            try:
+                self.m.mini_aux(self.chat, 'reschedule',
+                                {'id': sid, 'date': '2026-11-05'})
+            except ValueError as exc:
+                if str(exc) != 'Дата не найдена':
+                    raise
+                return 'retired_before_move'
+            return 'manual_before_retirement'
         with ThreadPoolExecutor(max_workers=2) as pool:
-            tasks = [pool.submit(save_schedule), pool.submit(move_manually)]
-            for task in tasks:
-                task.result(timeout=30)
+            scheduled = pool.submit(save_schedule)
+            moved_task = pool.submit(move_manually)
+            scheduled.result(timeout=30)
+            result = moved_task.result(timeout=30)
         moved = next(r for r in self.rows(cycle) if r[0] == sid)
-        self.assertEqual(moved[3:], (date(2026, 11, 5), 'manual'))
-        # A previously loaded dashboard must not regenerate the old preferences.
+        if result == 'manual_before_retirement':
+            # A manual move wins the lock and cannot be retired afterwards.
+            self.assertEqual(moved[3:], (date(2026, 11, 5), 'manual'))
+        else:
+            # A new preference wins first; stale client must never revive retired.
+            self.assertEqual(result, 'retired_before_move')
+            self.assertEqual(moved[4], 'retired')
+        # A previously loaded dashboard must never regenerate old preferences.
         self.assertEqual(self.m.get_cycle(self.chat, stale_profile)[0], cycle)
         before = self.rows(cycle)
         self.m.scheduled_calendar(self.chat, stale_profile, cycle)
