@@ -245,11 +245,21 @@ async function run(){
    await page.locator('#reps').waitFor({state:'visible'});
    await page.locator('.fq-live-overlay').waitFor({state:'detached'});
    assert.equal(await page.locator('.workout-plan-list .workout-plan-row').count(),1,'Actual workout exercise overview');
+   assert.deepEqual(await page.locator('.bottom-nav .nav-item').allTextContents(),
+    ['Тренировки','Питание','Прогресс'],'Approved three tabs remain visible during active sets');
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
+   // The server-backed workout and unsaved input drafts survive temporary tab navigation.
+   await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
+   await page.locator('.bottom-nav [data-nav="food"]').click();
+   await page.locator('.bottom-nav [data-nav="home"]').click();
+   await page.locator('#reps').waitFor({state:'visible'});
+   assert.equal(await page.locator('#reps').inputValue(),'12','Draft repetitions survive tab switch');
+   assert.equal(await page.locator('#weight').inputValue(),'60','Draft load survives tab switch');
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
    await page.locator('#rest-count').waitFor();
+   assert.equal(await page.locator('.bottom-nav .nav-item').count(),3,'Three tabs during rest');
    await checkLayout('workout rest timer');
    await page.screenshot({path:path.join(OUT,'workout-rest-'+size.width+'.png')});
    await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();

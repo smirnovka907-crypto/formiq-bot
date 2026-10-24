@@ -157,6 +157,7 @@ async function run(){
  assert.match(app.root.innerHTML,/Самочувствие перед началом/);
  await app.click({cmd:'start-normal'});
  assert.match(app.root.innerHTML,/Жим ногами/);
+ assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Active sets retain three approved bottom tabs');
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
  app.input('reps','12');app.input('weight','60');
  await app.click({nav:'profile'});
@@ -171,6 +172,7 @@ async function run(){
  await app.click({cmd:'record'});
  assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60&&x.expected_workout===9&&x.expected_position===0&&x.expected_set===1));
  assert.match(app.root.innerHTML,/rest-count/);
+ assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Rest screen keeps approved nav');
  assert.ok(shared.storage.has('formiq_v5_rest_countdown'),'rest countdown stored temporarily');
  const resumed=createClient(true,shared);
  await settle();
