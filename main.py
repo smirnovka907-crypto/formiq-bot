@@ -71,7 +71,7 @@ QUESTIONS = [
     ('days', 'Сколько тренировок в неделю?', [(f'{n} дн.', str(n)) for n in range(1, 8)]),
     ('equipment', 'Где тренируешься?', [('Дома', 'home'), ('Дома с инвентарём', 'homegear'), ('В зале', 'gym')]),
     ('age_group', 'Тебе исполнилось 18 лет?', [('Да, 18+', 'adult'), ('Нет', 'minor')]),
-    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in range(20, 121, 10)]),
+    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in sorted(set(range(20, 121, 10)) | {45})]),
     ('clearance', 'Есть боль, травмы или ограничения?', [('Нет известных ограничений', 'none'), ('Да', 'yes'), ('Не уверен(а)', 'unsure')])
 ]
 FIELDS = [q[0] for q in QUESTIONS]
@@ -3438,6 +3438,55 @@ def mini_current(conn, chat):
     return w[0] if w else None
 
 
+def period_history(chat):
+    """Only the authenticated owner's optional private period data."""
+    if metrics(chat).get('sex')!='female':
+        raise ValueError('Женский календарь доступен только в женском профиле')
+    with db() as conn:
+        rows=conn.execute("""SELECT id,starts_on,ends_on FROM menstrual_periods
+            WHERE chat_id=%s ORDER BY starts_on DESC LIMIT 60""",(chat,)).fetchall()
+    periods=[{'id':rid,'start':start.isoformat(),'end':end.isoformat()}
+             for rid,start,end in rows]
+    # No predictions without three historical starts and plausible intervals.
+    prediction=None
+    if len(rows)>=3:
+        last=sorted((row[1] for row in rows))[-3:]
+        gaps=[(last[index+1]-last[index]).days for index in range(2)]
+        if all(21<=gap<=35 for gap in gaps) and abs(gaps[1]-gaps[0])<=7:
+            next_on=last[-1]+timedelta(days=round(sum(gaps)/2))
+            prediction={'date':next_on.isoformat(),
+                        'note':'Только приблизительная оценка по истории. Не медицинский прогноз.'}
+    return {'periods':periods,'next_period':prediction}
+
+
+def period_save(chat,body):
+    """Insert or correct only this user's period dates; no external AI."""
+    if metrics(chat).get('sex')!='female':
+        raise ValueError('В женском календаре нужно выбрать Женский пол')
+    first,last=body.get('start'),body.get('end')
+    if not isinstance(first,str) or not isinstance(last,str) or len(first)!=10 or len(last)!=10:
+        raise ValueError('Выбери даты начала и окончания')
+    try:
+        start,end=date.fromisoformat(first),date.fromisoformat(last)
+    except ValueError:
+        raise ValueError('Проверь даты календаря') from None
+    if end<start or (end-start).days>14:
+        raise ValueError('Дата окончания должна быть не раньше начала, период до 15 дней')
+    record=body.get('id')
+    if record is not None and (type(record) is not int or record<1):
+        raise ValueError('Неверная запись календаря')
+    with db() as conn:
+        if record is None:
+            conn.execute("""INSERT INTO menstrual_periods(chat_id,starts_on,ends_on)
+                VALUES(%s,%s,%s)""",(chat,start,end))
+        else:
+            result=conn.execute("""UPDATE menstrual_periods SET starts_on=%s,ends_on=%s
+                WHERE chat_id=%s AND id=%s""",(start,end,chat,record))
+            if result.rowcount!=1:
+                raise ValueError('Запись календаря не найдена')
+    return period_history(chat)
+
+
 def mini_aux(chat,action,body):
     if action=='feedback':
         if not has_agreement(chat):raise ValueError('Сначала прими условия использования')
@@ -4086,6 +4135,10 @@ def mini_api():
     try:
         if action == 'state':
             payload = {'ok':True, 'data':mini_state(chat)}
+        elif action == 'period_list':
+            payload = {'ok':True, **period_history(chat)}
+        elif action == 'period_save':
+            payload = {'ok':True, **period_save(chat,data)}
         elif action == 'history_page':
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':
