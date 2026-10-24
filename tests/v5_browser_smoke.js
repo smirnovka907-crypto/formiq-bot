@@ -6,6 +6,7 @@ const path=require('node:path');
 const http=require('node:http');
 const {chromium}=require('playwright-core');
 const APP_HTML=fs.readFileSync(path.join(__dirname,'../web/v5-live.html'),'utf8');
+const APPROVED_HTML=fs.readFileSync(path.join(__dirname,'../docs/design/FORMIQ_Aluminium_v5_approved.html'),'utf8');
 const APP_JS=fs.readFileSync(path.join(__dirname,'../web/v5-live.js'),'utf8');
 const OUT=path.join(__dirname,'../browser-shots');
 
@@ -34,6 +35,9 @@ async function run(){
  let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false;
  const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
+  if(req.method==='GET'&&req.url==='/approved-reference'){
+   res.setHeader('Content-Type','text/html; charset=utf-8');res.end(APPROVED_HTML);return;
+  }
   if(req.method==='GET'&&(req.url==='/'||req.url==='/mini/v5-live')){
    res.setHeader('Content-Type','text/html; charset=utf-8');res.end(APP_HTML);return;
   }
@@ -117,6 +121,17 @@ async function run(){
      safeAreaInset:{top:24,bottom:8},contentSafeAreaInset:{top:0,bottom:0}
     }};
    });
+   // Store approved prototype beside the real-app screenshots for human review.
+   // This reference route is test-only and never deployed to the Mini App.
+   const reference=await context.newPage();
+   await reference.goto(base+'/approved-reference',{waitUntil:'load'});
+   await reference.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
+   await reference.screenshot({path:path.join(OUT,'approved-home-'+size.width+'.png')});
+   for(const [nav,name] of [['food','food'],['progress','progress']]){
+    await reference.locator('.bottom-nav [data-nav="'+nav+'"]').click();
+    await reference.screenshot({path:path.join(OUT,'approved-'+name+'-'+size.width+'.png')});
+   }
+   await reference.close();
    await page.goto(base+'/',{waitUntil:'load'});
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
    const nav=page.locator('.bottom-nav .nav-item');
