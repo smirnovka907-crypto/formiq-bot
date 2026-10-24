@@ -207,9 +207,13 @@ async function run(){
    await page.locator('.bottom-nav [data-nav="home"]').click();
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
+   await checkLayout('active workout');
+   await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
    await page.locator('#rest-count').waitFor();
+   await checkLayout('workout rest timer');
+   await page.screenshot({path:path.join(OUT,'workout-rest-'+size.width+'.png')});
    await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();
    assert.equal(await page.locator('#reps').inputValue(),'','Saved repetitions are cleared for the next set');
    await page.getByRole('button',{name:'Завершить',exact:true}).click();
@@ -217,6 +221,12 @@ async function run(){
    await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
    await page.locator('.fq-progress-chart').waitFor();
    assert.match(await page.locator('.fq-progress-chart').getAttribute('aria-label'),/60 кг/);
+   await checkLayout('real saved weight chart');
+   await page.screenshot({path:path.join(OUT,'progress-real-weights-'+size.width+'.png')});
+   await page.getByRole('button',{name:'По датам'}).click();
+   await page.locator('.history-cal-inline').scrollIntoViewIfNeeded();
+   await checkLayout('history calendar');
+   await page.screenshot({path:path.join(OUT,'history-calendar-'+size.width+'.png')});
    await page.locator('.bottom-nav [data-nav="home"]').click();
    const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
    assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');
