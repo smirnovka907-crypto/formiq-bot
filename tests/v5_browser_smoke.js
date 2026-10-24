@@ -165,6 +165,31 @@ async function run(){
    assert.equal(await nav.count(),3,'Exactly three bottom buttons');
    assert.deepEqual(await nav.allTextContents(),['Тренировки','Питание','Прогресс']);
    assert.equal(await page.evaluate(()=>window.__fqFullscreen),1,'Telegram fullscreen requested');
+   const checkInputAlignment=async()=>{
+    const boxes=await page.locator('.workout-entry .workout-input-grid .field').evaluateAll(els=>els.map(el=>{
+     const label=el.querySelector('span').getBoundingClientRect(),input=el.querySelector('input').getBoundingClientRect();
+     return {labelTop:label.top,labelBottom:label.bottom,inputTop:input.top,inputBottom:input.bottom,inputHeight:input.height,inputWidth:input.width};
+    }));
+    assert.equal(boxes.length,2,'Strength entry has two aligned fields');
+    assert.ok(Math.abs(boxes[0].inputTop-boxes[1].inputTop)<1,'Input tops aligned: '+JSON.stringify(boxes));
+    assert.ok(Math.abs(boxes[0].inputHeight-boxes[1].inputHeight)<1,'Input heights match');
+    assert.ok(Math.abs(boxes[0].labelTop-boxes[1].labelTop)<1,'Labels share top baseline');
+    assert.ok(Math.abs(boxes[0].labelBottom-boxes[1].labelBottom)<1,'Labels share bottom baseline');
+    assert.ok(boxes.every(b=>b.inputWidth>90&&b.inputHeight>=49),'Inputs remain touch-accessible');
+   };
+   const checkFooterReachable=async(names)=>{
+    await page.evaluate(()=>window.scrollTo(0,document.documentElement.scrollHeight));
+    const positions=await page.evaluate(names=>{
+     const nav=document.querySelector('.bottom-nav'),top=nav?.getBoundingClientRect().top??innerHeight;
+     return {navTop:top,buttons:names.map(cmd=>{
+      const el=document.querySelector('[data-cmd="'+cmd+'"]'),box=el?.getBoundingClientRect();
+      return {cmd,exists:!!el,bottom:box?.bottom??Infinity,top:box?.top??Infinity,
+       width:box?.width??0,height:box?.height??0};
+     })};
+    },names);
+    assert.ok(positions.buttons.every(b=>b.exists&&b.height>=44&&b.width>=104&&b.bottom<=positions.navTop-3),
+      'Action buttons must remain above the fixed nav at bottom scroll: '+JSON.stringify(positions));
+   };
    const checkLayout=async(location)=>{
     const result=await page.evaluate(()=>{
      const width=document.documentElement.clientWidth;
@@ -230,6 +255,11 @@ async function run(){
    assert.ok(weekdayRects.every(r=>Math.abs(r.top-weekdayRects[0].top)<1),'Weekdays fit into one row');
    await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').click();
    assert.equal(await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').getAttribute('aria-pressed'),'true');
+   const sexButtons=await page.locator('.fq-sex-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
+   assert.equal(sexButtons.length,3,'Optional unspecified sex stays available');
+   assert.ok(sexButtons.every(b=>Math.abs(b.top-sexButtons[0].top)<1),'All sex choices align in a single row');
+   assert.ok(sexButtons.every(b=>Math.abs(b.width-sexButtons[0].width)<2&&Math.abs(b.height-sexButtons[0].height)<2),
+     'All sex choices have symmetric geometry');
    await checkLayout('profile questionnaire');
    await page.evaluate(()=>window.scrollTo(0,0));
    await page.screenshot({path:path.join(OUT,'profile-'+size.width+'.png')});
@@ -247,6 +277,8 @@ async function run(){
    assert.equal(await page.locator('.workout-plan-list .workout-plan-row').count(),1,'Actual workout exercise overview');
    assert.deepEqual(await page.locator('.bottom-nav .nav-item').allTextContents(),
     ['Тренировки','Питание','Прогресс'],'Approved three tabs remain visible during active sets');
+   await checkInputAlignment();
+   await checkFooterReachable(['skip-confirm','finish-confirm']);
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    // The server-backed workout and unsaved input drafts survive temporary tab navigation.
@@ -260,6 +292,7 @@ async function run(){
    await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
    await page.locator('#rest-count').waitFor();
    assert.equal(await page.locator('.bottom-nav .nav-item').count(),3,'Three tabs during rest');
+   await checkFooterReachable(['rest-skip','skip-confirm','finish-confirm']);
    await checkLayout('workout rest timer');
    await page.screenshot({path:path.join(OUT,'workout-rest-'+size.width+'.png')});
    await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();

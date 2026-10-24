@@ -377,4 +377,21 @@ body.cardio-typing .bottom-nav{visibility:hidden}
 /* Do not change document height on focus: a mobile button tap must not shift. */
 body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
 
+
+/* Mobile geometry: symmetric inline inputs, aligned labels, stable touch targets. */
+.workout-entry .workout-input-grid{align-items:end}
+.workout-entry .workout-input-grid .field{display:grid;grid-template-rows:minmax(35px,auto) 51px;align-content:end;gap:8px;min-width:0}
+.workout-entry .workout-input-grid .field>span{min-height:35px;display:flex;align-items:flex-end;line-height:1.25;overflow-wrap:anywhere}
+.workout-entry .workout-input-grid .field>input{box-sizing:border-box;height:51px;min-height:51px;max-height:51px;width:100%;margin:0;border-radius:12px;min-width:0}
+.fq-onboard-choice .option-grid.fq-sex-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.fq-sex-options>.choice{min-width:0;width:100%;min-height:58px;display:flex;align-items:center;justify-content:center;padding:7px 5px;text-align:center;font-size:13px;line-height:1.2;overflow-wrap:normal}
+@media(max-width:375px){.fq-sex-options>.choice{font-size:12px;padding:6px 3px}}
+/* Real primary and secondary workout controls stay above the fixed tab bar. */
+.fq-live-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+.fq-live-actions .button-subtle,.fq-live-actions .button-main{min-width:0;width:100%;min-height:51px;white-space:normal;text-align:center;line-height:1.25;padding:10px 8px}
+.workout-entry .workout-cta .button-main{width:100%;min-height:51px;line-height:1.25;text-align:center}
+.rest-panel .button-subtle{min-height:51px}
+.view .fq-live-actions:last-child{margin-bottom:16px}
+.fq-live-dialog{max-width:min(460px,100%);overscroll-behavior:contain}
+@media(max-width:375px){.fq-live-actions{gap:7px}.fq-live-actions .button-subtle{font-size:13px}}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>

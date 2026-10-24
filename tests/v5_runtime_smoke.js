@@ -321,6 +321,7 @@ async function run(){
   assert.match(ux.root.innerHTML,/data-onboard-pick="goal"/,'Goal uses approved choice buttons');
    assert.match(ux.root.innerHTML,/data-onboard-pick="equipment"/,'Equipment uses approved choice buttons');
    assert.match(ux.root.innerHTML,/id="onboard-duration"/,'Duration uses approved slider');
+   assert.match(ux.root.innerHTML,/class="option-grid fq-sex-options"/,'Optional unspecified sex stays in symmetric three-choice group');
    assert.doesNotMatch(ux.root.innerHTML,/href="\/mini\/legacy"/,'Editing stays in v5');
    await ux.click({cmd:'onboard-save'});
    assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
