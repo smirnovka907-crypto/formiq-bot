@@ -407,4 +407,14 @@ body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-are
 .history-cal-inline .history-cal-grid button{min-height:44px}
 .history-modal .history-close{min-height:44px}
 .fq-live-dialog .fq-live-topline .button-subtle{min-height:44px}
+/* On compact 360×740 phones, keep optional set actions above the fixed tabs
+   at initial scroll, without reducing input height or changing other screens. */
+@media(max-width:375px) and (max-height:780px){
+ .workout-intro{margin-bottom:12px}
+ .workout-entry{padding:14px 16px}
+ .workout-entry .workout-exercise{margin:6px 0}
+ .workout-entry .workout-input-grid{margin-top:11px}
+ .workout-entry .workout-cta{margin-top:10px}
+ .workout-entry + .workout-secondary-actions{margin-top:9px!important}
+}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>

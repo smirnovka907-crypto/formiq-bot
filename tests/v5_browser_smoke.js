@@ -360,6 +360,16 @@ async function run(){
    assert.deepEqual(await page.locator('.bottom-nav .nav-item').allTextContents(),
     ['Тренировки','Питание','Прогресс'],'Approved three tabs remain visible during active sets');
    await checkInputAlignment();
+   await page.evaluate(()=>window.scrollTo(0,0));
+   const initialSetControls=await page.evaluate(()=>{
+    const nav=document.querySelector('.bottom-nav').getBoundingClientRect();
+    return {navTop:nav.top,actions:['record','skip-confirm','finish-confirm'].map(cmd=>{
+      const box=document.querySelector('[data-cmd="'+cmd+'"]').getBoundingClientRect();
+      return {cmd,top:box.top,bottom:box.bottom};
+    })};
+   });
+   assert.ok(initialSetControls.actions.every(b=>b.top>=0&&b.bottom<=initialSetControls.navTop-3),
+     'Active set buttons must be visible above bottom nav on first view: '+JSON.stringify(initialSetControls));
    assert.equal(await page.locator('.workout-secondary-actions').count(),1,
      'Active actions grouped before the exercise summary');
    await checkFooterReachable(['skip-confirm','finish-confirm']);
