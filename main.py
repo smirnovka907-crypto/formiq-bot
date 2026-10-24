@@ -342,6 +342,10 @@ def db():
 
 def init_db():
     with db() as c:
+        # Keep startup schema preparation fail-fast if another transaction
+        # holds DDL locks. These settings last only for this transaction.
+        c.execute("SET LOCAL lock_timeout = '5s'")
+        c.execute("SET LOCAL statement_timeout = '30s'")
         c.execute('''CREATE TABLE IF NOT EXISTS profile_equipment (
             chat_id BIGINT PRIMARY KEY, description TEXT NOT NULL DEFAULT '',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())''')

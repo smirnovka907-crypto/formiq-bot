@@ -16,6 +16,21 @@ class WeekdayScheduleTests(unittest.TestCase):
         }):
             cls.m = importlib.import_module('main')
 
+    def test_startup_schema_changes_fail_fast_when_locked(self):
+        db_connection = MagicMock()
+        db_connection.__enter__.return_value = db_connection
+        with patch.object(self.m, 'db', return_value=db_connection):
+            self.m.init_db()
+        sql_statements = [call.args[0] for call in db_connection.execute.call_args_list]
+        self.assertEqual(sql_statements[:2], [
+            "SET LOCAL lock_timeout = '5s'",
+            "SET LOCAL statement_timeout = '30s'",
+        ])
+        self.assertTrue(any('ADD COLUMN IF NOT EXISTS weekdays' in statement
+                            for statement in sql_statements))
+        self.assertTrue(any('ADD COLUMN IF NOT EXISTS schedule_state' in statement
+                            for statement in sql_statements))
+
     def test_all_frequencies_match_selected_civil_weekdays(self):
         start = date(2026,10,23)  # Friday; includes the DST transition weekend.
         for count in range(1,8):
