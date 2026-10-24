@@ -636,6 +636,34 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM training_cycles WHERE chat_id=%s',
                                           (self.chat,)).fetchone()[0],1)
 
+    def test_weekday_selection_ignores_invalid_or_missing_legacy_frequency(self):
+        """Only selected weekdays are authoritative in V6, even if days is stale."""
+        client=self.m.APP.test_client()
+        saved=self.body((0,2,4))
+        saved['answers']['days']='99'  # old UI value must NOT block V6.
+        saved['metrics']['sex']='female'
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            first=client.post('/mini/api',json={'action':'onboarding',**saved})
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.json['data']['profile_raw']['days'],'3')
+        self.assertEqual(first.json['data']['profile_raw']['weekdays'],[0,2,4])
+        first_cycle=self.m.get_cycle(self.chat,self.m.profile(self.chat))[0]
+        # V6 is allowed to omit days entirely; the server derives it.
+        saved['answers'].pop('days')
+        saved['answers']['weekdays']=[1,3]
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            second=client.post('/mini/api',json={'action':'onboarding',**saved})
+        self.assertEqual(second.status_code,200,second.get_json())
+        self.assertEqual(second.json['data']['profile_raw']['days'],'2')
+        self.assertEqual(second.json['data']['profile_raw']['weekdays'],[1,3])
+        self.assertEqual(self.m.get_cycle(self.chat,self.m.profile(self.chat))[0],first_cycle)
+        bad=self.body((0,2))
+        bad['answers']['weekdays']=[1,1]
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            duplicate=client.post('/mini/api',json={'action':'onboarding',**bad})
+        self.assertEqual(duplicate.status_code,400)
+        self.assertEqual(self.m.profile(self.chat)['weekdays'],[1,3])
+
     def test_health_description_needs_explicit_storage_consent(self):
         data=self.body((0,2))
         data['health_description']='Есть травма колена, пока не знаю нагрузку'
