@@ -526,5 +526,53 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(damaged['reason'], 'partial_v5_schema')
 
 
+    def test_emergency_v5_fallback_freezes_schedule_but_keeps_history(self):
+        """A V5-compatible fallback must never recreate retired slots or cycles."""
+        profile, cycle, _ = self.save((0, 2, 4))
+        by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
+        manual = by_key[(3, 'C')]
+        self.m.mini_aux(self.chat, 'reschedule', {
+            'id': manual[0], 'date': '2026-11-06'})
+        profile, current_cycle, _ = self.save((1, 3))
+        self.assertEqual(current_cycle, cycle)
+        original_slots = self.rows(cycle)
+        self.assertTrue(any(row[4] == 'retired' for row in original_slots))
+        self.assertTrue(any(row[4] == 'manual' for row in original_slots))
+        original_history = self.snapshot_history()
+        with self.connect() as conn:
+            before_cycles = conn.execute(
+                'SELECT id,starts_on,profile_fingerprint FROM training_cycles '
+                'WHERE chat_id=%s ORDER BY id', (self.chat,)).fetchall()
+        with patch.dict(os.environ, {'FORMIQ_SCHEDULE_SAFE_MODE': '1'}):
+            self.assertTrue(self.m.schedule_emergency_readonly())
+            # A user's existing plan is browsable, including manual slots.
+            self.assertEqual(self.m.get_cycle(self.chat, profile)[0], cycle)
+            shown = self.m.scheduled_calendar(self.chat, profile, cycle)
+            self.assertTrue(any(x['id'] == manual[0] for x in shown))
+            retired_ids = {row[0] for row in original_slots if row[4] == 'retired'}
+            self.assertFalse(any(x['id'] in retired_ids for x in shown))
+            self.m.next_day_in_readonly(self.chat, cycle, 2)
+            self.assertEqual(self.rows(cycle), original_slots)
+            # Profile edit and manual reschedule are blocked without side effects.
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.save_onboarding(self.chat, self.body((0, 2, 4)))
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.mini_aux(self.chat, 'reschedule', {
+                    'id': manual[0], 'date': '2026-11-05'})
+            self.assertEqual(self.m.profile(self.chat), profile)
+            self.assertEqual(self.rows(cycle), original_slots)
+            # Even after 28 days: do not mint a fresh cycle while frozen.
+            Clock.instant = datetime(2026, 12, 2, 12, tzinfo=timezone.utc)
+            with self.assertRaisesRegex(ValueError, 'временно защищено'):
+                self.m.get_cycle(self.chat, profile)
+        with self.connect() as conn:
+            after_cycles = conn.execute(
+                'SELECT id,starts_on,profile_fingerprint FROM training_cycles '
+                'WHERE chat_id=%s ORDER BY id', (self.chat,)).fetchall()
+        self.assertEqual(before_cycles, after_cycles)
+        self.assertEqual(self.rows(cycle), original_slots)
+        self.assertEqual(self.snapshot_history(), original_history)
+
+
 if __name__ == '__main__':
     unittest.main()
