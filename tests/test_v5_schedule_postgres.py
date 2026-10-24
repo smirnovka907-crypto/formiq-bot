@@ -283,6 +283,57 @@ class SchedulePostgresTests(unittest.TestCase):
         self.m.scheduled_calendar(self.chat, stale_profile, cycle)
         self.assertEqual(self.rows(cycle), before)
 
+    def test_isolated_pg_dump_restore_preserves_history_and_retired_slots(self):
+        # Real backup/restore rehearsal in the disposable *_test database only.
+        # setUpClass validates the loopback host and database name; each test
+        # owns a unique temporary schema, never the production schema.
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        for program in ('pg_dump', 'pg_restore'):
+            self.assertIsNotNone(shutil.which(program),
+                                 program + ' is required for an actual restore test')
+        _, cycle, _ = self.save(tuple(range(7)))
+        Clock.instant = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
+        _, unchanged_cycle, _ = self.save((0,))
+        self.assertEqual(cycle, unchanged_cycle)
+        with self.connect() as conn:
+            wid = conn.execute("""INSERT INTO workouts(chat_id,cycle_id,week_no,
+                plan_day,status,started_at,finished_at,source)
+                VALUES(%s,%s,1,'A','finished',%s,%s,'template') RETURNING id""",
+                (self.chat, cycle, Clock.instant, Clock.instant)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,
+                exercise_key) VALUES(%s,0,'Жим ногами','3 × 10','leg_press')""", (wid,))
+            conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                target_min,target_max,unit,actual_value,state,weight_kg,completed_at)
+                VALUES(%s,0,1,10,12,'reps',12,'done',60,%s)""",
+                (wid, Clock.instant))
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment)
+                VALUES(%s,45,120,'cycling')""", (self.chat,))
+        before_history = self.snapshot_history()
+        before_profile = self.m.profile(self.chat)
+        before_calendar = self.rows(cycle)
+        self.assertTrue(any(row[4] == 'retired' for row in before_calendar))
+        self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
+        with tempfile.TemporaryDirectory(prefix='formiq-restore-') as directory:
+            archive = str(Path(directory) / 'sample.backup')
+            subprocess.run(['pg_dump', '--dbname', TEST_URL, '--format=custom',
+                            '--schema', self.schema, '--file', archive],
+                           check=True, capture_output=True, timeout=60)
+            self.assertGreater(Path(archive).stat().st_size, 0)
+            # Destructive part is confined to this disposable test schema.
+            with psycopg.connect(TEST_URL) as conn:
+                conn.execute(sql.SQL('DROP SCHEMA {} CASCADE')
+                             .format(sql.Identifier(self.schema)))
+            subprocess.run(['pg_restore', '--dbname', TEST_URL, '--no-owner',
+                            '--no-acl', '--exit-on-error', archive],
+                           check=True, capture_output=True, timeout=60)
+        self.assertEqual(self.snapshot_history(), before_history)
+        self.assertEqual(self.rows(cycle), before_calendar)
+        self.assertEqual(self.m.profile(self.chat), before_profile)
+
     def test_timezone_change_keeps_cycle_manual_move_and_protected_boundary(self):
         Clock.instant = datetime(2026, 10, 19, 23, 30, tzinfo=timezone.utc)
         _, cycle, _ = self.save((1, 3), zone='Asia/Tokyo')  # Locally October 20.
