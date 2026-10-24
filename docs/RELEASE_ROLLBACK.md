@@ -84,3 +84,42 @@ Telegram WebView код PR до отдельного развёртывания 
 Тест архивирует schema через pg_dump, удаляет **только её**, восстанавливает
 через pg_restore, сравнивает реальные rows. Это моделирует операцию
 восстановления, но **не заменяет backup/restore production-копии**.
+
+
+## Read-only gate to prevent an unsafe code-only downgrade (PR #15)
+
+The checked-in `scripts/rollback_readonly_gate.py` inspects an **isolated restored
+PostgreSQL copy**, not the production database. The CLI accepts only a distinct
+`FORMIQ_RESTORE_TEST_DATABASE_URL` whose database name ends in `_test` or
+`_restore`; it rejects `DATABASE_URL`. All queries use read-only
+transactions with lock and statement timeouts, and output only boolean markers
+and a status: no chat IDs, personal rows, or credentials.
+
+Example **only after an isolated restore exists**:
+
+```sh
+# Supply the secret through a secure shell environment, not through GitHub.
+python scripts/rollback_readonly_gate.py
+```
+
+- `blocked / v5_schedule_data_present`: some saved weekday selection or
+  non-null `schedule_state` exists. **Never** deploy legacy main's scheduler.
+- `blocked / partial_v5_schema` or missing tables: refuse rollback.
+- `candidate / no_v5_schedule_markers`: neither V5 marker was found in this
+  snapshot. **Not** sufficient to certify downgrade, because migration history,
+  concurrent writes, actual restore fidelity and old-code behavior must still
+  be verified separately.
+- `legacy_schema`: the V5 columns are absent on this snapshot. This describes
+  an old schema, not a green light for a production deployment.
+- Any connection/query error exits non-zero, without printing driver messages
+  which might contain passwords/DSNs.
+
+A red gate means **stop**. A green process exit only means the narrow marker
+check completed, **not** that rollback is safe or the release is approved.
+Production needs an independently tested compatible fallback/hotfix that
+preserves retired/manual slots, weekday choices and workouts; no such hotfix has
+been shipped. Prefer a controlled forward fix on the V5 data model.
+
+Automated tests exercise the gate on the disposable PG18 `*_test` schema and
+verify that SQL write attempts fail inside the audit transaction. This is not a
+production backup or a dry run on real customer data.
