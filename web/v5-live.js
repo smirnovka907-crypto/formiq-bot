@@ -21,7 +21,7 @@ let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
-let foodDaily=null,foodDailyBusy=false,foodDailyError='';
+let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -643,9 +643,25 @@ async function loadFoodHistory(){
  foodLoading=true;draw();
  try{
   const result=await request('food_history',{date:requested});
-  if(requested===foodDate){foodHistory=result;foodNotice='';catalogRecent=Object.create(null)}
+  if(requested===foodDate){foodHistory=result;foodNotice='';catalogRecent=Object.create(null);void requestFoodDaily()}
  }catch(ex){if(requested===foodDate)foodNotice=ex.message||'Не удалось загрузить записи'}
  finally{foodLoading=false;draw()}
+}
+async function requestFoodDaily(){
+ const expected=foodDate,seq=++foodDailySeq;
+ const hasLinked=(foodHistory?.meals||[]).some(m=>(m.items||[]).some(x=>x.nutrition_source==='fatsecret'));
+ foodDaily=null;foodDailyError='';
+ foodDailyBusy=!!(state?.food_catalog_available&&hasLinked);
+ if(!foodDailyBusy){draw();return}
+ draw();
+ try{
+  const result=await request('food_nutrition_day',{date:expected});
+  if(seq===foodDailySeq&&expected===foodDate)foodDaily=result;
+ }catch(ex){
+  if(seq===foodDailySeq&&expected===foodDate)foodDailyError=ex.message||'Не удалось рассчитать КБЖУ';
+ }finally{
+  if(seq===foodDailySeq&&expected===foodDate){foodDailyBusy=false;draw()}
+ }
 }
 function syncFoodDraft(){
  const rows=document.querySelectorAll?.('[data-food-draft]')||[];
@@ -670,8 +686,9 @@ function food(){
    '<p role="status"><strong>КБЖУ за день: '+nutritionLine(totals.totals)+'</strong></p>':
    '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+esc(totals.total_items)+' продуктов.</strong>'+
    (totals.known_subtotal?' Сумма только проверенных: '+nutritionLine(totals.known_subtotal)+'.':' Нет подтверждённой пищевой ценности.')+'</p>'):'';
- const nutritionButton=state?.food_catalog_available?
-    button(foodDailyBusy?'Считаем…':'Рассчитать КБЖУ за день','food-nutrition-day',true,foodDailyBusy?'disabled':''):'';
+ const canRecheck=state?.food_catalog_available&&saved.some(m=>m.items.some(x=>x.nutrition_source==='fatsecret'));
+ const nutritionButton=canRecheck?
+    button(foodDailyBusy?'Обновляем КБЖУ…':'Обновить КБЖУ','food-nutrition-day',false,foodDailyBusy?'disabled':''):'';
  const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
   '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
   'Сохраняем только введённые продукты и вес. Калории и БЖУ не подставляем без достоверного источника.</p>'+
@@ -835,7 +852,7 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
- if(e.target.id==='food-date'){foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-date'){++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
@@ -1059,7 +1076,7 @@ app.addEventListener('click',async e=>{
   if(!foodDraft.length){fail('Добавь продукт и граммовку');return}
   try{
    const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items:foodDraft});
-   foodHistory=result;foodDaily=null;foodDailyError='';foodDraft=[];foodUnparsed=[];foodText='';
+   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';void requestFoodDaily();
    foodNotice='Приём пищи сохранён в дневнике.';error='';
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
   draw();return;
@@ -1072,12 +1089,7 @@ app.addEventListener('click',async e=>{
  }
  if(cmd==='food-nutrition-day'){
   if(!state?.food_catalog_available||foodDailyBusy)return;
-  const expected=foodDate;foodDailyBusy=true;foodDailyError='';foodDaily=null;draw();
-  try{
-   const result=await request('food_nutrition_day',{date:expected});
-   if(expected===foodDate)foodDaily=result;
-  }catch(ex){if(expected===foodDate)foodDailyError=ex.message||'Не удалось рассчитать КБЖУ'}
-  finally{foodDailyBusy=false;draw()}
+  await requestFoodDaily();
   return;
  }
  if(cmd==='food-catalog-open'){
@@ -1108,7 +1120,7 @@ app.addEventListener('click',async e=>{
    foodDaily=null;catalogRecent[foodEdit.id]={grams:foodEdit.grams,nutrients:result.nutrients};
    for(const m of foodHistory?.meals||[])for(const item of m.items||[])if(item.id===foodEdit.id)item.nutrition_source='fatsecret';
    foodNotice='Продукт сопоставлен с FatSecret по выбранной порции.';
-   foodEdit=null;catalogCandidates=[];modal='';error='';
+   foodEdit=null;catalogCandidates=[];modal='';error='';void requestFoodDaily();
   }catch(ex){catalogMessage=ex.message||'Порция недоступна'}
   finally{catalogBusy=false;draw()}
   return;
@@ -1119,7 +1131,7 @@ app.addEventListener('click',async e=>{
    foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
    foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
    const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
-   foodHistory=result;foodDaily=null;delete catalogRecent[foodEdit.id];foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';void requestFoodDaily();
   }catch(ex){error=ex.message||'Ошибка изменения продукта'}
   draw();return;
  }
@@ -1127,7 +1139,7 @@ app.addEventListener('click',async e=>{
   if(!foodEdit)return;
   try{
    const result=await request('food_delete',{id:foodEdit.id});
-   foodHistory=result;foodDaily=null;delete catalogRecent[foodEdit.id];foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';void requestFoodDaily();
   }catch(ex){error=ex.message||'Не удалось удалить продукт'}
   draw();return;
  }
