@@ -53,7 +53,7 @@ function createClient(auth=true,shared={}){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',food_catalog_available:shared.foodCatalogAvailable===true,
+    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
     workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -71,6 +71,22 @@ function createClient(auth=true,shared={}){
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='fatsecret_account_status')
+    response={ok:true,available:!!shared.fatsecretReady,
+      connected:!!shared.fatsecretConnected,last_sync_at:null};
+   else if(p.action==='fatsecret_account_connect'){
+    shared.fatsecretConnected=false;
+    response={ok:true,authorization_url:
+     'https://authentication.fatsecret.com/oauth/authorize?oauth_token=TESTONLY',
+     expires_minutes:10};
+   }else if(p.action==='fatsecret_account_disconnect'){
+    shared.fatsecretConnected=false;response={ok:true,connected:false};
+   }else if(p.action==='fatsecret_diary_day'){
+    assert.equal(p.date,shared.expectedFatsecretDate||'2026-10-25');
+    response={ok:true,date:p.date,complete:true,source:'fatsecret',
+      totals:{calories_kcal:370,protein_g:32,fat_g:9,carbs_g:36},
+      entries:[{external_id:'17',meal:'Breakfast',name:'Овсянка',kcal:200,protein:7,fat:4,carbs:32}]};
+   }
    else if(p.action==='food_nutrition_day'){
     const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
     const registered=entries.filter(x=>x.nutrition_source==='fatsecret');
@@ -392,6 +408,28 @@ async function run(){
  await settle();await unconfigured.click({nav:'food'});await settle();
  assert.doesNotMatch(unconfigured.root.innerHTML,/Рассчитать КБЖУ за день/);
 
+ const noOAuth=createClient(true,{fatsecretReady:false});
+ await settle();await noOAuth.click({nav:'food'});await settle();
+ assert.doesNotMatch(noOAuth.root.innerHTML,/Подключить FatSecret/);
+ assert.ok(!noOAuth.requests.some(x=>x.action==='fatsecret_account_connect'));
+ const oauthClient=createClient(true,{fatsecretReady:true,fatsecretConnected:false});
+ await settle();await oauthClient.click({nav:'food'});await settle();
+ assert.match(oauthClient.root.innerHTML,/Подключить FatSecret/);
+ await oauthClient.click({cmd:'fatsecret-connect'});
+ assert.ok(oauthClient.requests.some(x=>x.action==='fatsecret_account_connect'));
+ assert.match(oauthClient.root.innerHTML,/authentication.fatsecret.com\/oauth\/authorize/);
+ const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true});
+ await settle();await linkedClient.click({nav:'food'});await settle();
+ assert.match(linkedClient.root.innerHTML,/Аккаунт подключён/);
+ await linkedClient.click({cmd:'fatsecret-diary-day'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_day'));
+ assert.match(linkedClient.root.innerHTML,/370.*ккал/);
+ assert.match(linkedClient.root.innerHTML,/Овсянка/);
+ await linkedClient.click({cmd:'fatsecret-disconnect-open'});
+ assert.match(linkedClient.root.innerHTML,/Отключить FatSecret\?/);
+ await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
+ assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
  const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
