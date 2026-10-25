@@ -156,9 +156,9 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
 
     def test_start_photo_has_the_exact_approved_caption_and_only_two_buttons(self):
         m=self.m
-        expected=('Добро пожаловать в FORMIQ!\\n\\n'
-                  'Твоя форма заслуживает умного подхода.\\n\\n'
-                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\\n\\n'
+        expected=('Добро пожаловать в FORMIQ!\n\n'
+                  'Твоя форма заслуживает умного подхода.\n\n'
+                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\n\n'
                   'Веди дневник самостоятельно или доверь Yandex AI создание персонального '
                   'плана, анализ результатов и адаптацию тренировок.')
         with patch.object(m.BOT,'set_chat_menu_button'), \
