@@ -3345,6 +3345,73 @@ def ingest_garmin_verified_batch(chat, provider_user_id, payload):
 # Never mark a provider integration as available on the strength of code alone.
 # Requires independently provisioned user-diary OAuth 1.0a credentials, an
 # application encryption key kept only in Render, and an HTTPS callback URL.
+
+def garmin_connected_day(chat, body):
+    """Show only authorized, actually imported Garmin metrics for one owner.
+
+    Does not return provider identity, tokens, or unrecorded sensor estimates.
+    Manual workouts and Garmin activity calories remain distinct.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    with db() as conn:
+        auth=conn.execute("""SELECT provider_user_id,last_sync_at
+            FROM garmin_authorized_identities
+            WHERE chat_id=%s AND health_consent_at IS NOT NULL
+              AND disconnected_at IS NULL""",(chat,)).fetchone()
+        if not auth:
+            return {'connected':False,'date':day.isoformat(),'last_sync_at':None,
+                    'dailies':[],'sleeps':[],'activities':[],
+                    'notice':'Garmin Connect не подключён'}
+        identity,last_sync=auth
+        tz=conn.execute("""SELECT timezone FROM profile_metrics
+            WHERE chat_id=%s""",(chat,)).fetchone()
+        timezone_name=(tz[0] if tz and tz[0] else 'UTC')
+        try:
+            ZoneInfo(timezone_name)
+        except (KeyError,TypeError,ValueError):
+            timezone_name='UTC'
+        rows=conn.execute("""SELECT e.category,e.event_at_utc,
+              e.local_calendar_date,e.metrics_json
+            FROM garmin_metric_events e
+            WHERE e.chat_id=%s AND e.provider_user_id=%s
+              AND (e.local_calendar_date=%s
+                OR (e.local_calendar_date IS NULL AND
+                    (e.event_at_utc AT TIME ZONE %s)::date=%s))
+            ORDER BY e.category,e.event_at_utc NULLS LAST,e.id
+            LIMIT 100""",(chat,identity,day,timezone_name,day)).fetchall()
+    result={'connected':True,'date':day.isoformat(),
+            'last_sync_at':last_sync.isoformat() if last_sync else None,
+            'dailies':[],'sleeps':[],'activities':[],
+            'notice':'Только полученные показатели Garmin, без расчётных подстановок'}
+    for category,when,local,metrics in rows:
+        if category not in ('dailies','sleeps','activities') or not isinstance(metrics,dict):
+            continue
+        safe={k:v for k,v in metrics.items() if k in GARMIN_ALLOWED_METRICS
+              and isinstance(v,(str,int,float)) and not isinstance(v,bool)}
+        if not safe:
+            continue
+        result[category].append({'values':safe,
+            'at_utc':when.isoformat() if when else None,
+            'date_basis':'provider' if local else 'profile_timezone'})
+    return result
+
+
+def garmin_disconnect_owner(chat):
+    """Stop access and further ingest; preserve history and manual workouts."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        conn.execute("""UPDATE garmin_authorized_identities
+            SET disconnected_at=NOW(),health_consent_at=NULL
+            WHERE chat_id=%s AND disconnected_at IS NULL""",(chat,))
+    return {'connected':False,
+            'notice':'Garmin отключён в FORMIQ. Проверь отзыв доступа также в настройках Garmin.'}
+
+
+
 def fatsecret_user_oauth_ready():
     if not (FATSECRET_OAUTH_CONSUMER_KEY and FATSECRET_OAUTH_CONSUMER_SECRET
             and FORMIQ_INTEGRATION_ENCRYPTION_KEY and BASE_URL.startswith('https://')):
@@ -5418,6 +5485,10 @@ def mini_api():
             payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'training_preview':
             payload = {'ok': True, **mini_training_preview(chat,data)}
+        elif action == 'garmin_day':
+            payload = {'ok':True, **garmin_connected_day(chat,data)}
+        elif action == 'garmin_disconnect':
+            payload = {'ok':True, **garmin_disconnect_owner(chat)}
         elif action == 'fatsecret_account_status':
             payload = {'ok':True, **fatsecret_user_status(chat)}
         elif action == 'fatsecret_account_connect':
