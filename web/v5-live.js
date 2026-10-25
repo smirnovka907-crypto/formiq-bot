@@ -810,7 +810,7 @@ app.addEventListener('click',async e=>{
  if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
  if(cmd==='mood'){modal='mood';draw();return}
  if(cmd==='start-severe'){
-  modal='';aiTrainingTip='При сильной боли или слабости лучше восстановление или пропуск тренировки. При выраженных или усиливающихся симптомах обратись за медицинской помощью.';
+  modal='';error='Тренировка не начата. При сильной боли или слабости лучше восстановиться. При выраженных или усиливающихся симптомах обратись за медицинской помощью.';
   draw();return;
  }
  if(cmd==='start-normal'||cmd==='start-tired'){modal='';await send('start',{mood:cmd==='start-normal'?'normal':'tired'});return}
