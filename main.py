@@ -4230,14 +4230,11 @@ def mini_training_preview(chat, body):
         substitutions=[alt for alt in GYM_SWAPS.get(key,())
             if alt in EX and exercise_for_equipment(p.get('equipment'),alt)
             and eligible_exercise(alt,health_profile(chat))]
+        details=exercise_card_details(key)
         exercises.append({'key':key,'name':name,'sets':sets,'low':lo,'high':hi,
             'unit':unit,'weight_kg':weights.get(key),
-            'start_position':'Прими устойчивое положение и проверь опору/тренажёр.',
-            'steps':['Подготовь положение и оборудование.',technique,
-                     'Вернись в исходную позицию плавно, без рывка.'],
-            'muscles':group(key),'mistakes':mistake,
-            'substitutions':[{'key':alt,'name':EX[alt][0]} for alt in substitutions],
-            'image_url':None})
+            **details,
+            'substitutions':[{'key':alt,'name':EX[alt][0]} for alt in substitutions]})
     duration=max(20,min(120,int(p.get('minutes') or 40)))
     return {'preview':{'id':sid,'week':week,'day':day,
         'date':planned.isoformat(),'name':day_title(p,day),
@@ -5469,28 +5466,97 @@ def mini_ux_3811_js():
 # Preserve human-readable technique for every exercise; never substitute
 # an unrelated photo simply to fill space.
 EXERCISE_PHOTOS = {
-    "chair_squat": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Chair_Squat/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "incline_push": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Push-Up/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "bridge": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Butt_Lift_Bridge/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "calf": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Standing_Calf_Raises/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "dead_bug": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dead_Bug/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "leg_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "lat_pull": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Lat_Pulldown/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "chest_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leverage_Chest_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "seated_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "db_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Shoulder_Press/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "leg_curl": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Lying_Leg_Curls/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "leg_ext": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Extensions/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "cable_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic / Free Exercise DB · CC BY-SA 4.0"),
-    "partial_squat": ("https://image.pim.regionh.dk/images/PROD/www.nordsjaellandshospital.dk/12107/St%C3%A5ende%C3%B8velse5.jpg", "Nordsjællands Hospital"),
-    "wall_push": ("https://www.berkshirehealthcare.nhs.uk/media/hegifzeh/wall-push-ups.jpg", "Berkshire Healthcare NHS"),
-    "bird": ("https://images.squarespace-cdn.com/content/v1/5e74bdfb17cf424c9cb44beb/9d5fb150-4444-47bd-8761-82772e932294/Table%2BTop%2B.jpg", "First Line Physio"),
-    "step": ("https://assets.nhs.uk/nhsuk-cms/images/NHSC_0518_Step-up_SmmhoMf.width-1534.jpg", "NHS"),
-    "wall_plank": ("https://www.physiotherapie-ndh.de/fileadmin/user_upload/militaryPlank-im-Stand.jpg", "Physiotherapie Silvio Krebs"),
-    "side_step": ("https://assets.nhs.uk/nhsuk-cms/images/NHSC_0518_Sideways-walking.width-1534.jpg", "NHS"),
-    "hip_hinge": ("https://cdn-ak.f.st-hatena.com/images/fotolife/b/bodybase/20220812/20220812145801.jpg", "Bodybase"),
+    # Hand-matched examples from Free Exercise DB. Bodyweight chair squat
+    # MUST NOT use its namesake Smith-machine exercise photograph.
+    # Bodyweight calf raises MUST NOT use the standing calf machine photo.
+    # Third-party medical/hospital images stay hidden pending explicit rights.
+    "incline_push": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Incline_Push-Up/0.jpg", "Everkinetic · Free Exercise DB"),
+    "bridge": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Butt_Lift_Bridge/0.jpg", "Everkinetic · Free Exercise DB"),
+    "dead_bug": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dead_Bug/0.jpg", "Everkinetic · Free Exercise DB"),
+    "leg_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg", "Everkinetic · Free Exercise DB"),
+    "lat_pull": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Wide-Grip_Lat_Pulldown/0.jpg", "Everkinetic · Free Exercise DB"),
+    "chest_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leverage_Chest_Press/0.jpg", "Everkinetic · Free Exercise DB"),
+    "seated_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic · Free Exercise DB"),
+    "db_press": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Dumbbell_Shoulder_Press/0.jpg", "Everkinetic · Free Exercise DB"),
+    "leg_curl": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Lying_Leg_Curls/0.jpg", "Everkinetic · Free Exercise DB"),
+    "leg_ext": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Extensions/0.jpg", "Everkinetic · Free Exercise DB"),
+    "cable_row": ("https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Seated_Cable_Rows/0.jpg", "Everkinetic · Free Exercise DB"),
 }
 
+EXERCISE_IMAGE_LICENSE = 'https://creativecommons.org/licenses/by-sa/4.0/'
+
+# Curated instructions for frequently used movements. For all other exercises
+# show the actual EX instruction; never invent a generic starting position.
+EXERCISE_CARD_GUIDES = {
+    'chair_squat': (
+        'Встань перед устойчивым стулом, стопы примерно на ширине плеч.',
+        ['Отведи таз назад и плавно согни колени.',
+         'Слегка коснись сиденья без падения на него.',
+         'Упрись стопами в пол и встань без рывка.'],
+        'Передняя поверхность бедра и ягодицы'),
+    'calf': (
+        'Встань на ровный пол, держись за устойчивую опору.',
+        ['Плавно поднимись на носки без раскачивания корпуса.',
+         'Медленно опусти пятки на пол.'],
+        'Икроножные мышцы'),
+    'incline_push': (
+        'Положи ладони на неподвижную высокую опору, корпус в прямой линии.',
+        ['Медленно согни локти и приблизь грудь к опоре.',
+         'Выпрями руки, сохраняя устойчивость и ровный корпус.'],
+        'Грудные мышцы и трицепсы'),
+    'bridge': (
+        'Ляг на спину, согни колени, поставь стопы на пол.',
+        ['Плавно подними таз, напрягая ягодицы.',
+         'Остановись без переразгибания поясницы.',
+         'Медленно опусти таз на пол.'],
+        'Ягодицы'),
+    'dead_bug': (
+        'Ляг на спину, согни тазобедренные и коленные суставы, подними руки.',
+        ['Контролируя корпус, медленно опускай противоположные руку и ногу.',
+         'Вернись к центру и поменяй сторону без рывка.'],
+        'Мышцы корпуса'),
+    'leg_press': (
+        'Сядь в тренажёр, настрой сиденье и размести стопы на платформе.',
+        ['Плавно выжми платформу, сохраняя контроль.',
+         'Не блокируй колени в верхней точке.',
+         'Верни платформу в комфортную амплитуду.'],
+        'Бедра и ягодицы'),
+    'lat_pull': (
+        'Сядь у верхнего блока, подстрой упоры и возьмись за рукоять.',
+        ['Плавно тяни рукоять к верхней части груди.',
+         'Контролируя лопатки, верни рукоять вверх.',
+         'Не тяни рукоять за голову и не раскачивайся.'],
+        'Широчайшие мышцы спины'),
+    'seated_row': (
+        'Сядь у горизонтального блока, зафиксируй стопы, выпрями спину.',
+        ['Плавно подтяни рукоять к корпусу, двигая локти назад.',
+         'Верни рукоять, не раскачивая спину.'],
+        'Мышцы спины'),
+    'cable_row': (
+        'Сядь к низкому блоку с устойчивой опорой для стоп.',
+        ['Подтяни рукоять к корпусу без рывка.',
+         'Плавно выпрями руки без сильного округления спины.'],
+        'Мышцы спины'),
+}
+
+def exercise_card_details(key):
+    """Actual cues for the requested exercise, plus cleared media only.
+
+    Missing illustrations and unreviewed muscles are represented as missing,
+    never by a guessed graphic, mislabelled movement or fabricated video.
+    """
+    if key not in EX:
+        return {'start_position':None,'steps':[],'muscles':None,'mistakes':None,
+                'image_url':None,'image_credit':None,'image_license_url':None}
+    guide=EXERCISE_CARD_GUIDES.get(key)
+    photo=EXERCISE_PHOTOS.get(key)
+    return {'start_position':guide[0] if guide else None,
+            'steps':list(guide[1]) if guide else [EX[key][1]],
+            'muscles':guide[2] if guide else None,
+            'mistakes':EX[key][2],
+            'image_url':photo[0] if photo else None,
+            'image_credit':photo[1] if photo else None,
+            'image_license_url':EXERCISE_IMAGE_LICENSE if photo else None}
 
 @APP.get('/mini/technique/<key>')
 def mini_technique(key):
@@ -5522,11 +5588,11 @@ p{margin:0 0 10px}small{font-size:13px;color:var(--muted)}</style></head><body><
             '" alt="Фото выполнения: ' + title + '" loading="lazy" '
             'referrerpolicy="no-referrer" decoding="async">'
             '<figcaption>Пример движения · фото: ' + html.escape(credit) +
-            '. Следуй инструкции и выбирай комфортную амплитуду.'
-            + (' <a href="https://github.com/yuhonas/free-exercise-db" '
-               'target="_blank" rel="noopener noreferrer">Источник</a>'
-               if "Free Exercise DB" in credit else '')
-            + '</figcaption></figure>'
+            ' · <a href="https://github.com/yuhonas/free-exercise-db" '
+            'target="_blank" rel="noopener noreferrer">источник</a>'
+            ' · <a href="https://creativecommons.org/licenses/by-sa/4.0/" '
+            'target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.'
+            ' Изображение без изменений.</figcaption></figure>'
         )
     else:
         photo_block = (
@@ -5663,7 +5729,8 @@ def mini_workout_delta(chat):
                'key':key,'index':sorted({r[0] for r in rows}).index(pos)+1,
                'set_count':sum(r[0]==pos for r in rows), 'low':low,'high':high,
                'unit':unit,'name':visible_exercise_name(name),'tip':info[1],
-               'caution':info[2],'help_url':'https://musclewiki.com/ru-ru','image':None}
+               'caution':info[2],'help_url':'https://musclewiki.com/ru-ru','image':None,
+               **exercise_card_details(key)}
     return {'workout':item}
 
 @APP.get('/mini/fatsecret/callback')
