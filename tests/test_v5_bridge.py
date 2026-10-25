@@ -51,11 +51,14 @@ class V5StagingContract(unittest.TestCase):
         self.assertIn("role=\"status\"", js)
         self.assertNotIn("formiq_preview_cardio_v1", js)
 
-    def test_v6_privacy_policy_discloses_private_health_and_period_storage(self):
-        text=self.client.get('/mini/privacy').data.decode('utf-8')
-        self.assertIn('текстовое описание ограничений здоровья',text)
-        self.assertIn('даты менструаций',text)
-        self.assertIn('даты женского календаря не включаются',text)
+    def test_v7_privacy_policy_discloses_private_health_and_period_storage(self):
+        policy=self.client.get('/mini/privacy').data.decode('utf-8')
+        self.assertIn('описание ограничений здоровья',policy)
+        self.assertIn('приватный менструальный календарь',policy)
+        self.assertIn('/mini/yandex-privacy',policy)
+        disclosure=self.client.get('/mini/yandex-privacy').data.decode('utf-8')
+        self.assertIn('Абсолютные даты менструаций',disclosure)
+        self.assertIn('Отзыв согласия',disclosure)
 
     def test_wake_callback_sends_visible_confirmation_in_private_chat(self):
         """A real message must survive the short Telegram callback-popup expiry."""
@@ -185,9 +188,9 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchall.return_value = [
-            (35, dt, 'workout', 'A', 'Зал', None, None),
-            (-12, dt, 'cardio', None, None, 60, 'cycling'),
-            (34, dt, 'workout', 'B', 'Другая тренировка', None, None),
+            (35, dt, 'workout', 'A', 'Зал', None, None, None, None),
+            (-12, dt, 'cardio', None, None, 60, 'cycling', None, 571),
+            (34, dt, 'workout', 'B', 'Другая тренировка', None, None, None, None),
         ]
         with patch.object(self.mod, 'db', return_value=conn), \
              patch.object(self.mod, 'profile', return_value={'goal':'general'}):
@@ -199,7 +202,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(query.count('chat_id=%s'), 2)
         self.assertEqual(result['next_offset'], 2)
         self.assertEqual([row['id'] for row in result['history']], [35, -12])
-        self.assertEqual(result['history'][1]['title'], 'Велосипед · 60 мин')
+        self.assertEqual(result['history'][1]['title'], 'Дополнительная тренировка · Велосипед · 60 мин · ≈ 571 ккал')
 
     def test_history_month_uses_owner_and_month_boundaries(self):
         from datetime import date
@@ -247,13 +250,47 @@ class V5StagingContract(unittest.TestCase):
         sql, params = conn.execute.call_args.args
         self.assertIn('cardio_sessions', sql)
         self.assertIn('equipment', sql)
-        self.assertEqual(params, (777, 60, 120, 'cycling'))
+        self.assertEqual(params[:4], (777, 60, 120, 'cycling'))
+        self.assertEqual(len(params), 8)
+        self.assertEqual(params[5], 6.8)
         with patch.object(self.mod, 'require_tier'), \
              patch.object(self.mod, 'db', return_value=conn):
             with self.assertRaises(ValueError):
                 self.mod.mini_aux(777, 'cardio', {
                     'minutes': 30, 'avg_hr': None, 'type': 'Неизвестно'})
 
+
+    def test_extra_activity_met_is_saved_with_owner_and_unmeasured_energy(self):
+        from unittest.mock import MagicMock
+        conn=MagicMock()
+        conn.__enter__.return_value=conn
+        with patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'require_tier'), \
+             patch.object(self.mod,'metrics',return_value={'weight_kg':80}):
+            self.mod.mini_aux(777,'cardio',{
+                'minutes':60,'avg_hr':None,'type':'Другое',
+                'activity':'Играл в теннис','intensity':'moderate'})
+        sql,params=conn.execute.call_args.args
+        self.assertIn('cardio_sessions',sql)
+        self.assertEqual(params[0:5],(777,60,None,'other','Играл в теннис'))
+        self.assertEqual(params[5],7.3)
+        self.assertEqual(params[6],613)
+        self.assertEqual(params[7],'moderate')
+        # Unrecognized activity stays saved but never receives invented kcal.
+        with patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'require_tier'), \
+             patch.object(self.mod,'metrics',return_value={'weight_kg':80}), \
+             patch.object(self.mod,'personalization_consent',return_value={
+                  'profile':False,'health':False,'cycle':False}):
+            self.mod.mini_aux(777,'cardio',{
+                'minutes':20,'avg_hr':None,'type':'Другое',
+                'activity':'Неизвестная активность'})
+        _,params=conn.execute.call_args.args
+        self.assertIsNone(params[5])
+        self.assertIsNone(params[6])
+        with patch.object(self.mod,'require_tier'):
+            with self.assertRaises(ValueError):
+                self.mod.mini_aux(777,'cardio',{'minutes':30,'avg_hr':None,'type':'Другое'})
 
     def test_signed_v5_workout_and_history_api_contract(self):
         """Flask dispatches authenticated actions without touching real DB."""
@@ -343,8 +380,34 @@ class V5StagingContract(unittest.TestCase):
                     self.mod.save_metrics(777, {'metrics': metrics})
                 conn.assert_not_called()
 
+    def test_equipment_ai_rejects_unsigned_or_unconsented_model_transfer(self):
+        """Per-request acknowledgement alone cannot authorize Yandex transmission."""
+        from urllib.error import URLError
+        from unittest.mock import patch
+        import urllib.request
+        payload={'action':'equipment_analyze','adult':True,
+                 'privacy_ack':True,'text':'У меня гантели и коврик'}
+        with patch.object(self.mod,'mini_auth',return_value=777), \
+             patch.object(self.mod,'YANDEX_KEY','test-key'), \
+             patch.object(self.mod,'FOLDER_ID','test-folder'), \
+             patch.object(self.mod,'personalization_consent',
+                 return_value={'profile':False,'health':False,'cycle':False}) as consent, \
+             patch.object(urllib.request,'urlopen',
+                 side_effect=URLError('offline synthetic test')) as outbound:
+            blocked=self.client.post('/mini/api',json=payload)
+            self.assertEqual(blocked.status_code,400,blocked.get_json())
+            self.assertIn('согласие',blocked.get_json()['error'])
+            outbound.assert_not_called()
+            consent.return_value={'profile':True,'health':False,'cycle':False}
+            attempted=self.client.post('/mini/api',json=payload)
+            self.assertEqual(attempted.status_code,400,attempted.get_json())
+            outbound.assert_called_once()
+        with patch.object(self.mod,'mini_auth',return_value=None):
+            unauthorized=self.client.post('/mini/api',json=payload)
+            self.assertEqual(unauthorized.status_code,401)
+
     def test_health_ai_requires_explicit_server_side_consent(self):
-        """A signed session alone cannot authorize external health-data transfer."""
+        """Signed Telegram plus the per-request opt-in cannot bypass stored consent."""
         from urllib.error import URLError
         import urllib.request
         client=self.mod.APP.test_client()
@@ -353,17 +416,19 @@ class V5StagingContract(unittest.TestCase):
         with patch.object(self.mod,'mini_auth',return_value=777), \
              patch.object(self.mod,'YANDEX_KEY','test-key'), \
              patch.object(self.mod,'FOLDER_ID','test-folder'), \
-             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound:
-            for value in (None,False,'yes'):
+             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound, \
+             patch.object(self.mod,'personalization_consent',return_value={
+                  'profile':False,'health':False,'cycle':False}) as stored:
+            for value in (None,False,'yes',True):
                 body={**payload}
                 if value is not None:
                     body['ai_consent']=value
                 rejected=client.post('/mini/api',json=body)
                 self.assertEqual(rejected.status_code,400,rejected.get_json())
-                self.assertIn('отдельное согласие',rejected.json['error'])
+                self.assertIn('согласие',rejected.json['error'])
             outbound.assert_not_called()
-            # Explicit opt-in allows the separate AI path to reach the
-            # outbound request, here deliberately intercepted offline.
+            stored.return_value={'profile':True,'health':True,'cycle':False}
+            # Only an explicit request plus persisted consent can reach Yandex.
             allowed=client.post('/mini/api',json={**payload,'ai_consent':True})
             self.assertEqual(allowed.status_code,400,allowed.get_json())
             outbound.assert_called_once()

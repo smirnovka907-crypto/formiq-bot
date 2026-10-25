@@ -441,6 +441,11 @@ def init_db():
             minutes INT NOT NULL CHECK(minutes BETWEEN 1 AND 300),
             avg_hr INT, distance_km NUMERIC(6,2),
             equipment TEXT NOT NULL DEFAULT 'elliptical')""")
+        # Optional columns preserve all historical cardio rows and timestamps.
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS activity_label TEXT")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_met NUMERIC(4,1)")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_kcal INTEGER")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS intensity TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS cardio_user_date
             ON cardio_sessions(chat_id,performed_at DESC)""")
         c.execute("""CREATE TABLE IF NOT EXISTS user_agreements(
@@ -2768,8 +2773,8 @@ def analyze_health_description(chat, body):
     """
     # Server-side, per-request opt-in: a forged authenticated Mini App
     # action must not send health notes to Yandex without separate consent.
-    if body.get('ai_consent') is not True:
-        raise ValueError('Для передачи описания в Yandex AI нужно отдельное согласие')
+    if body.get('ai_consent') is not True or not personalization_consent(chat)['health']:
+        raise ValueError('Для передачи описания сначала сохрани согласие на Yandex AI в анкете')
     if body.get('adult') is not True or body.get('privacy_ack') is not True:
         raise ValueError('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности')
     raw=body.get('text')
@@ -2827,10 +2832,12 @@ def analyze_health_description(chat, body):
         LOG.warning('Health AI analysis unavailable or invalid; no health data saved')
         raise ValueError('Не получилось разобрать текст. Попробуй ещё раз или укажи ограничения вручную')
 
-def analyze_equipment_description(body):
-    """User-approved Yandex parsing; no raw text persisted automatically."""
+def analyze_equipment_description(chat,body):
+    """Parse equipment only with an authenticated, stored Yandex permission."""
     if body.get('privacy_ack') is not True or body.get('adult') is not True:
         raise ValueError('Разреши передачу текста и подтверди возраст 18+')
+    if not personalization_consent(chat)['profile']:
+        raise ValueError('Сначала сохрани согласие на Yandex AI в анкете')
     raw=body.get('text')
     if not isinstance(raw,str) or not 3<=len(raw.strip())<=400:
         raise ValueError('Опиши свой инвентарь (3–400 символов)')
@@ -2873,6 +2880,10 @@ def save_onboarding(chat,body):
     if body.get('terms') is not True or body.get('privacy') is not True or body.get('health') is not True:
         raise ValueError('Нужно подтвердить все три пункта')
     if vals.get('age_group')!='adult':raise ValueError('FORMIQ только для 18+')
+    if body.get('timezone_confirmed') is False:
+        raise ValueError('Подтверди выбранный часовой пояс')
+    if body.get('unified_ai_consent') not in (None,True,False):
+        raise ValueError('Некорректное согласие')
     user_tz=body.get('timezone','Europe/Moscow')
     if not isinstance(user_tz,str) or len(user_tz)>64:raise ValueError('Проверь часовой пояс')
     try:ZoneInfo(user_tz)
@@ -2961,12 +2972,20 @@ def save_onboarding(chat,body):
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
         if body.get('ai_profile_consent') not in (True,False,None) or \
-           body.get('ai_health_consent') not in (True,False,None):
+           body.get('ai_health_consent') not in (True,False,None) or \
+           body.get('ai_cycle_consent') not in (True,False,None):
             raise ValueError('Некорректное согласие на ИИ')
+        unified=body.get('unified_ai_consent')
+        if unified is not None and (
+            body.get('ai_profile_consent') is not unified or
+            body.get('ai_health_consent') is not unified or
+            body.get('ai_cycle_consent') is not (unified and sex=='female')):
+            raise ValueError('Подтверди единое согласие на Yandex AI')
         c.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
         c.execute('''UPDATE ai_personalization_consents SET profile_allowed=%s,
-            health_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
-            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,chat))
+            health_allowed=%s,cycle_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
+            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,
+             sex=='female' and body.get('ai_cycle_consent') is True,chat))
         if body.get('ai_profile_consent') is not True:
             c.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
         if sex!='female':
@@ -2996,21 +3015,35 @@ def save_onboarding(chat,body):
 
 # Проектные шаблоны документов: до публичного запуска необходимо заполнить
 # реквизиты оператора и пройти юридическую проверку.
-DOC_TERMS = """<h1>Условия использования FORMIQ</h1>
-<p><b>Версия 21.10.2026 · предварительный документ для тестирования.</b></p>
-<p>FORMIQ — цифровой помощник для ведения тренировочного дневника и формирования ориентировочных программ физических упражнений. Сервис не оказывает медицинские услуги, не ставит диагнозы, не заменяет врача или очного тренера.</p>
-<p>Пользователь подтверждает, что ему не менее 18 лет; указывает ограничения для консервативного исключения некоторых движений. Алгоритм не диагностирует причину боли и может исключить больше движений, чем требуется. Пользователь самостоятельно выбирает допустимый уровень физической активности, внимательно оценивает своё самочувствие и прекращает занятие при боли, головокружении, необычной одышке или другом ухудшении состояния.</p>
-<p>При сильной или нарастающей боли, новых травмах, тревожных симптомах и сомнениях в безопасности нагрузки следует получить медицинскую оценку; при известных сердечно-сосудистых заболеваниях нагрузка требует согласования со специалистом. Расчёт пульсовых зон ориентировочный.</p>
-<p>Пользователь понимает, что любые результаты и рекомендации FORMIQ могут содержать ошибки; перед выполнением упражнения нужно проверить условия и технику. Пользователь самостоятельно принимает решение о тренировке. Это положение не ограничивает права пользователя, которые нельзя исключить по закону, и не освобождает оператора от обязанностей, предусмотренных законодательством.</p>
-<p>Личные записи могут быть удалены из FORMIQ по запросу пользователя. Текущий релиз работает в тестовом режиме; никаких автоматических платных подписок или списаний нет.</p>
-<p><b>До публичного запуска:</b> необходимо указать сведения об операторе сервиса, контакт для обращений, порядок разрешения споров, юрисдикцию и окончательные условия тарификации. Требуется юридическая проверка.</p>"""
+DOC_TERMS = """<h1>Пользовательское соглашение FORMIQ</h1>
+<p><b>Редакция 25.10.2026 · закрытое тестирование.</b></p>
+<p>FORMIQ — приложение для планирования физической активности, учёта выполненных тренировок и анализа добровольно предоставленных сведений о питании. Сервис не является медицинской организацией, медицинским изделием, диагностической системой или заменой врачу, физиотерапевту либо квалифицированному тренеру.</p>
+<p>Планы, MET-расчёты энергозатрат, пульсовые зоны, рекомендации алгоритмов и Yandex AI имеют ориентировочный характер. Они могут быть неточными, неполными или неприменимыми к состоянию конкретного человека. Не обещаются снижение массы тела, рост мышц, улучшение здоровья, определённый спортивный результат или бесперебойность сторонних интеграций.</p>
+<p>Пользователь подтверждает возраст от 18 лет, самостоятельно вводит достоверные сведения, проверяет план перед выполнением, контролирует технику и самочувствие. При боли в груди, обмороке, необычной одышке, выраженной слабости, головокружении, сильной либо нарастающей боли следует прекратить занятия и обратиться за медицинской помощью; при экстренных симптомах — за экстренной медицинской помощью. При известных заболеваниях и ограничениях вопрос допустимости нагрузки решается со специалистом.</p>
+<p>Сервис предоставляется для тестирования без гарантии отсутствия технических ошибок и непрерывной доступности. Разработчик не отвечает за результаты самостоятельного исполнения некорректно понятых рекомендаций в той мере, в какой такое ограничение допускает применимое законодательство. Это положение не исключает ответственность за умысел, грубую неосторожность и иные нарушения, ответственность за которые нельзя ограничить законом; не отменяет императивные права пользователя.</p>
+<p>История занятий и анкета находятся в персональном кабинете; доступ через авторизацию Telegram. Для работы интеграций действуют правила и ограничения сторонних поставщиков. Обработка данных описана в <a href="/mini/privacy">политике конфиденциальности</a>; добровольная передача информации в ИИ — в <a href="/mini/yandex-privacy">условиях Yandex AI</a>.</p>
+<p>Перед публичным запуском необходимо раскрыть полные сведения об операторе, юридические контакты, адрес для обращений, применимое право и способы реализации прав пользователей. Документ требует отдельной юридической проверки; он не является заверением в соответствии всем применимым нормам.</p>"""
 
 DOC_PRIVACY = """<h1>Политика конфиденциальности FORMIQ</h1>
-<p><b>Версия 21.10.2026 · проект для тестирования.</b></p>
-<p>Для работы сервиса FORMIQ обрабатывает идентификатор Telegram, ответы анкеты, информацию о тренировках, подходах, рабочих весах, показатели роста, веса, пола, пульса и возраста, добровольно отмеченные ограничения движений, области дискомфорта и интенсивность боли, отдельно сохранённое по согласию текстовое описание ограничений здоровья, а также технические события приложения. По желанию владелица женского профиля может записывать даты менструаций в необязательный приватный календарь; эти записи хранятся по её идентификатору Telegram и доступны только ей через подписанную авторизацию. Добровольные пожелания пользователей обрабатываются для улучшения продукта и группировки повторяющихся идей; обезличенные тексты и псевдонимы могут дополнительно синхронизироваться с закрытой Google Таблицей разработчика.</p>
-<p>Данные дневника хранятся в базе PostgreSQL облачного сервиса Render. При отдельном согласии на ИИ в Yandex AI Studio передаются вопросы, последние сообщения и соответствующая часть тренировочных данных. Описание здоровья передаётся для структурирования только после отдельного согласия в момент запроса; даты женского календаря не включаются в автоматические запросы к Yandex AI. Отдельное необязательное согласие позволяет передавать в Yandex AI только относительное число дней с последнего самостоятельно отмеченного начала менструации и факт попадания текущего дня в отмеченный период, без Telegram ID и точных дат. Это используется лишь по запросу персонального совета по тренировке, не для диагностики; согласие можно отозвать в профиле или женском календаре без удаления дат. Отдельное согласие на персонализацию анкеты позволяет использовать цель, опыт, место, дни и длительность занятий, а также сводную историю тренировок для советов по тренировкам и питанию. Без согласия обычная анкета и тренировки доступны. Если пользователь отдельно выбирает отчёт питания, его содержимое (CSV либо изображение) передаётся мультимодальной или текстовой модели Яндекса для анализа, без сохранения исходного файла в дневнике FORMIQ. Пользователь может отказаться от ИИ и удалить его локальную историю.</p>
-<p>Доступ к данным предоставляется только для предоставления возможностей FORMIQ и необходимых технических операций. Обращения, сроки хранения, меры защиты, место хранения и права субъекта данных должны быть уточнены и опубликованы до публичного запуска.</p>
-<p>При удалении учётной записи записи пожеланий в основной базе удаляются; внешнюю Google Таблицу потребуется очистить отдельно по запросу пользователя. Для реализации прав на доступ, исправление и удаление данных в тестовой версии предусмотрены команды профиля и удаления. <b>До запуска подписок нужно указать юридическое лицо/ИП, адрес и контакт оператора персональных данных.</b></p>"""
+<p><b>Редакция 25.10.2026 · закрытое тестирование.</b></p>
+<p>Для работы персонального кабинета FORMIQ обрабатывает Telegram-идентификатор для авторизации, возраст, пол, рост, массу тела, часовой пояс IANA, цели, выбранные дни тренировок, длительность и место занятий, имеющийся инвентарь, выполненные подходы, веса, историю, дополнительную активность и рассчитанные по MET ориентировочные энергозатраты. По отдельному разрешению пользователя хранится свободное описание ограничений здоровья; для женского профиля доступен необязательный приватный менструальный календарь с ручным вводом и осторожным прогнозом.</p>
+<p>История и профиль хранятся в PostgreSQL на Render и доступны через проверку подписанной авторизации Telegram и привязку к владельцу записи. Данные календаря не открываются другим пользователям. Технические журналы и обращения об ошибках могут обрабатываться для обеспечения работы сервиса. Отзывы и предложения сохраняются для рассмотрения разработчиком; обезличенные тексты пожеланий могут отправляться в рабочую таблицу при включённой технической синхронизации.</p>
+<p>По умолчанию персональные данные не передаются в Yandex AI для персонализации. Передача при отдельном добровольном согласии, объём, отзыв согласия, ограничения здоровья и сведения цикла подробно изложены в документе <a href="/mini/yandex-privacy">«Конфиденциальность Yandex AI»</a>. Разовая отправка выбранного отчёта питания требует отдельного действия и подтверждения именно для файла. Исходный файл отчёта не сохраняется как часть дневника FORMIQ.</p>
+<p>Часовой пояс определяется по настройкам устройства и может быть изменён пользователем; геолокация или VPN для выбора часового пояса не нужны. Удаление или исправление профиля и данных проводится через предусмотренные функции сервиса; наличие отдельных записей у внешних провайдеров и ограничения их обработки регулируются политиками этих провайдеров. Обработка может продолжаться в пределах обязательных требований законодательства.</p>
+<p>До открытого запуска должны быть опубликованы установленные сведения об операторе персональных данных и контакты, сроки хранения, основания обработки, трансграничные передачи при их наличии, порядок запросов на доступ, исправление и удаление, а также юридически проверенные гарантии. Этот документ не объявляет полного соответствия закону без такой проверки.</p>"""
+
+DOC_YANDEX = """<h1>Конфиденциальность Yandex AI</h1>
+<p><b>Редакция 25.10.2026 · добровольная персонализация, по умолчанию выключена.</b></p>
+<p>В анкете FORMIQ имеется одно добровольное согласие на использование Yandex AI для персонализации тренировок и питания, включая предоставленное описание ограничений здоровья и, при женском профиле, минимально необходимые сведения о цикле. Отключение не запрещает заполнить анкету, вести дневник и использовать обычную программу.</p>
+<h2>Какие сведения могут передаваться</h2>
+<p>При сохранённом разрешении и конкретном запросе советы могут учитывать цель, уровень, место и дни занятий, длительность, часть завершённых тренировок, повторения и рабочие веса. Для советов о питании используются цель и доступные данные анкеты; отсутствие реального дневника нельзя заполнять вымышленными калориями и БЖУ. Отдельно выбранный файл отчёта питания передаётся только после подтверждения отправки файла.</p>
+<p>Свободный текст описания здоровья сохраняется внутри FORMIQ только с самостоятельным разрешением на его хранение. Передача сохранённого текста в ИИ требует действующего согласия на персонализацию здоровья; структурирование введённого текста выполняется только после явного запроса и серверной проверки. Полученное ИИ описание не используется для изменения ограничений без проверки пользователем.</p>
+<p>Для женского календаря в запросах на персонализацию могут использоваться лишь приблизительное число дней с последнего самостоятельно введённого начала и признак нахождения текущего дня в отмеченном периоде. Абсолютные даты менструаций, вся история календаря и Telegram ID в эти запросы не включаются. Нельзя автоматически снижать нагрузку исключительно по предполагаемой фазе.</p>
+<h2>Пределы использования</h2>
+<p>Yandex AI обрабатывает переданные данные как сторонний поставщик модельного сервиса для ответа на конкретный запрос. FORMIQ стремится не передавать ненужные идентификаторы; полную анонимность произвольного пользовательского текста гарантировать нельзя. Результаты ИИ могут содержать ошибки и не заменяют медицинскую консультацию, диагноз или измерения носимых датчиков.</p>
+<h2>Отзыв согласия</h2>
+<p>Разрешение можно снять в профиле, затем нажать «Сохранить изменения». FORMIQ прекращает дальнейшие запросы персонализации с соответствующими данными после серверного сохранения отзыва. Уже обработанные внешним поставщиком данные не могут быть отозваны задним числом средствами FORMIQ; применимы его правила хранения и удаления. Отзыв не удаляет историю упражнений и даты календаря.</p>
+<p>До публичного запуска условия передачи и обработки данных провайдером, срок хранения, законность передачи чувствительных сведений и формулировки согласий требуют отдельной юридической проверки. Если разрешения для чувствительной категории недостаточно, FORMIQ не должен передавать такие сведения.</p>"""
 
 # =============================================
 # План на 28 дней и компактные названия
@@ -3263,6 +3296,61 @@ CARDIO_TYPES = {
 }
 CARDIO_LABELS = {v: k for k, v in CARDIO_TYPES.items()}
 
+# Conservative activity categories based on published Compendium-of-Physical-Activities
+# MET estimates. A number is not a device measurement or individual metabolic test.
+CARDIO_MET = {'walking':3.5,'running':8.0,'cycling':6.8,'swimming':6.0,
+              'tennis':7.3,'yoga':2.5,'gardening':4.0,'motorcycle':2.5,
+              'dance':5.0,'strength':5.0,'cleaning':3.3,'hiking':6.0}
+CARDIO_WORDS = (
+    ('motorcycle',('мотоцикл','мотоцикле','мото','байк на мотор')),
+    ('cycling',('велосипед','велопрогул','велотренаж')),
+    ('tennis',('теннис','ракетк')),
+    ('yoga',('йога','йогу')),
+    ('gardening',('сад','огород','гряд','копал землю')),
+    ('dance',('танц','зумба')),
+    ('cleaning',('уборк','мыл пол','пылесос')),
+    ('hiking',('поход','трекинг','хайкинг')),
+    ('running',('бег','пробеж')),
+    ('walking',('ходьб','гулял','гуляла','прогулк')),
+    ('swimming',('плаван','плавал','бассейн')),
+    ('strength',('силовая','гантел','тренажерный зал','тренажёрный зал')),
+)
+
+
+def met_category_from_activity(text,chat):
+    """Never ask AI for energy; accept only one category from a fixed MET table."""
+    lower=text.casefold()
+    for key,words in CARDIO_WORDS:
+        if any(word in lower for word in words):
+            return key
+    if not (YANDEX_KEY and FOLDER_ID and personalization_consent(chat)['profile']):
+        return None
+    allowed=', '.join(CARDIO_MET)
+    payload={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+      'completionOptions':{'stream':False,'temperature':0,'maxTokens':'35'},
+      'messages':[{'role':'system','text':'Классифицируй краткое название физической активности в ОДНУ из категорий: '+allowed+
+        '. Если недостаточно информации, ответь unknown. Только одно английское слово из списка, без объяснений, диагнозов или калорий.'},
+        {'role':'user','text':text}]}
+    req=urllib.request.Request(AI_URL,
+      data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),
+      headers={'Authorization':'Api-Key '+YANDEX_KEY,'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=12) as response:
+            decoded=json.load(response)
+        category=str(decoded['result']['alternatives'][0]['message']['text']).strip().lower()
+        return category if category in CARDIO_MET else None
+    except (ValueError,KeyError,TypeError,IndexError,urllib.error.HTTPError,
+            urllib.error.URLError,TimeoutError,json.JSONDecodeError):
+        LOG.warning('Activity classification unavailable, saving without estimated energy')
+        return None
+
+
+def cardio_history_title(equipment,minutes,activity=None,kcal=None):
+    title=activity or CARDIO_LABELS.get(equipment,'Активность')
+    return 'Дополнительная тренировка · '+title+' · '+str(minutes)+' мин'+(
+        ' · ≈ '+str(kcal)+' ккал' if kcal is not None else '')
+
+
 
 def history_local_zone(chat):
     """Resolve the stored IANA timezone; never trust client-supplied timezone."""
@@ -3335,17 +3423,20 @@ def mini_history_detail(chat,wid):
     zone = history_local_zone(chat)
     if wid < 0:
         with db() as conn:
-            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment FROM cardio_sessions
+            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal FROM cardio_sessions
                 WHERE id=%s AND chat_id=%s''',(-wid,chat)).fetchone()
         if not cardio:
             raise ValueError('Запись кардио не найдена')
-        dt,minutes,hr,equipment=cardio
-        display_type=CARDIO_LABELS.get(equipment, 'Кардио')
-        items=[{'name':'Вид кардио','key':None,'result':display_type},
+        dt,minutes,hr,equipment,activity_label,met,kcal=cardio
+        display_type=activity_label or CARDIO_LABELS.get(equipment, 'Активность')
+        items=[{'name':'Активность','key':None,'result':display_type},
                {'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
         if hr is not None:
             items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
-        return {'date':history_local_date(dt, zone),'title':display_type,'items':items}
+        if kcal is not None:
+            items.append({'name':'Примерный расход энергии','key':None,
+                          'result':f'≈ {kcal} ккал (MET {met}; не измерение датчика)'})
+        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,'items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
@@ -3387,13 +3478,14 @@ def mini_history_page(chat, body):
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
-        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment FROM ("
+        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
         "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
-        "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment FROM workouts "
+        "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
+        "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
         "WHERE chat_id=%s AND status='finished' " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
-        "NULL::text AS manual_title, minutes, equipment FROM cardio_sessions "
+        "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
         "WHERE chat_id=%s " + filter_c +
         ") AS entries ORDER BY occurred_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -3401,13 +3493,13 @@ def mini_history_page(chat, body):
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
     page = []
-    for ident, timestamp, kind, day, custom, minutes, equipment in rows[:limit]:
+    for ident, timestamp, kind, day, custom, minutes, equipment, activity, kcal in rows[:limit]:
         page.append({
             'id': ident,
             'date': history_local_date(timestamp, zone),
             'type': kind,
             'title': (custom or day_title(p, day)) if kind == 'workout'
-                     else f'{CARDIO_LABELS.get(equipment, "Кардио")} · {minutes} мин',
+                     else cardio_history_title(equipment,minutes,activity,kcal),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
 
@@ -3539,7 +3631,7 @@ def mini_state(chat, just_finished=False):
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
-        cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment FROM cardio_sessions
+        cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment,activity_label,estimated_kcal FROM cardio_sessions
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     history_zone=history_local_zone(chat)
     combined=[{'id':wid,'date':history_local_date(dt, history_zone),
@@ -3548,8 +3640,8 @@ def mini_state(chat, just_finished=False):
         for wid,day,dt,manual_title in history_rows]
     combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
-        'title':f'{CARDIO_LABELS.get(equipment, "Кардио")} · {mins} мин'}
-        for cid,dt,mins,equipment in cardio_rows)
+        'title':cardio_history_title(equipment,mins,activity,kcal)}
+        for cid,dt,mins,equipment,activity,kcal in cardio_rows)
     combined.sort(key=lambda row:row['sort_at'],reverse=True)
     for entry in combined:
         entry.pop('sort_at')
@@ -3737,12 +3829,35 @@ def mini_aux(chat,action,body):
         if activity is not None and activity not in CARDIO_TYPES:
             raise ValueError('Неизвестный вид кардио')
         stored_type=CARDIO_TYPES[activity] if activity else 'elliptical'
+        raw_label=body.get('activity')
+        if stored_type=='other':
+            if not isinstance(raw_label,str) or not 3<=len(raw_label.strip())<=100:
+                raise ValueError('Укажи вид активности от 3 до 100 символов')
+            activity_label=' '.join(raw_label.strip().split())
+        else:
+            if raw_label not in (None,''):
+                raise ValueError('Название нужно только для категории «Другое»')
+            activity_label=None
+        intensity=body.get('intensity','moderate')
+        if intensity not in ('light','moderate','vigorous'):
+            raise ValueError('Проверь интенсивность активности')
         if type(mins) is not int or not 1<=mins<=300:raise ValueError('Минуты: от 1 до 300')
         if hr not in (None,'') and (type(hr) is not int or not 40<=hr<=220):
             raise ValueError('Пульс: от 40 до 220')
+        category=(met_category_from_activity(activity_label,chat) if activity_label
+                  else stored_type if stored_type in CARDIO_MET else None)
+        base_met=CARDIO_MET.get(category)
+        met=(round(max(1.3,min(14.,base_met*
+                  {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
+             if base_met is not None else None)
+        current_weight=metrics(chat).get('weight_kg')
+        kcal=(round(met*3.5*float(current_weight)*mins/200)
+              if met is not None and current_weight and float(current_weight)>0 else None)
         with db() as conn:
-            conn.execute('INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment) VALUES(%s,%s,%s,%s)',
-              (chat,mins,hr or None,stored_type))
+            conn.execute('''INSERT INTO cardio_sessions
+              (chat_id,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,intensity)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s)''',
+              (chat,mins,hr or None,stored_type,activity_label,met,kcal,intensity))
         return True
     if action=='ai_consent':
         require_tier(chat,'comfort')
@@ -3931,6 +4046,11 @@ def mini_brand_logo():
 @APP.get('/mini/terms')
 def mini_terms():
     return legal_doc(DOC_TERMS)
+
+
+@APP.get('/mini/yandex-privacy')
+def mini_yandex_privacy():
+    return legal_doc(DOC_YANDEX)
 
 
 @APP.get('/mini/privacy')
@@ -4349,7 +4469,7 @@ def mini_api():
         elif action == 'ai_personalization_set':
             payload = {'ok':True, 'consents':set_personalization_consent(chat,data)}
         elif action == 'equipment_analyze':
-            payload = {'ok':True, 'equipment':analyze_equipment_description(data)}
+            payload = {'ok':True, 'equipment':analyze_equipment_description(chat,data)}
         elif action in ('detail','ai_ask','feedback'):
             payload = {'ok':True, **mini_aux(chat,action,data)}
         elif action == 'save_metrics':
