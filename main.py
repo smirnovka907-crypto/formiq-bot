@@ -2122,6 +2122,7 @@ def ai_personalized_guidance(chat,body):
     prescription or a fake food diary. The authoritative workout safety checks
     and server-created exercises still apply to actual workout starts.
     """
+    require_tier(chat,'max')
     purpose=body.get('purpose','training')
     mood=body.get('mood','normal')
     if purpose not in ('training','nutrition') or mood not in ('normal','tired','discomfort','severe'):
@@ -3907,8 +3908,9 @@ def mini_state(chat, just_finished=False):
         if trial and trial[0]:
             remaining = (trial[0] + timedelta(days=TRIAL_DAYS) - datetime.now(timezone.utc)).total_seconds()
             result['premium']['label'] = (
-                'Пробные 14 дней' if remaining > 0 else 'Тестовый доступ'
+                'Пробные 14 дней' if remaining > 0 else 'Пробный период завершён'
             )
+            result['premium']['days_left'] = max(0,int((remaining + 86399)//86400))
         active_row = c.execute('''SELECT id,plan_day,week_no,manual_title FROM workouts
             WHERE chat_id=%s AND status='active' ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
         if active_row:
@@ -4419,7 +4421,7 @@ def legal_doc(content):
 
 def analyze_nutrition_report(chat, data_bytes, filename, mime):
     """Return a plain Russian analysis. No original uploaded file is stored."""
-    require_tier(chat,'comfort')
+    require_tier(chat,'max')
     if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
         raise ValueError('Сначала пройди анкету')
     if not personalization_consent(chat).get('profile'):
