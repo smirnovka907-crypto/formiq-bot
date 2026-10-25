@@ -205,6 +205,44 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(fake.search.call_count,1)
         self.assertEqual(fake.food_by_id.call_count,2)
 
+    def test_food_preparation_prevents_cooked_raw_provider_mismatch(self):
+        """Different hydration yields different macros per cooked/raw gram."""
+        self.assertEqual(self.m.food_preparation_state('Рис сухой'),'raw')
+        self.assertEqual(self.m.food_preparation_state('Рис отварной'),'cooked')
+        self.assertEqual(self.m.food_preparation_state('Сырники'),None)
+        self.assertIsNone(self.m.food_preparation_state('Рис'))
+        self.m.save_onboarding(self.chat,self.body())
+        result=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'Рис сухой','grams':100},
+                     {'name':'Рис вареный','grams':200}]})
+        items=result['meals'][0]['items']
+        from unittest.mock import Mock
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_ONLY'
+        servings=[{'serving_id':'13','description':'100 граммов','grams':100,
+                   'per_serving':{'kcal':350,'protein_g':7,'fat_g':2,'carbs_g':76}}]
+        raw={'food_id':'42','name':'Рис сухой','servings':servings}
+        cooked={'food_id':'43','name':'Рис отварной','servings':servings}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','offline'), \\
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','offline'), \\
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            fake.food_by_id.return_value=cooked
+            with self.assertRaisesRegex(ValueError,'Сырой и приготовленный'):
+                self.m.food_catalog_attach(self.chat,
+                    {'id':items[0]['id'],'food_id':'43','serving_id':'13'})
+            fake.food_by_id.return_value=raw
+            with self.assertRaisesRegex(ValueError,'Сырой и приготовленный'):
+                self.m.food_catalog_attach(self.chat,
+                    {'id':items[1]['id'],'food_id':'42','serving_id':'13'})
+            with self.connect() as conn:
+                linked=conn.execute("""SELECT COUNT(*) FROM manual_food_items
+                    WHERE chat_id=%s AND source_food_id IS NOT NULL""",
+                    (self.chat,)).fetchone()[0]
+                self.assertEqual(linked,0)
+            matched=self.m.food_catalog_attach(self.chat,
+                {'id':items[0]['id'],'food_id':'42','serving_id':'13'})
+            self.assertEqual(matched['nutrients']['kcal'],350.0)
+
     def test_fatsecret_link_cannot_override_user_edit_while_provider_responds(self):
         from unittest.mock import Mock
         self.m.save_onboarding(self.chat,self.body())
