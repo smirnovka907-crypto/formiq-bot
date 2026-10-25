@@ -578,7 +578,7 @@ function progress(){
   '<div class="chart-block fq-empty-chart" role="status">Пока нет завершённых подходов с записанным весом.</div>';
  const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>По записям подходов</small></div>'+chart+'</section>';
  const lastWeight=weightHistory[0];
- const showMeasure=(row)=>new Date(row.date).toLocaleString('ru-RU',{timeZone:state?.metrics?.timezone||deviceZone(),day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+ const showMeasure=(row)=>new Date(typeof row==='string'?row:row.date).toLocaleString('ru-RU',{timeZone:state?.metrics?.timezone||deviceZone(),day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
  const additions=lastWeight?Object.entries({body_fat_pct:'Жир, %',muscle_mass_kg:'Мышцы, кг',body_water_pct:'Вода, %',visceral_fat:'Висцеральный жир',bmr_kcal:'Базовый обмен, ккал',bmi:'ИМТ'})
   .filter(([key])=>lastWeight[key]!=null).map(([key,label])=>'<span>'+esc(label)+': '+esc(lastWeight[key])+'</span>').join(' · '):'';
  const weightPoints=weightHistory.slice(0,30).reverse().map(x=>({weight:x.weight_kg,date:new Intl.DateTimeFormat('sv-SE',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(x.date))}));
@@ -799,10 +799,13 @@ app.addEventListener('click',async e=>{
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
   const saved=await send('onboarding',payload);
   if(saved){
-   for(const entry of [...pendingPeriods]){
-    try{await request('period_save',{start:entry.start,end:entry.end});pendingPeriods=pendingPeriods.filter(p=>p.id!==entry.id)}
-    catch(ex){error='Анкета сохранена, но даты календаря не записаны: '+ex.message;draw();return}
+   if(onboard.sex==='female'){
+    for(const entry of [...pendingPeriods]){
+     try{await request('period_save',{start:entry.start,end:entry.end});pendingPeriods=pendingPeriods.filter(p=>p.id!==entry.id)}
+     catch(ex){error='Анкета сохранена, но даты календаря не записаны: '+ex.message;draw();return}
+    }
    }
+   pendingPeriods=[];
    onboardOpen=false;onboard=null;onboardErrors={};periodEntries=null;view='home';
    profileNotice='';error='';draw();window.scrollTo(0,0);
   }
