@@ -162,7 +162,7 @@ class V5StagingContract(unittest.TestCase):
         limits = {'affected':['knee']}
         replacements = {
             'db': conn, 'profile': p, 'health_profile': limits, 'ready': None,
-            'tier_for': 'max', 'has_agreement': True, 'metrics': {},
+            'tier_for': 'max', 'has_agreement': True, 'metrics': {'age':34,'height_cm':181,'weight_kg':82},
             'ai_state': (False, False), 'ai_quota': 10,
             'personalization_consent': {'profile':False,'health':False,'cycle':False},
             'history_local_zone': timezone.utc,
