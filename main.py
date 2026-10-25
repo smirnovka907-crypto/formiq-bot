@@ -2466,12 +2466,21 @@ def confirm_delete(chat, mid=None):
 
 
 def delete_all(chat, mid=None):
+    # ONLY an explicitly owner-confirmed /delete_me path calls this function.
+    # Disconnecting an integration or editing the profile never erases history.
     with db() as c:
-        for table in ('feedback_items','feedback_drafts','user_agreements','demo_tiers',
-                      'scheduled_sessions','custom_programs','cardio_sessions','profile_metrics',
+        c.execute('SELECT pg_advisory_xact_lock(%s)', (chat,))
+        # Fixed server-owned table names; keep in sync with additive schemas.
+        # manual_food_items is deleted through manual_food_meals ON DELETE CASCADE.
+        for table in ('fatsecret_oauth_pending','fatsecret_user_connections',
+                      'fatsecret_import_refs','garmin_metric_events',
+                      'garmin_authorized_identities','manual_food_meals',
+                      'body_measurements','feedback_items','feedback_drafts',
+                      'user_agreements','demo_tiers','scheduled_sessions',
+                      'custom_programs','cardio_sessions','profile_metrics',
                       'health_limits','profile_health_notes','menstrual_periods',
-                      'ai_personalization_consents',
-                      'profile_equipment','workouts','training_cycles','pending_inputs',
+                      'ai_personalization_consents','profile_equipment',
+                      'workouts','training_cycles','pending_inputs',
                       'premium_access','rest_timers','profiles','ai_messages',
                       'ai_preferences','ai_usage'):
             c.execute(f'DELETE FROM {table} WHERE chat_id=%s', (chat,))
