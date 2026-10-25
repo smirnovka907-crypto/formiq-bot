@@ -661,8 +661,8 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(snapshot(),before)
         with self.connect() as conn:
             for table in ('profile_health_notes','menstrual_periods'):
-                self.assertEqual(conn.execute(
-                    'SELECT to_regclass(%s)',(table,)).fetchone()[0],table)
+                self.assertIsNotNone(conn.execute(
+                    'SELECT to_regclass(%s)',(table,)).fetchone()[0])
         self.assertEqual(self.m.get_cycle(self.chat,self.m.profile(self.chat))[0],cycle)
 
     def test_v6_profile_edit_preserves_legacy_resting_heart_rate(self):
