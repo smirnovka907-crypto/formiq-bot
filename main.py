@@ -3814,7 +3814,9 @@ def food_parse(body):
     text=body.get('text')
     if not isinstance(text,str) or not 2<=len(text.strip())<=2000:
         raise ValueError('Опиши продукты обычным текстом (до 2000 символов)')
-    parts=[part.strip(' .\t') for part in re.split(r'[,;\n]+',text) if part.strip()]
+    # A comma between digits is a decimal separator (65,5 g), not a new
+    # product; all other commas, semicolons and newlines separate products.
+    parts=[part.strip(' .\t') for part in re.split(r'(?<!\d),|,(?!\d)|[;\n]+',text) if part.strip()]
     if len(parts)>30:
         raise ValueError('Максимум 30 продуктов за один ввод')
     recognized,manual=[],[]
