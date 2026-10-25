@@ -3459,8 +3459,13 @@ def period_history(chat):
         gaps=[(last[index+1]-last[index]).days for index in range(2)]
         if all(21<=gap<=35 for gap in gaps) and abs(gaps[1]-gaps[0])<=7:
             next_on=last[-1]+timedelta(days=round(sum(gaps)/2))
-            prediction={'date':next_on.isoformat(),
-                        'note':'Только приблизительная оценка по истории. Не медицинский прогноз.'}
+            today=datetime.now(timezone.utc).date()
+            # A past estimate is NOT a "next" period. A stale history is not
+            # sufficient for a current prediction; never repeatedly project
+            # old averages into an assumed diagnosis or future certainty.
+            if today<=next_on<=today+timedelta(days=70):
+                prediction={'date':next_on.isoformat(),
+                            'note':'Только приблизительная оценка по истории. Не медицинский прогноз.'}
     return {'periods':periods,'next_period':prediction}
 
 
