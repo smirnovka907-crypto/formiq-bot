@@ -99,7 +99,7 @@ function onboardForm(){
      '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
       button('Уточнить для Yandex AI','onboard-ai-clarify'):
       '<p class="input-note">Проверь сведения перед применением.</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
-  onboardError('description'));
+  onboardError('description')+onboardError('clarification'));
  const legal=block('<h2>Подтверждения</h2>'+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
   '<p class="input-note"><a href="/mini/yandex-privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность Yandex AI</a>. Согласие добровольное, его можно отозвать здесь.</p>'+
@@ -124,7 +124,8 @@ function onboardingPayload(){
   else mm[key]=value;
  }
  const description=String(d.description||'').trim();
- if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI или продолжи без разбора.';
+ if(d.aiResult?.needs_clarification)errs.clarification='Ответь на уточняющий вопрос Yandex AI перед сохранением анкеты.';
+ else if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI перед сохранением.';
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
