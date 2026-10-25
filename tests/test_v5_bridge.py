@@ -380,6 +380,32 @@ class V5StagingContract(unittest.TestCase):
                     self.mod.save_metrics(777, {'metrics': metrics})
                 conn.assert_not_called()
 
+    def test_equipment_ai_rejects_unsigned_or_unconsented_model_transfer(self):
+        """Per-request acknowledgement alone cannot authorize Yandex transmission."""
+        from urllib.error import URLError
+        from unittest.mock import patch
+        import urllib.request
+        payload={'action':'equipment_analyze','adult':True,
+                 'privacy_ack':True,'text':'У меня гантели и коврик'}
+        with patch.object(self.mod,'mini_auth',return_value=777), \
+             patch.object(self.mod,'YANDEX_KEY','test-key'), \
+             patch.object(self.mod,'FOLDER_ID','test-folder'), \
+             patch.object(self.mod,'personalization_consent',
+                 return_value={'profile':False,'health':False,'cycle':False}) as consent, \
+             patch.object(urllib.request,'urlopen',
+                 side_effect=URLError('offline synthetic test')) as outbound:
+            blocked=self.client.post('/mini/api',json=payload)
+            self.assertEqual(blocked.status_code,400,blocked.get_json())
+            self.assertIn('согласие',blocked.get_json()['error'])
+            outbound.assert_not_called()
+            consent.return_value={'profile':True,'health':False,'cycle':False}
+            attempted=self.client.post('/mini/api',json=payload)
+            self.assertEqual(attempted.status_code,400,attempted.get_json())
+            outbound.assert_called_once()
+        with patch.object(self.mod,'mini_auth',return_value=None):
+            unauthorized=self.client.post('/mini/api',json=payload)
+            self.assertEqual(unauthorized.status_code,401)
+
     def test_health_ai_requires_explicit_server_side_consent(self):
         """Signed Telegram plus the per-request opt-in cannot bypass stored consent."""
         from urllib.error import URLError
