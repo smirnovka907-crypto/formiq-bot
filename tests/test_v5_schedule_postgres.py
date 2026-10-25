@@ -441,6 +441,58 @@ class SchedulePostgresTests(unittest.TestCase):
             self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',
                 {'dailies':[{'userId':'OFFLINE_GARMIN_1','summaryId':'bad','steps':9}]})
 
+    def test_garmin_read_day_does_not_expose_unconnected_foreign_or_revoked_data(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        day='2026-10-18'
+        offline=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertFalse(offline['connected'])
+        self.assertEqual(offline['dailies'],[])
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+                 (chat_id,provider_user_id,health_consent_at)
+                 VALUES(%s,'OFFLINE_GARMIN_TEST',NOW())""",(self.chat,))
+        supplied={'dailies':[{'userId':'OFFLINE_GARMIN_TEST','summaryId':'day01',
+                 'calendarDate':day,'steps':9000,'activeKilocalories':300,
+                 'totalKilocalories':2200,'restingHeartRateInBeatsPerMinute':55}],
+                 'activities':[{'userId':'OFFLINE_GARMIN_TEST','summaryId':'run01',
+                 'startTimeInSeconds':1792300000,'durationInSeconds':2400,
+                 'activityType':'running','activeKilocalories':240}]}
+        self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_TEST',supplied)
+        reading=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertTrue(reading['connected'])
+        self.assertIsNotNone(reading['last_sync_at'])
+        self.assertEqual(reading['dailies'][0]['values']['steps'],9000)
+        self.assertEqual(reading['dailies'][0]['values']['active_calories_kcal'],300)
+        self.assertEqual(reading['dailies'][0]['values']['total_daily_calories_kcal'],2200)
+        self.assertEqual(reading['dailies'][0]['values']['resting_heart_rate_bpm'],55)
+        self.assertNotIn('provider_user_id',str(reading))
+        self.assertEqual(len(reading['activities']),1)
+        self.assertNotIn('total_daily_calories_kcal',reading['activities'][0]['values'])
+        other=self.m.garmin_connected_day(self.chat+1,{'date':day})
+        self.assertFalse(other['connected'])
+        self.assertEqual(other['activities'],[])
+        empty=self.m.garmin_connected_day(self.chat,{'date':'2026-10-17'})
+        self.assertTrue(empty['connected'])
+        self.assertEqual(empty['dailies'],[])
+        with self.connect() as conn:
+            count_before=conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+                  WHERE chat_id=%s""",(self.chat,)).fetchone()[0]
+        self.assertFalse(self.m.garmin_disconnect_owner(self.chat+1)['connected'])
+        self.assertFalse(self.m.garmin_disconnect_owner(self.chat)['connected'])
+        revoked=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertFalse(revoked['connected'])
+        self.assertEqual(revoked['dailies'],[])
+        with self.connect() as conn:
+            count_after=conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+                  WHERE chat_id=%s""",(self.chat,)).fetchone()[0]
+        self.assertEqual(count_before,count_after,'Disconnect must not erase private history')
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_TEST',supplied)
+        for bad in ('bad-date','2026-02-30'):
+            with self.assertRaises(ValueError):
+                self.m.garmin_connected_day(self.chat,{'date':bad})
+
     def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
         p,cycle,calendar=self.save((0,2,4))
         slot=calendar[0]
