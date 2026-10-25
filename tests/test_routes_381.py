@@ -77,18 +77,27 @@ class RouteTests(unittest.TestCase):
         self.assertIn(b'fq-version-footer',css.data)
 
     def test_exercise_photo_is_present_and_specific(self):
+        app=importlib.import_module('main')
         client=self.app.test_client()
-        photos=('chair_squat','partial_squat','wall_push','incline_push','bridge','bird','step','calf','wall_plank','side_step','hip_hinge','dead_bug','leg_press','lat_pull','chest_press','seated_row','db_press','leg_curl','leg_ext','cable_row')
-        for key in photos:
+        self.assertGreaterEqual(len(app.EXERCISE_PHOTOS),10)
+        # Clear, movement-matched photos only; preserve an honest placeholder
+        # for unsupported exercises instead of showing another exercise.
+        for key in app.EXERCISE_PHOTOS:
             r=client.get('/mini/technique/'+key)
             self.assertEqual(r.status_code,200)
             self.assertIn(b'class="fq-exercise-photo"',r.data)
-            self.assertIn(b'<img src="https://',r.data)
+            self.assertIn(b'<img src="https://raw.githubusercontent.com/yuhonas/',r.data)
             self.assertIn(b'alt=',r.data)
+            self.assertIn(b'CC BY-SA 4.0',r.data)
+        for key in ('chair_squat','calf','wall_push','partial_squat','bird'):
+            r=client.get('/mini/technique/'+key)
+            self.assertEqual(r.status_code,200)
+            self.assertNotIn(b'class="fq-exercise-photo"',r.data)
+            self.assertNotIn(b'<img src=',r.data)
+            self.assertIn(b'fq-photo-pending',r.data)
         unknown=client.get('/mini/technique/unknown_fake')
         self.assertEqual(unknown.status_code,404)
-        self.assertEqual(len(importlib.import_module('main').EXERCISE_PHOTOS),20)
-        self.assertGreaterEqual(len(importlib.import_module('main').EX),95)
+        self.assertGreaterEqual(len(app.EX),95)
 
     def test_version(self):
         self.assertEqual(self.app.test_client().get('/').status_code, 200)
