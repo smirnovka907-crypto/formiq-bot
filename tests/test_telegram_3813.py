@@ -25,7 +25,7 @@ class Telegram3813(unittest.TestCase):
         content = welcome_jpeg()
         self.assertTrue(content.startswith(b'\xff\xd8\xff'))
         image = Image.open(BytesIO(content))
-        self.assertEqual(image.size, (800, 533))
+        self.assertEqual(image.size, (1024, 1536))
         self.assertLess(len(content), 5_000_000)
         self.assertEqual(
             self.botmod.APP.test_client().get('/mini/welcome-cover.jpg').data,
