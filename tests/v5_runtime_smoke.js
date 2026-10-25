@@ -497,7 +497,13 @@ async function run(){
  assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
  const ownerCoach=createClient(true,{tier:'max',
     aiPermissions:{profile:true,health:true,cycle:false}});
-  await settle();await ownerCoach.click({nav:'food'});await settle();
+  await settle();
+  assert.match(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
+    'Trainer AI should expose a recommendation below the four-week plan');
+  await ownerCoach.click({cmd:'ai-tip-training'});await settle();
+  assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
+    x.purpose==='training'));
+  await ownerCoach.click({nav:'food'});await settle();
   assert.match(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
   await ownerCoach.click({cmd:'ai-tip-nutrition'});await settle();
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
