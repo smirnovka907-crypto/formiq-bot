@@ -791,6 +791,11 @@ function food(){
       button('Убрать из FORMIQ','fatsecret-entry-unlink',false,'data-id="'+esc(e.external_id)+'"'):'')+'</div>').join('')+
    ((fsEntries.entries||[]).length?button('Импортировать день в FORMIQ','fatsecret-import-day',false,fatsecretBusy?'disabled':''):''):'')+
   '</section>':'';
+ const nutritionCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
+  '<section class="surface"><h2>Совет Yandex AI по рациону</h2>'+
+  '<p class="input-note">Только твои реальные продукты за выбранную дату. Без подтверждённой базы КБЖУ не рассчитываем.</p>'+
+  button(aiTipBusy?'Анализируем…':'Получить совет по рациону','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
+  (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>':'';
  const reportAllowed=state?.ai_personalization?.profile===true;
  const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
   '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
@@ -800,7 +805,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function previewPanel(){
@@ -983,7 +988,8 @@ app.addEventListener('click',async e=>{
   aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
   try{
    const result=await request('ai_personalized_guidance',{
-      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal'});
+      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal',
+      ...(purpose==='nutrition'?{date:foodDate}:{})});
    if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
    else aiNutritionTip=result.advice;
   }catch(ex){error=ex.message||'Не удалось получить совет Yandex AI'}
