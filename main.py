@@ -4510,6 +4510,24 @@ def mini_body_weight_report():
         return jsonify(ok=False,error='Не удалось прочитать отчёт весов'),500
 
 
+def mini_manual_measurement(chat,body):
+    """Owner-only manual body-weight entry; never overwrites imported sources."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала пройди анкету')
+    day=food_day(body.get('date'))
+    value=onboarding_number(body.get('weight_kg'),'массу тела',20,400)
+    tz=metrics(chat).get('timezone') or 'Europe/Moscow'
+    local_noon=datetime(day.year,day.month,day.day,12,0,tzinfo=ZoneInfo(tz))
+    measured_at=local_noon.astimezone(timezone.utc)
+    with db() as conn:
+        conn.execute("""INSERT INTO body_measurements(chat_id,measured_at,source,weight_kg)
+            VALUES(%s,%s,'manual',%s)
+            ON CONFLICT(chat_id,measured_at,source)
+            DO UPDATE SET weight_kg=EXCLUDED.weight_kg""",
+            (chat,measured_at,value))
+    return {'measurements':mini_body_weight_history(chat)}
+
+
 def mini_body_weight_history(chat):
     with db() as conn:
         rows=conn.execute("""SELECT measured_at,weight_kg,body_fat_pct,muscle_mass_kg,
@@ -4865,6 +4883,8 @@ def mini_api():
             payload = {'ok': True, **food_change(chat,data,delete=True)}
         elif action == 'body_weight_history':
             payload = {'ok': True, 'measurements':mini_body_weight_history(chat)}
+        elif action == 'body_measurement_manual':
+            payload = {'ok': True, **mini_manual_measurement(chat,data)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'ai_personalized_guidance':
