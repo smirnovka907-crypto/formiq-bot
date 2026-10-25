@@ -367,9 +367,9 @@ async function run(){
    assert.equal(localCalendar.requests.find(x=>x.action==='history_month').month,expected,'Calendar starts in the saved user timezone');
   }
   assert.match(ux.root.innerHTML,/Тренировочный план/);
-  await ux.click({nav:'progress'});
-  assert.match(ux.root.innerHTML,/Тренировочный план/);
   assert.match(ux.root.innerHTML,/week-range/);
+  await ux.click({nav:'progress'});
+  assert.doesNotMatch(ux.root.innerHTML,/Тренировочный план/);
   await ux.click({nav:'profile'});
   
   assert.equal((ux.root.innerHTML.match(/data-onboard-weekday="[0-6]"/g)||[]).length,7);
