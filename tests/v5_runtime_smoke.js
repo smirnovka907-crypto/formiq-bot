@@ -71,6 +71,23 @@ function createClient(auth=true,shared={}){
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='food_nutrition_day'){
+    const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
+    const registered=entries.filter(x=>x.nutrition_source==='fatsecret');
+    const full=!!entries.length&&registered.length===entries.length;
+    const kcal=registered.length*266;
+    response={ok:true,source:'fatsecret',date:p.date,total_items:entries.length,
+      resolved_items:registered.length,complete:full,partial:!full,
+      totals:full?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
+      known_subtotal:registered.length?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
+      meals:(shared.foodMeals||[]).map(m=>({type:m.type,total_items:m.items.length,
+       resolved_items:m.items.filter(i=>i.nutrition_source==='fatsecret').length,
+       complete:m.items.every(i=>i.nutrition_source==='fatsecret'),
+       known_subtotal:m.items.some(i=>i.nutrition_source==='fatsecret')?
+          {kcal,protein_g:9.1,fat_g:4.9,carbs_g:46.9}:null})),
+      items:entries.map(x=>({id:x.id,source:x.nutrition_source||null,
+        nutrition:x.nutrition_source?{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}:null}))};
+   }
    else if(p.action==='food_catalog_lookup')response={ok:true,source:'fatsecret',candidates:[{food_id:'42',name:'Овсянка сухая',servings:[{
      serving_id:'13',description:'100 г',grams:100,per_serving:{kcal:380,protein_g:13,fat_g:7,carbs_g:67}
    }]}]};
@@ -353,6 +370,23 @@ async function run(){
  await catalogClient.click({cmd:'food-catalog-link',foodId:'42',servingId:'13'});
  assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_attach'&&x.id===202));
  assert.match(catalogClient.root.innerHTML,/266.*ккал/,'Only verified serving may produce KБЖУ');
+ await catalogClient.click({cmd:'food-nutrition-day'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_nutrition_day'));
+ assert.match(catalogClient.root.innerHTML,/КБЖУ за день/,'Full day sum only for completely verified day');
+ assert.match(catalogClient.root.innerHTML,/266.*ккал/);
+ const mixedClient=createClient(true,{foodCatalogAvailable:true,
+  foodMeals:[{id:84,type:'breakfast',items:[
+    {id:202,name:'Овсянка сухая',grams:70,nutrition_source:'fatsecret'},
+    {id:203,name:'Банан без базы',grams:120}]}]});
+ await settle();await mixedClient.click({nav:'food'});await settle();
+ await mixedClient.click({cmd:'food-nutrition-day'});
+ assert.match(mixedClient.root.innerHTML,/Данные за день неполные/);
+ assert.match(mixedClient.root.innerHTML,/1 из 2 продуктов/);
+ assert.doesNotMatch(mixedClient.root.innerHTML,/КБЖУ за день:/,'Partial sum is never full day total');
+ const unconfigured=createClient(true,{foodCatalogAvailable:false});
+ await settle();await unconfigured.click({nav:'food'});await settle();
+ assert.doesNotMatch(unconfigured.root.innerHTML,/Рассчитать КБЖУ за день/);
+
  const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
