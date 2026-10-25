@@ -3651,6 +3651,73 @@ def fatsecret_user_diary(chat,body, *, internal=False):
 
 
 
+
+def fatsecret_user_import(chat,body):
+    """Import references from this owner's live delegated diary, idempotently.
+
+    Only food_entry_id may persist from the provider. The manually selected
+    day belongs to the user, not a stored provider diary copy.
+    """
+    day=food_day(body.get('date'))
+    fresh,connection=fatsecret_user_diary(chat,{'date':day.isoformat()},internal=True)
+    ids=[entry['external_id'] for entry in fresh['entries']]
+    if len(ids)>150 or any(not isinstance(i,str) or
+         not i.isdecimal() or len(i)>40 for i in ids):
+        raise ValueError('FatSecret вернул недопустимый идентификатор записи')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        valid=conn.execute("""SELECT 1 FROM fatsecret_user_connections
+            WHERE chat_id=%s AND access_token_enc=%s AND access_secret_enc=%s
+            FOR UPDATE""",(chat,connection[0],connection[1])).fetchone()
+        if not valid:
+            raise ValueError('FatSecret отключён или переподключён во время импорта')
+        for eid in ids:
+            conn.execute("""INSERT INTO fatsecret_import_refs
+                (chat_id,eaten_on,external_id) VALUES(%s,%s,%s)
+                ON CONFLICT(chat_id,eaten_on,external_id) DO NOTHING""",
+                (chat,day,eid))
+        count=conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
+            WHERE chat_id=%s AND eaten_on=%s""",(chat,day)).fetchone()[0]
+    return {'date':day.isoformat(),'imported_ids':ids,'imported_count':count,
+        'notice':'Ссылки на записи FatSecret сохранены без копирования пищевой ценности.'}
+
+
+def fatsecret_user_import_edit(chat,body,delete=False):
+    """Only save the FORMIQ owner's own corrections, or unlink a reference."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    external_id=body.get('external_id')
+    if not isinstance(external_id,str) or not external_id.isdecimal() or len(external_id)>40:
+        raise ValueError('Выбери запись FatSecret')
+    if not delete:
+        name=body.get('name_override')
+        meal=body.get('meal_override')
+        if name is not None and (not isinstance(name,str)
+                or not 2<=len(name.strip())<=120):
+            raise ValueError('Название исправления: от 2 до 120 символов')
+        name=name.strip() if name is not None else None
+        if meal not in (None,'breakfast','lunch','dinner','snack'):
+            raise ValueError('Выбери приём пищи')
+    with db() as conn:
+        if delete:
+            row=conn.execute("""DELETE FROM fatsecret_import_refs
+                WHERE chat_id=%s AND eaten_on=%s AND external_id=%s
+                RETURNING external_id""",(chat,day,external_id)).fetchone()
+        else:
+            row=conn.execute("""UPDATE fatsecret_import_refs
+                SET user_name_override=%s,user_meal_override=%s,updated_at=NOW()
+                WHERE chat_id=%s AND eaten_on=%s AND external_id=%s
+                RETURNING external_id""",
+                (name,meal,chat,day,external_id)).fetchone()
+    if not row:
+        raise ValueError('Импортированная запись не найдена')
+    return {'date':day.isoformat(),'external_id':external_id,
+        'imported':not delete,
+        'notice':'Изменены только данные FORMIQ; исходная запись FatSecret не затронута.'}
+
+
+
 def food_day(raw):
     if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
         raise ValueError('Укажи дату питания')
@@ -5556,6 +5623,12 @@ def mini_api():
             payload = {'ok':True, **fatsecret_user_disconnect(chat)}
         elif action == 'fatsecret_diary_day':
             payload = {'ok':True, **fatsecret_user_diary(chat,data)}
+        elif action == 'fatsecret_diary_import':
+            payload = {'ok':True, **fatsecret_user_import(chat,data)}
+        elif action == 'fatsecret_diary_import_edit':
+            payload = {'ok':True, **fatsecret_user_import_edit(chat,data)}
+        elif action == 'fatsecret_diary_import_unlink':
+            payload = {'ok':True, **fatsecret_user_import_edit(chat,data,delete=True)}
         elif action == 'food_parse':
             payload = {'ok': True, **food_parse(data)}
         elif action == 'food_nutrition_day':
