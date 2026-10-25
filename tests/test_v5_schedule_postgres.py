@@ -959,6 +959,33 @@ class SchedulePostgresTests(unittest.TestCase):
                     {'purpose':'nutrition','date':'2026-10-18'})
             self.assertEqual(len(submitted),1)
 
+    def test_yandex_nutrition_discards_reply_after_concurrent_diary_edit(self):
+        """A second-device edit during provider HTTP must invalidate old advice."""
+        import io,json
+        profile=self.body()
+        profile['ai_profile_consent']=True
+        self.m.save_onboarding(self.chat,profile)
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'Рис сухой','grams':80}]})
+        calls=[]
+        def slow_reply(request,timeout=None):
+            calls.append(json.loads(request.data))
+            self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+                'items':[{'name':'Творог','grams':150}]})
+            return io.BytesIO(json.dumps({'result':{'alternatives':[{
+                'message':{'text':'Совет по устаревшим продуктам.'}}]}}).encode())
+        with patch.object(self.m,'YANDEX_KEY','offline-only'), \
+             patch.object(self.m,'FOLDER_ID','offline-only'), \
+             patch.object(self.m.urllib.request,'urlopen',side_effect=slow_reply):
+            with self.assertRaisesRegex(ValueError,'изменился во время анализа'):
+                self.m.ai_personalized_guidance(self.chat,
+                    {'purpose':'nutrition','date':'2026-10-18'})
+        self.assertEqual(len(calls),1)
+        products=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual([x['name'] for x in products['meals'][0]['items']],
+                         ['Рис сухой','Творог'],
+                         'Reject stale AI, not the real nutrition history')
+
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
         by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
