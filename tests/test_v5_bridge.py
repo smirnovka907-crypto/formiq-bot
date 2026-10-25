@@ -437,7 +437,12 @@ class V5StagingContract(unittest.TestCase):
         from unittest.mock import MagicMock
         conn = MagicMock()
         conn.__enter__.return_value = conn
-        conn.execute.return_value.fetchone.return_value = None
+        def execute(query, *_args):
+            outcome=MagicMock()
+            outcome.fetchone.return_value=(321,) if 'INSERT INTO training_cycles' in query else None
+            outcome.fetchall.return_value=[]
+            return outcome
+        conn.execute.side_effect=execute
         payload = {
             'answers': {'goal':'general', 'level':'some', 'days':'3', 'weekdays':[0,2,4],
                 'equipment':'home', 'age_group':'adult', 'minutes':'40'},
@@ -455,12 +460,15 @@ class V5StagingContract(unittest.TestCase):
             query, params = call.args
             self.assertIn(777, params)
             self.assertNotIn('DELETE', query)
-            self.assertNotIn('workouts', query)
-            self.assertNotIn('cardio_sessions', query)
+            self.assertFalse(query.lstrip().upper().startswith(('UPDATE WORKOUTS',
+                'INSERT INTO WORKOUTS', 'UPDATE CARDIO_SESSIONS',
+                'INSERT INTO CARDIO_SESSIONS')))
         health_call = next(call for call in calls if 'INSERT INTO health_limits' in call.args[0])
         self.assertEqual(health_call.args[1], (777, '["knee"]', 2, 'stable', False, True))
         self.assertTrue(any('INSERT INTO profile_metrics' in call.args[0] for call in calls))
         self.assertTrue(any('UPDATE profiles SET' in call.args[0] for call in calls))
+        self.assertTrue(any('INSERT INTO training_cycles' in call.args[0] for call in calls))
+        self.assertTrue(any('INSERT INTO scheduled_sessions' in call.args[0] for call in calls))
 
         payload['health_profile']['pain_score'] = 11
         with patch.object(self.mod, 'db') as database:
