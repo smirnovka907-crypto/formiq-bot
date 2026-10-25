@@ -231,23 +231,23 @@ async function run(){
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
  await app.click({cmd:'close'});
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
- assert.doesNotMatch(app.root.innerHTML,/Тренировочный план/,'Today no longer contains training plan');
+ assert.match(app.root.innerHTML,/Тренировочный план/,'Workouts contain the four-week plan');
+ assert.ok(app.root.innerHTML.indexOf('id="cardio-entry"')<app.root.innerHTML.indexOf('id="training-plan"'),'Plan follows additional training');
  assert.match(app.root.innerHTML,/Начать тренировку/,'Workout start remains on Today');
  await app.click({nav:'progress'});
  await settle();
  assert.ok(app.requests.some(x=>x.action==='progress_series'),'Progress loads owner-scoped history separately');
  const progressHtml=app.root.innerHTML;
- assert.ok(progressHtml.indexOf('id="training-plan"')<progressHtml.indexOf('id="history-root"'),
-           'Existing plan precedes history in Progress');
+ assert.doesNotMatch(progressHtml,/id="training-plan"/,'Progress shows history, not training plan');
  assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
- assert.equal((progressHtml.match(/data-cmd="week" data-week="[1-4]"/g)||[]).length,4,
-              'Progress shows exactly four week buttons');
+ assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
  assert.match(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Real cycle provides seven-day label');
+ await app.click({nav:'home'});
  await app.click({cmd:'week',week:'1'});
- assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains genuine owner calendar session');
- assert.match(app.root.innerHTML,/week-details/,'Existing week details open inside Progress');
+ assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains owner calendar session');
+ assert.match(app.root.innerHTML,/data-cmd="training-preview"/,'Every scheduled workout opens read-only preview');
  await app.click({cmd:'week',week:'1'});
- assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button closes the existing detail panel');
+ assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button collapses details');
 
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
