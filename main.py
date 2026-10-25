@@ -2773,15 +2773,23 @@ def analyze_health_description(chat, body):
     """
     # Server-side, per-request opt-in: a forged authenticated Mini App
     # action must not send health notes to Yandex without separate consent.
-    if body.get('ai_consent') is not True or not personalization_consent(chat)['health']:
-        raise ValueError('Для передачи описания сначала сохрани согласие на Yandex AI в анкете')
-    if body.get('adult') is not True or body.get('privacy_ack') is not True:
-        raise ValueError('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности')
+    if body.get('ai_consent') is not True or body.get('privacy_ack') is not True:
+        raise ValueError('Для передачи текста подтверди Yandex AI и ознакомление с политикой конфиденциальности')
+    # A freshly completed questionnaire is not needed just to ask one optional
+    # question. Telegram authentication + fresh opt-in for this very request
+    # authorizes the temporary text; it is not persisted on the server.
+    stored = personalization_consent(chat)['health']
+    if not stored:
+        age = body.get('age')
+        if body.get('onboarding_preview') is not True or type(age) is not int or not 18 <= age <= 100:
+            raise ValueError('Для Yandex AI выбери согласие в анкете и укажи возраст 18+')
+    elif body.get('adult') is not True:
+        raise ValueError('Перед анализом подтверди возраст 18+')
     raw=body.get('text')
     if not isinstance(raw,str) or not 8<=len(raw.strip())<=800:
         raise ValueError('Опиши особенности своими словами (8–800 символов)')
     if not YANDEX_KEY or not FOLDER_ID:
-        raise ValueError('ИИ временно недоступен. Можно указать ограничения вручную')
+        raise ValueError('Yandex AI временно недоступен. Можно указать ограничения вручную')
     safe_regions=', '.join(LIMIT_LABELS)
     system=(
         'Ты извлекаешь из СЛОВ ПОЛЬЗОВАТЕЛЯ информацию, нужную для безопасной адаптации спортивной программы, '
@@ -2924,8 +2932,8 @@ def save_onboarding(chat,body):
     if not isinstance(raw_note,str) or len(raw_note)>800:
         raise ValueError('Описание здоровья: не более 800 символов')
     raw_note=raw_note.strip()
-    if raw_note and body.get('health_storage_consent') is not True:
-        raise ValueError('Подтверди сохранение описания здоровья')
+    if raw_note and (body.get('health_storage_consent') is not True or body.get('privacy') is not True):
+        raise ValueError('Для сохранения описания здоровья ознакомься с политикой конфиденциальности')
     # No automatic diagnosis: text alone cannot override existing health limits.
     # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
