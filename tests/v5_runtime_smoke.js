@@ -272,6 +272,9 @@ async function run(){
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
  assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
+ assert.match(app.root.innerHTML,/100 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/1 000 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/data-cmd="tier-select" data-tier="max"/);
  assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
  await app.click({nav:'home'});
