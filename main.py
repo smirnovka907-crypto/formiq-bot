@@ -32,6 +32,28 @@ from flask import Flask, request, abort, jsonify, send_file, make_response
 
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger('formiq')
+
+
+class _PrivateOAuthCallbackAccessLog(logging.Filter):
+    """Werkzeug must not log OAuth query params received via provider GET.
+
+    The provider controls the callback method and query. Avoid recording a
+    verifier, request token or state in ordinary application access logs.
+    This cannot control external reverse-proxy logging; never print them
+    elsewhere in FORMIQ either.
+    """
+    def filter(self, record):
+        content = str(record.msg)
+        if record.args:
+            # Werkzeug formats an HTTP request line as a logging argument.
+            content += ' ' + str(record.args)
+        if '/mini/fatsecret/callback' in content:
+            record.msg = 'FatSecret authorization callback (parameters redacted)'
+            record.args = ()
+        return True
+
+
+logging.getLogger('werkzeug').addFilter(_PrivateOAuthCallbackAccessLog())
 VERSION = '38.3.3'
 TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
 DATABASE_URL = os.environ['DATABASE_URL']
@@ -3571,8 +3593,16 @@ def fatsecret_user_diary(chat,body):
     # Only provider-approved IDs/access credentials may be retained long-term.
     # Names/macros remain in this authenticated response, not PostgreSQL/cache.
     with db() as conn:
-        conn.execute("""UPDATE fatsecret_user_connections SET last_sync_at=NOW()
-            WHERE chat_id=%s AND access_token_enc=%s""",(chat,row[0]))
+        # Disconnect/reconnect can happen while the provider request is in
+        # flight. Returning old user data after revocation is not acceptable.
+        # An exact encrypted-token match prevents a response from a replaced
+        # connection; RETURNING verifies the match actually existed.
+        still_connected=conn.execute("""UPDATE fatsecret_user_connections
+            SET last_sync_at=NOW()
+            WHERE chat_id=%s AND access_token_enc=%s AND access_secret_enc=%s
+            RETURNING chat_id""",(chat,row[0],row[1])).fetchone()
+    if not still_connected:
+        raise ValueError('FatSecret был отключён или переподключён во время загрузки. Повтори запрос')
     if len(normalized['entries'])>150:
         raise ValueError('Слишком много записей FatSecret за один день')
     entries=[]
