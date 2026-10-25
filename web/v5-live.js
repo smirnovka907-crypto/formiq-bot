@@ -627,7 +627,7 @@ function modalHTML(){
   button('Сохранить кардио','cardio',true)+button('Отмена','close');
  }
  if(modal==='mood')content=state?.metrics?.sex==='female'?
-  `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}`:
+  `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет ИИ при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
   `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
  if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
@@ -662,6 +662,16 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',onboardChanged);
+app.addEventListener('change',async e=>{
+ if(e.target?.id!=='period-ai-consent')return;
+ const wanted=e.target.checked===true;
+ try{
+  const result=await request('ai_personalization_set',{field:'cycle',enabled:wanted});
+  state.ai_personalization=result.consents;
+  aiTrainingTip='';
+ }catch(ex){periodError=ex.message||'Не удалось сохранить согласие';}
+ draw();
+});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
@@ -680,6 +690,28 @@ app.addEventListener('click',async e=>{
  if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
+  const field={'ai-profile-revoke':'profile','ai-health-revoke':'health','ai-cycle-revoke':'cycle'}[cmd];
+  try{
+   const result=await request('ai_personalization_set',{field,enabled:false});
+   state.ai_personalization=result.consents;
+   aiTrainingTip='';aiNutritionTip='';
+   profileNotice='Согласие отозвано. История тренировок и календарь сохранены.';
+  }catch(ex){profileNotice=ex.message||'Не удалось изменить согласие'}
+  draw();return;
+ }
+ if(cmd==='ai-tip-training'||cmd==='ai-tip-nutrition'||cmd==='ai-tip-discomfort'){
+  if(aiTipBusy)return;
+  aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
+  try{
+   const result=await request('ai_personalized_guidance',{
+      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal'});
+   if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
+   else aiNutritionTip=result.advice;
+  }catch(ex){error=ex.message||'Не удалось получить совет ИИ'}
+  finally{aiTipBusy=false;draw()}
+  return;
+ }
  if(cmd==='period-edit'){
   const id=Number(element.dataset.periodId),record=periodEntries?.find(x=>x.id===id);
   if(!record)return;
@@ -720,15 +752,17 @@ app.addEventListener('click',async e=>{
  if(cmd==='plan-open'||cmd==='plan-back'){view=cmd==='plan-open'?'plan':'home';error='';draw();window.scrollTo(0,0);return}
   if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
- if(cmd==='onboard-ai'){
+ if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
   if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
   if(!onboard.adult||!onboard.privacy){fail('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности.');return}
-  const txt=String(onboard.description||'').trim();
+  const original=String(onboard.description||'').trim();
+  const extra=cmd==='onboard-ai-clarify'?String(onboard.clarification||'').trim():'';
+  const txt=extra?original+'\nДополнительное пояснение пользователя: '+extra:original;
   if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
   const analyzedForm=onboard;
   const result=await send('health_analyze',{adult:true,privacy_ack:true,ai_consent:true,text:txt});
   if(result?.analysis){
-   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==txt||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
+   if(onboard!==analyzedForm||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
    }
    const a=result.analysis;onboard.limitation='yes';
@@ -736,7 +770,7 @@ app.addEventListener('click',async e=>{
    onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
    onboard.course=['stable','recent','worsening'].includes(a.symptom_course)?a.symptom_course:'';
    onboard.danger=a.danger_signs===true;onboard.cleared=false;
-   onboard.aiResult=a;onboard.aiReviewed=false;draw();
+   onboard.aiResult=a;onboard.aiReviewed=false;onboard.clarification='';draw();
   }return;
  }
  if(cmd==='onboard-save'){
@@ -799,6 +833,10 @@ app.addEventListener('click',async e=>{
  if(cmd==='close'){modal='';draw();return}
  if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
  if(cmd==='mood'){modal='mood';draw();return}
+ if(cmd==='start-severe'){
+  modal='';aiTrainingTip='При сильной боли или слабости лучше восстановление или пропуск тренировки. При выраженных или усиливающихся симптомах обратись за медицинской помощью.';
+  draw();return;
+ }
  if(cmd==='start-normal'||cmd==='start-tired'){modal='';await send('start',{mood:cmd==='start-normal'?'normal':'tired'});return}
  if(cmd==='record'){
   const val=document.getElementById('reps')?.value.trim()||'',kg=document.getElementById('weight')?.value.trim()||'';
