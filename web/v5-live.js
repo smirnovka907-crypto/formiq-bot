@@ -840,16 +840,31 @@ function previewPanel(){
 function exerciseCardPanel(){
  const x=exerciseDetails;
  if(!x)return '';
- return '<h2>'+esc(x.name)+'</h2>'+
-  '<div class="fq-exercise-illustration" role="img" aria-label="Иллюстрация пока недоступна">Иллюстрация техники появится после проверки прав</div>'+
-  '<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>'+
-  '<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>'+
-  '<h3>Техника выполнения</h3><ol>'+x.steps.map(step=>'<li>'+esc(step)+'</li>').join('')+'</ol>'+
-  '<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>'+
-  '<h3>Безопасные замены</h3><p>'+esc(x.substitutions?.map(y=>y.name).join(', ')||'Подбираются с учётом ограничений')+'</p>'+
-  '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
-  (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
-  button('Вернуться к тренировке','exercise-back',true);
+ const imageUrl=String(x.image_url||'');
+ // The server is authoritative, and this second allowlist guards mobile WebView
+ // against unexpected or injected remote URLs in archived workout responses.
+ const approved=/^https:\/\/raw\.githubusercontent\.com\/yuhonas\/free-exercise-db\/main\/exercises\/[A-Za-z0-9_-]+\/[01]\.jpg$/i.test(imageUrl)
+   && x.image_license_url==='https://creativecommons.org/licenses/by-sa/4.0/';
+ const photo=approved?
+  '<figure class="fq-exercise-photo"><img src="'+esc(imageUrl)+'" alt="Пример техники: '+esc(x.name)+'" loading="lazy" decoding="async" referrerpolicy="no-referrer">'+
+  '<figcaption>Иллюстрация · '+esc(x.image_credit||'Everkinetic · Free Exercise DB')+
+  ' · <a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener noreferrer">источник</a>'+
+  ' · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>. Без изменений.</figcaption></figure>':
+  '<div class="fq-exercise-illustration" role="note">Подтверждённого изображения для этого движения пока нет. Пользуйся текстовой инструкцией.</div>';
+ const steps=Array.isArray(x.steps)?x.steps.filter(y=>typeof y==='string'&&y.trim()):[];
+ const alternatives=Array.isArray(x.substitutions)?x.substitutions.filter(y=>y&&typeof y.name==='string'):[];
+ return '<h2>'+esc(x.name)+'</h2>'+photo+
+   (x.muscles?'<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>':'')+
+   (x.start_position?'<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>':'')+
+   '<h3>Техника выполнения</h3>'+
+   (steps.length?'<ol>'+steps.map(step=>'<li>'+esc(step)+'</li>').join('')+'</ol>':
+     '<p>Для этого движения проверенная подробная инструкция пока недоступна.</p>')+
+   (x.mistakes?'<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>':'')+
+   (alternatives.length?'<h3>Доступные замены</h3><p>'+esc(alternatives.map(y=>y.name).join(', '))+'</p>':'')+
+   '<p class="input-note">При боли прекрати упражнение. Нагрузку и амплитуду подбирай с учётом самочувствия.</p>'+
+   '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
+   (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
+   button('Вернуться к тренировке','exercise-back',true);
 }
 function modalHTML(){
  if(!modal)return '';
@@ -1365,10 +1380,12 @@ app.addEventListener('click',async e=>{
   if(!c)return;
   exerciseOrigin='live';
   exerciseDetails={key:c.key,name:c.name,sets:c.set_count,low:c.low,high:c.high,unit:c.unit,
-   weight_kg:null,muscles:'Подробности зависят от движения',
-   start_position:'Проверь устойчивость, положение тела и настройку оборудования.',
-   steps:['Прими исходное положение.',c.tip||'Двигайся плавно и контролируемо.','Вернись к началу движения без рывка.'],
-   mistakes:c.caution||'Не выполняй через боль.',substitutions:[]};
+   weight_kg:null,muscles:c.muscles||null,
+   start_position:c.start_position||null,
+   steps:Array.isArray(c.steps)&&c.steps.length?c.steps:(c.tip?[c.tip]:[]),
+   mistakes:c.mistakes||c.caution||null,substitutions:[],
+   image_url:c.image_url||null,image_credit:c.image_credit||null,
+   image_license_url:c.image_license_url||null};
   modal='exercise-card';draw();return;
  }
  if(cmd==='exercise-card'){
