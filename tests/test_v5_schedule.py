@@ -169,10 +169,12 @@ class WeekdayScheduleTests(unittest.TestCase):
         call = SimpleNamespace(data='wake', id='stale-test',
             from_user=SimpleNamespace(id=777),
             message=SimpleNamespace(chat=SimpleNamespace(id=777, type='private')))
-        with patch.object(self.m.BOT, 'answer_callback_query', side_effect=error) as answer, \
+        with patch.object(self.m.BOT, 'send_message') as sent, \
+             patch.object(self.m.BOT, 'answer_callback_query', side_effect=error) as answer, \
              patch.object(self.m.LOG, 'exception') as failed, \
              patch.object(self.m.LOG, 'debug') as ignored:
             self.m.callback(call)
+        sent.assert_called_once()
         answer.assert_called_once()
         failed.assert_not_called()
         ignored.assert_called_once()
@@ -186,9 +188,11 @@ class WeekdayScheduleTests(unittest.TestCase):
         call = SimpleNamespace(data='wake', id='failed-test',
             from_user=SimpleNamespace(id=777),
             message=SimpleNamespace(chat=SimpleNamespace(id=777, type='private')))
-        with patch.object(self.m.BOT, 'answer_callback_query', side_effect=error), \
+        with patch.object(self.m.BOT, 'send_message') as sent, \
+             patch.object(self.m.BOT, 'answer_callback_query', side_effect=error), \
              patch.object(self.m.LOG, 'exception') as failed:
             self.m.callback(call)
+        sent.assert_called_once()
         failed.assert_called_once_with('Telegram wake acknowledgement failed')
 
     def test_old_telegram_questionnaire_buttons_open_current_app(self):
