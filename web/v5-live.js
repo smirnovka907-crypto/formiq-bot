@@ -19,7 +19,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 
 let onboardOpen=false,onboard=null,onboardErrors={};
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
-let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='';
+let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -370,7 +370,9 @@ function training(){
    ['Ходьба','Бег','Велосипед','Плавание','Другое'].map(type=>
      button(type,'cardio-type',false,'data-type="'+esc(type)+'" aria-pressed="'+(cardioType===type)+'"')).join('')+
    '</div>':'')+
-  (cardioType==='Другое'?'<label class="field"><span>Название активности</span><textarea id="cardio-activity" rows="2" maxlength="100" placeholder="Играл в теннис, работал в саду...">'+esc(drafts['cardio-activity']||'')+'</textarea></label>':'')+
+  (cardioType==='Другое'?'<label class="field"><span>Название активности</span><textarea id="cardio-activity" rows="2" maxlength="100" placeholder="Играл в теннис, работал в саду...">'+esc(drafts['cardio-activity']||'')+'</textarea></label>'+
+  '<label class="field"><span>Предполагаемая интенсивность</span><select id="cardio-intensity">'+
+  [['light','Лёгкая'],['moderate','Средняя'],['vigorous','Высокая']].map(([v,label])=>'<option value="'+v+'"'+((drafts['cardio-intensity']||'moderate')===v?' selected':'')+'>'+label+'</option>').join('')+'</select></label>':'')+
   '<div class="cardio-input-grid">'+
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric" placeholder="60"')+
     '<label class="field"><span>Средний пульс <small>необязательно</small></span>'+
@@ -589,11 +591,11 @@ function profile(){return onboardForm();}
 function modalHTML(){
  if(!modal)return '';
  let content='';
- if(modal==='feedback')content='<h2>Отзывы и предложения</h2>'+
+ if(modal==='feedback')content='<h2>Отзывы и предложения</h2>'+(feedbackError?'<p role="alert" class="fq-form-error">'+esc(feedbackError)+'</p>':'')+
   '<label class="field"><span>Отзыв, ошибка или идея</span><textarea id="feedback-text" rows="5" maxlength="800" placeholder="8–800 символов">'+esc(drafts['feedback-text']||'')+'</textarea></label>'+
   button('Отправить','feedback-send',true)+button('Отмена','close');
  if(modal==='cardio'){
-  content='<h2>Запись кардио</h2><p>Запиши кардио, которое сделал самостоятельно.</p>'+
+  content='<h2>Дополнительная тренировка</h2><p>Запиши кардио, которое сделал самостоятельно.</p>'+
   '<label class="field"><span>Вид кардио</span>'+button(cardioType||'Выбрать вид кардио','cardio-types')+'</label>'+
   (typesOpen?'<div class="fq-live-actions">'+['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,'data-type="'+esc(x)+'"')).join('')+'</div>':'')+
   '<div class="fq-live-grid" style="margin-top:15px">'+
@@ -631,7 +633,7 @@ function partialHistory(){const el=document.getElementById('history-root');if(el
 function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{
  onboardChanged(e);
- if(['reps','weight','cardio-min','cardio-hr','cardio-activity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
  const metric=String(e.target.id||'').replace(/^profile-/,'');
@@ -797,11 +799,11 @@ app.addEventListener('click',async e=>{
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
  }
- if(cmd==='feedback-open'){modal='feedback';draw();return}
+ if(cmd==='feedback-open'){feedbackError='';modal='feedback';draw();return}
  if(cmd==='feedback-send'){const msg=String(document.getElementById('feedback-text')?.value||drafts['feedback-text']||'').trim();
-  if(msg.length<8||msg.length>800){fail('Напиши от 8 до 800 символов.');return}
+  if(msg.length<8||msg.length>800){feedbackError='Напиши от 8 до 800 символов.';draw();return}
   try{const result=await request('feedback',{text:msg});feedbackNotice=result.message||'Спасибо! Отзыв сохранён.';drafts['feedback-text']='';modal='';error='';draw()}
-  catch(ex){fail(ex.message||'Не удалось сохранить отзыв.')}return;
+  catch(ex){feedbackError=ex.message||'Не удалось сохранить отзыв.';draw()}return;
  }
  if(cmd==='close'){modal='';draw();return}
  if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
@@ -844,8 +846,9 @@ app.addEventListener('click',async e=>{
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
   const activity=String(document.getElementById('cardio-activity')?.value||drafts['cardio-activity']||'').trim();
   if(cardioType==='Другое'&&(activity.length<3||activity.length>100)){fail('Название активности: 3–100 символов.');return}
-  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType,...(cardioType==='Другое'?{activity}:{})});
-  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-activity']='';if(date){dayRows=null;await loadDay()}draw()}
+  const intensity=document.getElementById('cardio-intensity')?.value||'moderate';
+  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType,...(cardioType==='Другое'?{activity,intensity}:{})});
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-activity']='';drafts['cardio-intensity']='';if(date){dayRows=null;await loadDay()}draw()}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
