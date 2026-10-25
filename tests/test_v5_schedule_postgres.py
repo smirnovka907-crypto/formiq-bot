@@ -1457,6 +1457,59 @@ class SchedulePostgresTests(unittest.TestCase):
                 self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
                     .format(sql.Identifier(table)),(999,)).fetchone()[0],1,table)
 
+    def test_confirmed_deletion_removes_only_owner_integration_data(self):
+        """Privacy regression in disposable PG18; never use a live database."""
+        monitored=('manual_food_meals','manual_food_items','body_measurements',
+                   'fatsecret_oauth_pending','fatsecret_user_connections',
+                   'fatsecret_import_refs','garmin_authorized_identities',
+                   'garmin_metric_events')
+        for owner in (self.chat,999):
+            self.m.save_onboarding(owner,self.body((0,2)))
+            self.m.food_add(owner,{'date':'2026-10-18',
+                'meal_type':'breakfast','items':[{'name':'Рис сухой','grams':80}]})
+            with self.connect() as conn:
+                conn.execute("""INSERT INTO body_measurements
+                    (chat_id,measured_at,weight_kg)
+                    VALUES(%s,'2026-10-18T09:00:00+00:00',82)""",(owner,))
+                conn.execute("""INSERT INTO fatsecret_oauth_pending
+                    (chat_id,state_hash,request_token_enc,request_secret_enc,expires_at)
+                    VALUES(%s,%s,%s,%s,NOW()+INTERVAL '10 minutes')""",
+                    (owner,'state-'+str(owner),b'temporary',b'secret'))
+                connection=conn.execute("""INSERT INTO fatsecret_user_connections
+                    (chat_id,access_token_enc,access_secret_enc)
+                    VALUES(%s,%s,%s) RETURNING connection_id""",
+                    (owner,b'token',b'signing')).fetchone()[0]
+                conn.execute("""INSERT INTO fatsecret_import_refs
+                    (chat_id,connection_id,eaten_on,external_id)
+                    VALUES(%s,%s,'2026-10-18','123')""",(owner,connection))
+                provider_id='DELETION_TEST_'+str(owner)
+                conn.execute("""INSERT INTO garmin_authorized_identities
+                    (chat_id,provider_user_id,health_consent_at)
+                    VALUES(%s,%s,NOW())""",(owner,provider_id))
+                conn.execute("""INSERT INTO garmin_metric_events
+                    (chat_id,provider_user_id,category,external_id,
+                     local_calendar_date,metrics_json)
+                    VALUES(%s,%s,'dailies','day-1','2026-10-18',
+                           '{"steps":7000}'::jsonb)""",(owner,provider_id))
+        with self.connect() as conn:
+            for table in monitored:
+                for owner in (self.chat,999):
+                    count=conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                        .format(sql.Identifier(table)),(owner,)).fetchone()[0]
+                    self.assertEqual(count,1,(table,owner))
+        with patch.object(self.m,'send') as send:
+            self.m.delete_all(self.chat)
+            send.assert_called_once()
+        with self.connect() as conn:
+            for table in monitored:
+                for owner,expected in ((self.chat,0),(999,1)):
+                    count=conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                        .format(sql.Identifier(table)),(owner,)).fetchone()[0]
+                    self.assertEqual(count,expected,(table,owner))
+        # The remaining user's account and all manual food must remain intact.
+        self.assertEqual(self.m.food_history(999,{'date':'2026-10-18'})
+            ['meals'][0]['items'][0]['name'],'Рис сухой')
+
     def test_private_female_period_dates_prediction_and_edit(self):
         # A historical 3-cycle series can estimate a *future* date but must
         # not continue showing it as "next" after that date has passed.
