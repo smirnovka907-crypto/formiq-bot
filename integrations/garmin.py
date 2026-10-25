@@ -64,23 +64,25 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
         for record in summaries:
             if not isinstance(record, dict):
                 raise ValueError("Invalid Garmin summary")
-            user_id = _safe_text(record.get("userId"))
-            if not user_id:
-                raise ValueError("Missing Garmin identity")
+            user_id = record.get("userId")
+            if not isinstance(user_id, str) or not (1 <= len(user_id) <= 80):
+                raise ValueError("Missing or oversized Garmin identity")
             if expected_user_id is not None and user_id != expected_user_id:
                 raise PermissionError("Garmin identity does not match authorization")
-            summary_id = _safe_text(
-                record.get("summaryId") or record.get("activityId")
-                or record.get("calendarDate") or record.get("startTimeInSeconds")
-            )
-            if not summary_id:
-                raise ValueError("Missing Garmin record identity")
+            raw_id = (record.get("summaryId") or record.get("activityId")
+                      or record.get("calendarDate") or record.get("startTimeInSeconds"))
+            summary_id = str(raw_id) if raw_id is not None else ""
+            if not (1 <= len(summary_id) <= 80):
+                raise ValueError("Missing or oversized Garmin record identity")
             identity = (collection, user_id, summary_id)
             if identity in seen:
                 continue
             seen.add(identity)
-            day = _safe_text(record.get("calendarDate"), 10) or None
-            if day:
+            raw_day = record.get("calendarDate")
+            day = raw_day if raw_day not in ("", None) else None
+            if day is not None:
+                if not isinstance(day,str) or len(day)!=10:
+                    raise ValueError("Invalid Garmin calendar date")
                 try:
                     if date.fromisoformat(day).isoformat() != day:
                         raise ValueError("Invalid Garmin calendar date")
