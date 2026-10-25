@@ -189,8 +189,17 @@ function femaleCalendar(){
   estimate+'</section>';
 }
 
-function onboardChanged(e){
- const target=e.target;if(!onboard||!target)return;
+async function onboardChanged(e){
+ const target=e.target;
+ if(target?.id==='period-ai-consent'){
+  const wanted=target.checked===true;
+  try{
+   const result=await request('ai_personalization_set',{field:'cycle',enabled:wanted});
+   state.ai_personalization=result.consents;aiTrainingTip='';
+  }catch(ex){periodError=ex.message||'Не удалось сохранить согласие'}
+  draw();return;
+ }
+ if(!onboard||!target)return;
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
@@ -662,16 +671,6 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',onboardChanged);
-app.addEventListener('change',async e=>{
- if(e.target?.id!=='period-ai-consent')return;
- const wanted=e.target.checked===true;
- try{
-  const result=await request('ai_personalization_set',{field:'cycle',enabled:wanted});
-  state.ai_personalization=result.consents;
-  aiTrainingTip='';
- }catch(ex){periodError=ex.message||'Не удалось сохранить согласие';}
- draw();
-});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
