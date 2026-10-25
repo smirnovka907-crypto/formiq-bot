@@ -20,7 +20,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
-let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null);
+let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -756,7 +756,7 @@ function modalHTML(){
   }).join('');
   content='<h2>Найти продукт в FatSecret</h2>'+
    '<p class="input-note">Выбери сырой или приготовленный продукт и подходящую порцию. Отправляется только название продукта.</p>'+
-   '<label class="field"><span>Название</span><input id="food-catalog-query" maxlength="80" value="'+esc(foodEdit.name)+'"></label>'+
+   '<label class="field"><span>Название</span><input id="food-catalog-query" maxlength="80" value="'+esc(catalogQuery||foodEdit.name)+'"></label>'+
    button(catalogBusy?'Ищем…':'Искать','food-catalog-search',true,catalogBusy?'disabled':'')+
    (catalogMessage?'<p role="status" class="input-note">'+esc(catalogMessage)+'</p>':'')+
    cards+button('Вернуться','food-catalog-back');
@@ -1057,12 +1057,13 @@ app.addEventListener('click',async e=>{
  }
  if(cmd==='food-catalog-open'){
   if(!foodEdit||!state?.food_catalog_available)return;
-  catalogCandidates=[];catalogMessage='';modal='food-catalog';draw();return;
+  catalogCandidates=[];catalogMessage='';catalogQuery=foodEdit.name;modal='food-catalog';draw();return;
  }
  if(cmd==='food-catalog-back'){modal='food-edit';draw();return}
  if(cmd==='food-catalog-search'){
   if(!foodEdit||!state?.food_catalog_available||catalogBusy)return;
   const query=String(document.getElementById('food-catalog-query')?.value||'').trim();
+  catalogQuery=query;
   catalogBusy=true;catalogCandidates=[];catalogMessage='';draw();
   try{
    const result=await request('food_catalog_lookup',{query});
@@ -1093,7 +1094,7 @@ app.addEventListener('click',async e=>{
    foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
    foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
    const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
-   foodHistory=result;foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
   }catch(ex){error=ex.message||'Ошибка изменения продукта'}
   draw();return;
  }
