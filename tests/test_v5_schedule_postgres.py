@@ -683,6 +683,9 @@ class SchedulePostgresTests(unittest.TestCase):
                          'Есть травма колена, пока не знаю нагрузку')
 
     def test_private_female_period_dates_prediction_and_edit(self):
+        # A historical 3-cycle series can estimate a *future* date but must
+        # not continue showing it as "next" after that date has passed.
+        Clock.instant=datetime(2026,8,31,12,tzinfo=timezone.utc)
         data=self.body((0,2))
         data['metrics']['sex']='female'
         self.m.save_onboarding(self.chat,data)
@@ -698,6 +701,10 @@ class SchedulePostgresTests(unittest.TestCase):
                 self.assertEqual(response.status_code,200,response.get_json())
                 saved.append(response.json['periods'][0])
             self.assertEqual(response.json['next_period']['date'],'2026-09-23')
+            Clock.instant=datetime(2026,10,19,12,tzinfo=timezone.utc)
+            expired=client.post('/mini/api',json={'action':'period_list'})
+            self.assertIsNone(expired.json['next_period'],
+                'A past estimate cannot be presented as the next period')
             ident=saved[1]['id']
             revised=client.post('/mini/api',json={'action':'period_save','id':ident,
                            'start':'2026-07-30','end':'2026-08-02'})
