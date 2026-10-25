@@ -49,6 +49,19 @@ class IntegrationTests(unittest.TestCase):
             f.normalize_diary({"food_entries": {"food_entry": [
                 {"food_entry_id": "4", "calories": "-1"}]}})
 
+    def test_provider_error_reply_is_not_an_empty_food_diary(self):
+        f = module("fatsecret")
+        self.assertEqual(f.normalize_diary({})["entries"], [])
+        for failure in (
+            {"error": {"code": 9, "message": "OAuth access revoked"}},
+            {"food_entries": {"error": {"code": 9}}},
+            {"food_entries": "not a valid diary"},
+        ):
+            with self.assertRaises(ValueError):
+                f.normalize_diary(failure)
+        with self.assertRaises(ValueError):
+            f.normalize_catalog_search({"error": {"code": 14, "message": "missing scope"}})
+
     def test_fatsecret_missing_nutrients_are_not_fabricated(self):
         f=module("fatsecret")
         missing={"food_entries":{"food_entry":[
