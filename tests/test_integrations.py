@@ -49,6 +49,20 @@ class IntegrationTests(unittest.TestCase):
             f.normalize_diary({"food_entries": {"food_entry": [
                 {"food_entry_id": "4", "calories": "-1"}]}})
 
+    def test_fatsecret_missing_nutrients_are_not_fabricated(self):
+        f=module("fatsecret")
+        missing={"food_entries":{"food_entry":[
+           {"food_entry_id":"7","meal":"Breakfast","food_entry_name":"Unknown food",
+            "calories":"100","protein":"3","fat":"2"}]}}
+        r=f.normalize_diary(missing)
+        self.assertFalse(r["complete"])
+        self.assertIsNone(r["carbs_g"])
+        self.assertIsNone(r["calories_kcal"])
+        self.assertIsNone(r["entries"][0]["carbs_g"])
+        empty=f.normalize_diary({})
+        self.assertFalse(empty["complete"])
+        self.assertIsNone(empty["calories_kcal"])
+
     def test_garmin_import_and_idempotency(self):
         g = module("garmin")
         sample = {"dailies": [
