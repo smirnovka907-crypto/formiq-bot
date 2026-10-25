@@ -53,7 +53,7 @@ function createClient(auth=true,shared={}){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
+    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
     workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -70,6 +70,7 @@ function createClient(auth=true,shared={}){
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   else if(p.action==='ai_personalized_guidance')response={ok:true,advice:'Совет по реальному дневнику питания',used_ai:true};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
    else if(p.action==='garmin_day'){
     response={ok:true,date:p.date,connected:!!shared.garminConnected,
@@ -494,7 +495,20 @@ async function run(){
  await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
  assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
- const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
+ const ownerCoach=createClient(true,{tier:'max',
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();await ownerCoach.click({nav:'food'});await settle();
+  assert.match(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
+  await ownerCoach.click({cmd:'ai-tip-nutrition'});await settle();
+  assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
+    x.purpose==='nutrition'&&x.date==='2026-10-25'));
+  assert.match(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
+  const diaryOnly=createClient(true,{tier:'start',
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();await diaryOnly.click({nav:'food'});await settle();
+  assert.doesNotMatch(diaryOnly.root.innerHTML,/Совет Yandex AI по рациону/,
+    'Diary tier never exposes paid Yandex coaching');
+  const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
  assert.doesNotMatch(reportClient.root.innerHTML,/nutrition-consent/);
