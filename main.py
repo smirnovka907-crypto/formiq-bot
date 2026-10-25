@@ -3157,6 +3157,100 @@ def scheduled_calendar(chat,p,cycle):
     return items
 
 
+
+def mini_training_preview(chat, body):
+    """Read-only preview of a saved, owner-scoped calendar slot.
+
+    Never creates a workout, changes scheduling, or marks results complete.
+    Clinical safety restrictions can suppress prescriptions while still showing
+    the date and saved slot.
+    """
+    slot_id=body.get('id')
+    if type(slot_id) is not int or slot_id<=0:
+        raise ValueError('Выбери тренировку в календаре')
+    p=profile(chat)
+    with db() as conn:
+        slot=conn.execute("""SELECT s.id,s.cycle_id,s.week_no,s.day_code,s.planned_date
+            FROM scheduled_sessions s JOIN training_cycles c ON c.id=s.cycle_id
+            WHERE s.id=%s AND s.chat_id=%s AND c.chat_id=%s
+              AND s.schedule_state IS DISTINCT FROM 'retired'""",
+            (slot_id,chat,chat)).fetchone()
+        if not slot:
+            raise ValueError('Тренировка не найдена')
+        sid,cycle,week,day,planned=slot
+        completed=bool(conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s
+            AND cycle_id=%s AND week_no=%s AND plan_day=%s
+            AND source='template' AND status='finished' LIMIT 1""",
+            (chat,cycle,week,day)).fetchone())
+        next_slot=conn.execute("""SELECT s.id FROM scheduled_sessions s
+            WHERE s.chat_id=%s AND s.cycle_id=%s
+              AND s.schedule_state IS DISTINCT FROM 'retired'
+              AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
+                AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
+                AND w.plan_day=s.day_code AND w.source='template'
+                AND w.status='finished')
+            ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
+            (chat,cycle,chat)).fetchone()
+    warning=ready(p,chat)
+    plan=[]
+    if not warning and not completed:
+        plan=user_session(chat,p,week,day,cycle_id=cycle)
+    # Suggested load uses only actual completed repetitions/weights by owner;
+    # absence of a comparable completed set means no invented weight.
+    keys=[x[0] for x in plan]
+    weights={}
+    if keys:
+        with db() as conn:
+            rows=conn.execute("""SELECT DISTINCT ON (i.exercise_key)
+              i.exercise_key,s.weight_kg
+              FROM workout_sets s JOIN workout_items i
+                ON i.workout_id=s.workout_id AND i.position=s.position
+              JOIN workouts w ON w.id=s.workout_id
+              WHERE w.chat_id=%s AND w.status='finished' AND s.state='done'
+                AND s.weight_kg IS NOT NULL AND s.weight_kg>0
+                AND i.exercise_key=ANY(%s)
+              ORDER BY i.exercise_key,s.completed_at DESC NULLS LAST,w.id DESC""",
+              (chat,keys)).fetchall()
+        weights={key:float(value) for key,value in rows}
+    def group(key):
+        if key.startswith(('leg_','seated_leg','smith','db_goblet','chair_squat','partial_squat','calf','step')):
+            return 'Ноги'
+        if key.startswith(('lat_','seated_row','cable_row','db_row','machine_row','band_row')):
+            return 'Спина'
+        if key.startswith(('chest_','wall_push','incline_push','db_press','db_floor_press','band_chest')):
+            return 'Грудь и плечи'
+        if key in ('bird','dead_bug','wall_plank','knee_plank','side_plank_knee'):
+            return 'Мышцы корпуса'
+        if 'bridge' in key or key.startswith(('hip_','hinge')):
+            return 'Ягодицы и задняя поверхность бедра'
+        return 'Смешанная нагрузка'
+    exercises=[]
+    for key,sets,lo,hi,unit in plan:
+        name,technique,mistake=EX[key]
+        substitutions=[alt for alt in GYM_SWAPS.get(key,())
+            if alt in EX and exercise_for_equipment(p.get('equipment'),alt)
+            and eligible_exercise(alt,health_profile(chat))]
+        exercises.append({'key':key,'name':name,'sets':sets,'low':lo,'high':hi,
+            'unit':unit,'weight_kg':weights.get(key),
+            'start_position':'Прими устойчивое положение и проверь опору/тренажёр.',
+            'steps':['Подготовь положение и оборудование.',technique,
+                     'Вернись в исходную позицию плавно, без рывка.'],
+            'muscles':group(key),'mistakes':mistake,
+            'substitutions':[{'key':alt,'name':EX[alt][0]} for alt in substitutions],
+            'image_url':None})
+    duration=max(20,min(120,int(p.get('minutes') or 40)))
+    return {'preview':{'id':sid,'week':week,'day':day,
+        'date':planned.isoformat(),'name':day_title(p,day),
+        'finished':completed,'can_start':not warning and not completed and
+          bool(next_slot and next_slot[0]==sid),
+        'warning':warning,'duration_minutes':duration,
+        'warmup_minutes':min(7,max(3,duration//10)),
+        'cooldown_minutes':min(5,max(2,duration//12)),
+        'cardio_note':'Кардио указано в упражнениях, если входит в программу.',
+        'exercises':exercises}}
+
+
+
 def metrics(chat):
     with db() as conn:
         row=conn.execute('''SELECT age,height_cm,weight_kg,resting_hr,sex,timezone
@@ -4572,6 +4666,8 @@ def mini_api():
             payload = {'ok': True, **mini_history_month(chat, data)}
         elif action == 'progress_series':
             payload = {'ok': True, **mini_progress_series(chat)}
+        elif action == 'training_preview':
+            payload = {'ok': True, **mini_training_preview(chat,data)}
         elif action == 'body_weight_history':
             payload = {'ok': True, 'measurements':mini_body_weight_history(chat)}
         elif action == 'health_analyze':
