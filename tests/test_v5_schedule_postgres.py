@@ -404,6 +404,82 @@ class SchedulePostgresTests(unittest.TestCase):
                     FROM fatsecret_user_connections WHERE chat_id=%s""",
                     (self.chat,)).fetchone()[0])
 
+    def test_fatsecret_import_refs_are_owner_scoped_editable_and_idempotent(self):
+        from cryptography.fernet import Fernet
+        from urllib.parse import urlsplit,parse_qs
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        original=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка ручная','grams':75}]})
+        item_id=original['meals'][0]['items'][0]['id']
+        fake=Mock()
+        fake.request_token.return_value=('request-token','request-secret')
+        fake.authorize_url.return_value='https://authentication.fatsecret.com/oauth/authorize?oauth_token=request-token'
+        fake.access_token.return_value=('secret-access','secret-signing')
+        fake.diary.return_value={'food_entries':{'food_entry':[
+            {'food_entry_id':'17','food_entry_name':'Овсянка','meal':'Breakfast',
+             'calories':'200','protein':'7','fat':'4','carbohydrate':'32'},
+            {'food_entry_id':'18','food_entry_name':'Творог','meal':'Lunch',
+             'calories':'170','protein':'25','fat':'5','carbohydrate':'4'}]}}
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',Fernet.generate_key().decode()), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','consumer'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','shared'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.m.fatsecret_user_start(self.chat)
+            cb=fake.request_token.call_args.args[0]
+            state=parse_qs(urlsplit(cb).query)['state'][0]
+            self.m.fatsecret_user_finish(state,'request-token','verifier')
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import(self.chat+1,{'date':'2026-10-18'})
+            once=self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            twice=self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(once['imported_count'],2)
+            self.assertEqual(twice['imported_count'],2)
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],2)
+                columns=conn.execute("""SELECT column_name FROM information_schema.columns
+                    WHERE table_schema=%s AND table_name='fatsecret_import_refs'""",
+                    (self.schema,)).fetchall()
+                self.assertFalse(any(n[0] in ('calories','protein','fat',
+                    'carbs','food_entry_name') for n in columns))
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import_edit(self.chat+1,{'date':'2026-10-18',
+                    'external_id':'17','name_override':'чужой'})
+            edited=self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                'external_id':'17','name_override':'Моя овсянка',
+                'meal_override':'snack'})
+            self.assertTrue(edited['imported'])
+            shown=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            first=next(x for x in shown['entries'] if x['external_id']=='17')
+            self.assertEqual(first['name'],'Моя овсянка')
+            self.assertEqual(first['meal'],'snack')
+            self.assertEqual(first['kcal'],200)
+            self.assertTrue(first['imported'])
+            self.assertTrue(first['user_edited'])
+            self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})['entries'][0]['name'],'Моя овсянка')
+            unlinked=self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                'external_id':'17'},delete=True)
+            self.assertFalse(unlinked['imported'])
+            with self.assertRaisesRegex(ValueError,'не найдена'):
+                self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                    'external_id':'17','name_override':'Ошибка'})
+            after=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(after['entries'][0]['imported'])
+            self.assertEqual(after['entries'][0]['name'],'Овсянка')
+            manual=self.m.food_history(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(manual['meals'][0]['items'][0]['id'],item_id)
+            self.assertEqual(manual['meals'][0]['items'][0]['grams'],75)
+            self.m.fatsecret_user_disconnect(self.chat)
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            # Disconnect invalidates credentials without destroying imported refs.
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],1)
+
     def test_fatsecret_connection_rejects_invalid_encryption_key(self):
         self.m.save_onboarding(self.chat,self.body())
         with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY','incorrect-key'), \
