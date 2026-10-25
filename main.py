@@ -2315,20 +2315,26 @@ def plain_text(m):
 def callback(call):
     chat = call.message.chat.id
     if (call.data or '') == 'wake':
-        # Receiving a Telegram webhook already wakes our Render service.
-        # Respond silently to callback instead of generating a chat message.
+        # A Render cold start can outlive Telegram's short callback deadline.
+        # Always leave a real, visible chat message; the popup is best effort.
         if call.message.chat.type == 'private' and call.from_user.id == chat:
+            sent = False
             try:
-                BOT.answer_callback_query(call.id, text='FORMIQ на связи ✅')
+                BOT.send_message(
+                    chat, '⚡ FORMIQ на связи! Нажми «FormIQ», чтобы открыть приложение.',
+                    reply_markup=formiq_chat_keyboard())
+                sent = True
+            except Exception:
+                LOG.exception('Telegram wake confirmation message failed')
+            try:
+                BOT.answer_callback_query(call.id,
+                    text='FORMIQ на связи ✅' if sent else 'Не удалось отправить сообщение')
             except telebot.apihelper.ApiTelegramException as exc:
-                # A delayed wake callback may expire while a sleeping server starts.
-                # The webhook has already woken the service; do not treat this
-                # expected Telegram 400 as an application failure.
                 description = (exc.description or '').lower()
                 if exc.error_code == 400 and (
                         'query is too old' in description
                         or 'query id is invalid' in description):
-                    LOG.debug('Expired Telegram wake callback ignored')
+                    LOG.debug('Expired Telegram wake callback ignored; chat message attempted')
                 else:
                     LOG.exception('Telegram wake acknowledgement failed')
             except Exception:
