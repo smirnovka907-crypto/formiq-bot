@@ -1,3 +1,29 @@
+# FORMIQ | ТЗ редакция 2 — техническая проверка подключения FatSecret (25.10.2026)
+
+**Только существующий Draft [PR #23](https://github.com/smirnovka907-crypto/formiq-bot/pull/23)** в ветке `feature/formiq-tz2-nutrition-integrations-20261025`. Продолжаем текущую кодовую базу. `main`, Render, webhook и production PostgreSQL не меняем.
+
+## Проверено
+- Исходный PR HEAD `52f52ac7eae0305be8c94d3a648bfdb5f2c6eecf` успешно прошёл [GitHub Actions #40216007891](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40216007891), в том числе Python/JS/PostgreSQL 18/мобильный Chromium.
+- Render `formiq-bot` обслуживает прежний опубликованный commit `cf61f1b777f80886704a4f31f6ac952ab3ec5528`, развертывание `dep-dbeub1ss728c73cuemu0` — Live. `main` `a220a14a40670ef3a6806d49e1a2e472fc345c1f`. Никаких новых публикаций.
+- Сверена официальная документация FatSecret по delegated OAuth1, food-entries/v2 и foods/search/v5. Реальных OAuth credentials, одобренных scopes и авторизации пользователя не подтверждено.
+
+## Дополнительно исправлено в этом PR, без выпуска
+- Изоляция FatSecret импорта по **поколению пользовательского OAuth подключения**: запись импортированного `food_entry_id` привязана к уникальному `connection_id`. При отключении и новом подключении старые ссылки/ручные исправления сохраняются в PostgreSQL, но не накладываются на дневник другого аккаунта с таким же `food_entry_id`. Новое подключение не перезаписывает прошлые импортированные ссылки.
+- Импорт, чтение дневника и изменение собственных исправлений проверяют текущий `connection_id`, owner и актуальные credentials. В БД не сохраняются provider КБЖУ/названия.
+- Явные `error` от FatSecret больше не представляются как пустой день или отсутствие результатов поиска.
+- Добавлены регрессионные тесты повторной авторизации, одинаковых внешних ID и ошибок API. Изменена только схема ещё не опубликованных таблиц FatSecret из PR; production данные не затронуты.
+- CI на первом защитном кодовом коммите `9313a562786e746f8ba0fdee86b3e1feaa8d6533` — SUCCESS ([#40216546682](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40216546682)). Остальные новые изменения и этот документ требуют CI на **финальном HEAD**.
+
+## Осталось
+- Получить успешный CI на финальном SHA этого PR и отдельно оценить реальные настройки provider grants.
+- Подключить FatSecret только после официальных OAuth1 consumer credentials для пользовательского дневника, OAuth2 credentials/scope `premier` для каталога и отдельного ключа Fernet в Render. Секреты — только в переменных окружения, без GitHub/логов.
+- Протестировать реальный аккаунт: OAuth callback, токены, чтение и импорт дневника, reconnect/disconnect, повторные импорты, Android/iOS и права доступа/атрибуцию по договору.
+- Garmin остаётся offline ingest. Реальный OAuth2/push требует официального Garmin Business доступа и явного согласия пользователя. Никакого фиктивного подключения.
+
+**Следующий шаг:** успешный Actions на точном HEAD PR #23; затем официальные credentials и испытание реального FatSecret аккаунта. Merge/deploy — только после отдельного разрешения владельца.
+
+---
+
 # FORMIQ | ТЗ редакция 2 — этап 1.4: безопасный импорт FatSecret (25.10.2026)
 
 **Только Draft PR [#23](https://github.com/smirnovka907-crypto/formiq-bot/pull/23).** Текущая production версия в Render: `cf61f1b777f80886704a4f31f6ac952ab3ec5528`; `main` документальный SHA `a220a14a40670ef3a6806d49e1a2e472fc345c1f`. Никаких merge, deploy или действий с production PostgreSQL.
