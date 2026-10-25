@@ -20,6 +20,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
+let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null);
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -641,7 +642,7 @@ async function loadFoodHistory(){
  foodLoading=true;draw();
  try{
   const result=await request('food_history',{date:requested});
-  if(requested===foodDate){foodHistory=result;foodNotice=''}
+  if(requested===foodDate){foodHistory=result;foodNotice='';catalogRecent=Object.create(null)}
  }catch(ex){if(requested===foodDate)foodNotice=ex.message||'Не удалось загрузить записи'}
  finally{foodLoading=false;draw()}
 }
@@ -651,6 +652,11 @@ function syncFoodDraft(){
   const index=Number(el.dataset.foodDraft);
   if(Number.isInteger(index)&&foodDraft[index])foodDraft[index][el.dataset.field]=el.value;
  }
+}
+function nutritionLabel(row){
+ const hit=catalogRecent[row.id],n=hit?.grams===row.grams?hit.nutrients:null;
+ if(n)return '≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' · Ж '+esc(n.fat_g)+' · У '+esc(n.carbs_g)+' г · FatSecret';
+ return row.nutrition_source==='fatsecret'?'FatSecret · КБЖУ по запросу':'КБЖУ нет данных';
 }
 function food(){
  if(!foodDate)foodDate=localClock().date;
@@ -663,7 +669,7 @@ function food(){
   dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+'</section>';
  const cards=saved.map(meal=>'<section class="surface"><div class="heading-row"><h2>'+
   esc(mealLabels[meal.type]||meal.type)+'</h2><small>'+esc(meal.items.length)+' продуктов</small></div>'+
-  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · КБЖУ нет данных</small></div>'+
+  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
   '<button type="button" class="button-subtle" data-cmd="food-edit" data-id="'+row.id+'">Изменить</button>'+
   '<button type="button" class="button-subtle" data-cmd="food-delete" data-id="'+row.id+'">Удалить</button></div>').join('')+'</section>').join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
@@ -736,7 +742,24 @@ function modalHTML(){
   content='<h2>Изменить продукт</h2>'+
    '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
    '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
+   (state?.food_catalog_available?button('Найти в FatSecret','food-catalog-open'):'')+
    button('Сохранить изменения','food-edit-save',true)+button('Отмена','close');
+ }
+ if(modal==='food-catalog'&&foodEdit){
+  const cards=catalogCandidates.map(candidate=>{
+   const options=(candidate.servings||[]).filter(p=>p.grams&&p.per_serving).slice(0,6);
+   return '<div class="fq-catalog-candidate"><strong>'+esc(candidate.name)+'</strong>'+
+    (candidate.brand?'<small>'+esc(candidate.brand)+'</small>':'')+
+    (options.length?options.map(p=>button('Выбрать: '+(p.description||'Порция')+' · '+p.grams+' г','food-catalog-link',false,
+     'data-food-id="'+esc(candidate.food_id)+'" data-serving-id="'+esc(p.serving_id)+'"')).join(''):
+    '<p class="input-note">Нет проверенной порции в граммах.</p>')+'</div>';
+  }).join('');
+  content='<h2>Найти продукт в FatSecret</h2>'+
+   '<p class="input-note">Выбери сырой или приготовленный продукт и подходящую порцию. Отправляется только название продукта.</p>'+
+   '<label class="field"><span>Название</span><input id="food-catalog-query" maxlength="80" value="'+esc(foodEdit.name)+'"></label>'+
+   button(catalogBusy?'Ищем…':'Искать','food-catalog-search',true,catalogBusy?'disabled':'')+
+   (catalogMessage?'<p role="status" class="input-note">'+esc(catalogMessage)+'</p>':'')+
+   cards+button('Вернуться','food-catalog-back');
  }
  if(modal==='food-delete'&&foodEdit){
   content='<h2>Удалить продукт?</h2><p>'+esc(foodEdit.name)+' · '+esc(foodEdit.grams)+' г</p>'+
@@ -1030,7 +1053,39 @@ app.addEventListener('click',async e=>{
   const id=Number(element.dataset.id);
   const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
   if(!item)return;
-  foodEdit={...item};modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+  foodEdit={...item};catalogCandidates=[];catalogMessage='';modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='food-catalog-open'){
+  if(!foodEdit||!state?.food_catalog_available)return;
+  catalogCandidates=[];catalogMessage='';modal='food-catalog';draw();return;
+ }
+ if(cmd==='food-catalog-back'){modal='food-edit';draw();return}
+ if(cmd==='food-catalog-search'){
+  if(!foodEdit||!state?.food_catalog_available||catalogBusy)return;
+  const query=String(document.getElementById('food-catalog-query')?.value||'').trim();
+  catalogBusy=true;catalogCandidates=[];catalogMessage='';draw();
+  try{
+   const result=await request('food_catalog_lookup',{query});
+   catalogCandidates=result.candidates||[];
+   catalogMessage=catalogCandidates.length?'Выбери порцию конкретного продукта.':'Продукты не найдены.';
+  }catch(ex){catalogMessage=ex.message||'Поиск недоступен'}
+  finally{catalogBusy=false;draw()}
+  return;
+ }
+ if(cmd==='food-catalog-link'){
+  if(!foodEdit||!state?.food_catalog_available||catalogBusy)return;
+  const fid=element.dataset.foodId,sid=element.dataset.servingId;
+  if(!/^\d{1,20}$/.test(fid||'')||!/^\d{1,20}$/.test(sid||''))return;
+  catalogBusy=true;catalogMessage='';draw();
+  try{
+   const result=await request('food_catalog_attach',{id:foodEdit.id,food_id:fid,serving_id:sid});
+   catalogRecent[foodEdit.id]={grams:foodEdit.grams,nutrients:result.nutrients};
+   for(const m of foodHistory?.meals||[])for(const item of m.items||[])if(item.id===foodEdit.id)item.nutrition_source='fatsecret';
+   foodNotice='Продукт сопоставлен с FatSecret по выбранной порции.';
+   foodEdit=null;catalogCandidates=[];modal='';error='';
+  }catch(ex){catalogMessage=ex.message||'Порция недоступна'}
+  finally{catalogBusy=false;draw()}
+  return;
  }
  if(cmd==='food-edit-save'){
   if(!foodEdit)return;
