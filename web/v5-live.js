@@ -187,9 +187,7 @@ function femaleCalendar(){
   '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
  return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
   '<p class="input-note">Необязательный приватный дневник. Без отдельного согласия данные не отправляются в Yandex AI.</p>'+
-  '<div class="fq-onboard-check"><input type="checkbox" id="period-ai-consent"'+
-   (state?.ai_personalization?.cycle?' checked':'')+'><span>Разрешаю использовать необходимые сведения о моём менструальном цикле и самочувствии для персонализации тренировок с помощью Yandex AI</span></div>'+
-  '<p class="input-note">Передаётся только приблизительное число дней с последнего отмеченного начала и отметка текущего периода, без Telegram ID и точных дат. Отключение не удаляет историю.</p>'+
+  '<p class="input-note">Для передачи данных цикла в Yandex AI действует единое согласие анкеты. Отзыв не удаляет записи.</p>'+
   '<div class="fq-live-grid" style="margin-top:15px">'+
   '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
   '<label class="field"><span>Окончание</span><input id="period-end" type="date" value="'+esc(periodDraft.end)+'"></label></div>'+
