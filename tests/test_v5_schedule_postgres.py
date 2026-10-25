@@ -153,6 +153,41 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
 
+    def test_recent_additional_cardio_reduces_future_volume_explainably(self):
+        profile,cycle,calendar=self.save((0,2,4))
+        baseline=self.m.make_session(profile,1,'A',adapt='normal',cycle_id=cycle)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,equipment,intensity)
+                VALUES(%s,100,'Бег','vigorous')""",(self.chat,))
+        adapt,reason=self.m.adjustment(self.chat,'A')
+        self.assertEqual(adapt,'lighter')
+        self.assertIn('кардио',reason)
+        lighter=self.m.make_session(profile,1,'A',adapt=adapt,cycle_id=cycle)
+        self.assertLess(sum(x[1] for x in lighter),sum(x[1] for x in baseline))
+        preview=self.m.mini_training_preview(self.chat,{'id':calendar[0]['id']})['preview']
+        self.assertIn('восстановиться',preview['recovery_advice'])
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM workouts WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0,'Preview never starts or completes a workout')
+
+    def test_manual_weight_does_not_replace_imported_measurements(self):
+        self.m.save_onboarding(self.chat,self.body())
+        from datetime import datetime,timezone
+        existing=datetime(2026,10,20,8,tzinfo=timezone.utc)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO body_measurements
+                (chat_id,measured_at,source,weight_kg) VALUES(%s,%s,'fitdays',%s)""",
+                (self.chat,existing,81))
+        self.m.mini_manual_measurement(self.chat,{'date':'2026-10-20','weight_kg':80.5})
+        self.m.mini_manual_measurement(self.chat,{'date':'2026-10-20','weight_kg':80.2})
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT source,weight_kg FROM body_measurements
+                WHERE chat_id=%s ORDER BY source""",(self.chat,)).fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual({source:float(weight) for source,weight in rows},
+                         {'fitdays':81,'manual':80.2})
+        self.assertEqual(self.m.mini_body_weight_history(self.chat+1),[])
+
     def rows(self, cycle):
         with self.connect() as conn:
             return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state
