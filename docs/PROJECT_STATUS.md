@@ -10,7 +10,7 @@
 
 ## Тесты и ограничения
 - [CI #40211335566](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40211335566) — **SUCCESS** для кода питания и регрессионного теста на конкурентное переименование (`c3b28b1d7`); Python/JS/API/PostgreSQL 18/Chromium mobile.
-- В части Garmin актуальный CI на расширенном HEAD ещё проходит: не объявлять итоговый SUCCESS до подтверждения точного SHA.
+- [CI #40211590461](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40211590461) — **SUCCESS** на SHA `ba7630e98511db0ecd32b4e326d18d4ba1cd7e0d` (общий код FatSecret + аддитивный Garmin, Python/JavaScript/API/PG18/Chromium mobile). Это не доказательство настоящего OAuth или реальных Garmin-данных.
 - Реальных credentials/привилегий FatSecret и Garmin, пользовательских OAuth подключений и запросов с настоящими данными пока нет; права пользователей и кеширование provider-контента необходимо проверить с фактическими договорами. **Полный рабочий FatSecret и Garmin не заявлены.**
 - Реальная приёмка на Telegram Android/iOS не проверена; иллюстрации, Yandex AI 4-недельные планы и полное подключение личного FatSecret дневника — последующие этапы.
 
