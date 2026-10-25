@@ -19,7 +19,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 
 let onboardOpen=false,onboard=null,onboardErrors={};
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
-let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false;
+let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -363,8 +363,8 @@ function training(){
   '</section>';
  const selected=cardioType||'Выбрать вид кардио';
  const cardioCard='<section class="surface cardio-inline" id="cardio-entry">'+
-  '<div class="heading-row"><h2 style="margin:0;font-size:21px">Записать кардио</h2></div>'+
-  '<p class="input-note" style="margin:9px 0 15px">Кардио вне плана можно сохранить здесь, без отдельного экрана.</p>'+
+  '<div class="heading-row"><h2 style="margin:0;font-size:21px">Дополнительная тренировка</h2></div>'+
+  '<p class="input-note" style="margin:9px 0 15px">Активность вне основного тренировочного плана.</p>'+
   '<div class="field"><span>Вид кардио</span>'+
   button(selected,'cardio-types',false,'aria-expanded="'+typesOpen+'" aria-controls="cardio-type-options"')+
   '</div>'+
@@ -372,19 +372,19 @@ function training(){
    ['Ходьба','Бег','Велосипед','Плавание','Другое'].map(type=>
      button(type,'cardio-type',false,'data-type="'+esc(type)+'" aria-pressed="'+(cardioType===type)+'"')).join('')+
    '</div>':'')+
+  (cardioType==='Другое'?'<label class="field"><span>Название активности</span><textarea id="cardio-activity" rows="2" maxlength="100" placeholder="Играл в теннис, работал в саду...">'+esc(drafts['cardio-activity']||'')+'</textarea></label>':'')+
   '<div class="cardio-input-grid">'+
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric" placeholder="60"')+
     '<label class="field"><span>Средний пульс <small>необязательно</small></span>'+
     '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
-  '</div><div style="margin-top:15px">'+button('Сохранить кардио','cardio',true)+'</div>'+
-  '<p class="input-note" style="margin-top:11px">Запись сохраняется в PostgreSQL. Garmin не подключён.</p></section>';
- const aiCard='<section class="surface soft"><h2>Персональный совет Yandex AI</h2>'+
-  '<p class="input-note">Только с согласия в анкете. Рекомендация не меняет автоматически твой план и ограничения безопасности.</p>'+
-  button(aiTipBusy?'Подготавливаем...':'Совет для моей тренировки','ai-tip-training',false,aiTipBusy?'disabled':'')+
-  (aiTrainingTip?'<p class="fq-live-banner" role="status">'+esc(aiTrainingTip)+'</p>':'')+'</section>';
- return h()+'<span class="kicker">'+esc(dayLabel)+'</span><h1 class="title">Сегодня</h1>'+
-  '<p class="intro">Главное на сегодня — без лишнего.</p>'+
-  trainingCard+cardioCard+aiCard;
+  '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
+  '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
+ const clock=localClock(),greeting=clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
+ const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
+ const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
+ return h()+'<span class="kicker fq-home-date">'+esc(dayLabel)+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
+  '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -591,6 +591,9 @@ function profile(){return onboardForm();}
 function modalHTML(){
  if(!modal)return '';
  let content='';
+ if(modal==='feedback')content='<h2>Отзывы и предложения</h2>'+
+  '<label class="field"><span>Отзыв, ошибка или идея</span><textarea id="feedback-text" rows="5" maxlength="800" placeholder="8–800 символов">'+esc(drafts['feedback-text']||'')+'</textarea></label>'+
+  button('Отправить','feedback-send',true)+button('Отмена','close');
  if(modal==='cardio'){
   content='<h2>Запись кардио</h2><p>Запиши кардио, которое сделал самостоятельно.</p>'+
   '<label class="field"><span>Вид кардио</span>'+button(cardioType||'Выбрать вид кардио','cardio-types')+'</label>'+
@@ -630,7 +633,7 @@ function partialHistory(){const el=document.getElementById('history-root');if(el
 function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{
  onboardChanged(e);
- if(['reps','weight','cardio-min','cardio-hr'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(['reps','weight','cardio-min','cardio-hr','cardio-activity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
  const metric=String(e.target.id||'').replace(/^profile-/,'');
@@ -796,6 +799,12 @@ app.addEventListener('click',async e=>{
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
  }
+ if(cmd==='feedback-open'){modal='feedback';draw();return}
+ if(cmd==='feedback-send'){const msg=String(document.getElementById('feedback-text')?.value||drafts['feedback-text']||'').trim();
+  if(msg.length<8||msg.length>800){fail('Напиши от 8 до 800 символов.');return}
+  try{const result=await request('feedback',{text:msg});feedbackNotice=result.message||'Спасибо! Отзыв сохранён.';drafts['feedback-text']='';modal='';error='';draw()}
+  catch(ex){fail(ex.message||'Не удалось сохранить отзыв.')}return;
+ }
  if(cmd==='close'){modal='';draw();return}
  if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
  if(cmd==='mood'){modal='mood';draw();return}
@@ -835,8 +844,10 @@ app.addEventListener('click',async e=>{
   const m=document.getElementById('cardio-min')?.value.trim()||'',p=document.getElementById('cardio-hr')?.value.trim()||'';
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
-  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType});
-  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';if(date){dayRows=null;await loadDay()}draw()}
+  const activity=String(document.getElementById('cardio-activity')?.value||drafts['cardio-activity']||'').trim();
+  if(cardioType==='Другое'&&(activity.length<3||activity.length>100)){fail('Название активности: 3–100 символов.');return}
+  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType,...(cardioType==='Другое'?{activity}:{})});
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-activity']='';if(date){dayRows=null;await loadDay()}draw()}
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
