@@ -18,7 +18,8 @@ function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
 let onboardOpen=false,onboard=null,onboardErrors={};
-let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
+let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
+let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null;
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
@@ -37,7 +38,7 @@ function initOnboard(){
   equipment:p.equipment==='gym'?'gym':'home',
   minutes:String(Math.max(20,Math.min(120,Math.round(oldMinutes/10)*10))),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
-  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:m.timezone||deviceZone(),timezoneConfirmed:false,
+  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:deviceZone(),timezoneConfirmed:true,
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
   aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
   profileAiConsent:state?.ai_personalization?.profile===true&&state?.ai_personalization?.health===true&&(m.sex!=='female'||state?.ai_personalization?.cycle===true),
@@ -45,7 +46,7 @@ function initOnboard(){
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
-  adult:!!state?.agreed,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
+  adult:true,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
 function onboardError(key){
@@ -82,10 +83,7 @@ function onboardForm(){
   onboardButtons('sex','Пол',[['Мужской','male'],['Женский','female']])+
   '<div class="form-row">'+onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
   onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+
- '<label class="field"><span>Часовой пояс *</span><input data-onboard="timezone" type="search" list="fq-timezones" required autocomplete="off" value="'+esc(d.timezone)+'" placeholder="Город / регион"></label>'+
- '<datalist id="fq-timezones">'+allTimezones().map(z=>'<option value="'+esc(z)+'"></option>').join('')+'</datalist>'+
- onboardError('timezone')+'<p class="input-note">Определён по устройству: '+esc(deviceZone())+'. Можно изменить; VPN не учитывается.</p>'+
- onboardCheckbox('timezoneConfirmed','Подтверждаю выбранный часовой пояс')+onboardCheckbox('adult','Мне исполнилось 18 лет');
+ ''; 
  const training='<h2 class="section-label">Тренировки</h2>'+
   onboardButtons('goal','Цель',onboardChoices.goal)+onboardChoice('level','Опыт',onboardChoices.level)+
   onboardWeekdays()+onboardChoice('minutes','Продолжительность тренировки',onboardChoices.minutes)+
@@ -94,15 +92,13 @@ function onboardForm(){
  const health=block('<h2>Здоровье</h2>'+
   '<label class="field"><span>Есть ли заболевания, травмы или ограничения, которые нужно учитывать при тренировках?</span>'+
   '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
-  '<p class="input-note">Описание необязательно. Без разбора ограничений ИИ приложение не делает медицинских выводов. При симптомах или травмах уточни безопасную нагрузку со специалистом.</p>'+
-  onboardCheckbox('healthStorageConsent','Разрешаю сохранить описание здоровья в приватном дневнике (если оно указано)')+
-  (String(d.description).trim()?''+
-    (d.profileAiConsent&&state?.ai_personalization?.health?button('Разобрать описание','onboard-ai'): '')+
-    (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь результат ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+'</div>'+
-       (d.aiResult.needs_clarification&&d.aiResult.clarification_question?'<label class="field"><span>'+
-        esc(d.aiResult.clarification_question)+'</span><textarea data-onboard="clarification" rows="2" maxlength="220" placeholder="Ответ необязателен"></textarea></label>'+
-        button('Уточнить с ИИ (необязательно)','onboard-ai-clarify'):'')+
-       onboardCheckbox('aiReviewed','Подтверждаю проверенные результаты анализа'):''):'')+
+  '<p class="input-note">Описание необязательно. При нажатии «Сохранить» оно сохраняется в приватном профиле. При симптомах или травмах уточни допустимую нагрузку у специалиста.</p>'+
+  (String(d.description).trim()?button('Разобрать описание','onboard-ai'):'')+
+  (d.aiResult?'<div class="fq-ai-result">'+
+   (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
+     '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
+      button('Уточнить для Yandex AI','onboard-ai-clarify'):
+      '<p class="input-note">Проверь сведения перед применением.</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
   onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
@@ -111,7 +107,7 @@ function onboardForm(){
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
- const calendar=d.sex==='female'?(state?.metrics?.sex==='female'?femaleCalendar():block('<h2>Женский календарь</h2><p>Сохрани выбранный пол, чтобы открыть календарь.</p>')):'';
+ const calendar=d.sex==='female'?femaleCalendar():'';
  const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
   (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
@@ -120,9 +116,6 @@ function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
  if(!['male','female'].includes(d.sex))errs.sex='Выбери Мужской или Женский.';
  if(!Array.isArray(d.weekdays)||d.weekdays.length<1)errs.weekdays='Выбери хотя бы один день недели.';
- if(!d.adult)errs.adult='Подтверди возраст 18+.';
- if(!d.timezoneConfirmed)errs.timezoneConfirmed='Подтверди часовой пояс.';
- try{new Intl.DateTimeFormat('ru-RU',{timeZone:d.timezone})}catch(_e){errs.timezone='Введи корректный IANA-часовой пояс.'}
  for(const key of ['terms','privacy','health'])if(!d[key])errs[key]='Подтверди согласие.';
  const mm={};
  for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
@@ -131,8 +124,7 @@ function onboardingPayload(){
   else mm[key]=value;
  }
  const description=String(d.description||'').trim();
- if(description&&!d.healthStorageConsent)errs.healthStorageConsent='Для сохранения описания нужно отдельное согласие.';
- if(description&&d.aiResult&&!d.aiReviewed)errs.description='Проверь и подтверди результат ИИ.';
+ if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI или продолжи без разбора.';
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
@@ -147,11 +139,11 @@ function onboardingPayload(){
   (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
- const timezone=d.timezone;
+ const timezone=deviceZone();
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
-  health_description:description,health_storage_consent:!!d.healthStorageConsent,
+  health_description:description,health_storage_consent:!!description&&d.privacy,
   ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!d.profileAiConsent,ai_cycle_consent:!!(d.profileAiConsent&&d.sex==='female'),
   unified_ai_consent:!!d.profileAiConsent,
   health_profile:{affected,pain_score:reviewed?Number(d.pain||0):Number(prior.pain_score||0),
@@ -173,21 +165,22 @@ async function loadFemalePeriods(){
  finally{periodBusy=false;draw()}
 }
 function femaleCalendar(){
- if(state?.metrics?.sex!=='female'||onboard?.sex==='male')return '';
+ if(onboard?.sex!=='female')return '';
  const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
- const months=[...new Set((periodEntries||[]).map(p=>p.start.slice(0,7)))];
+ const visiblePeriods=[...(periodEntries||[]),...pendingPeriods];
+ const months=[...new Set(visiblePeriods.map(p=>p.start.slice(0,7)))];
  const current=months.includes(periodMonth)?periodMonth:months[0]||'';
  const selector=months.length?'<label class="field" style="margin-top:16px"><span>Месяц истории</span><select id="period-month">'+
   months.map(v=>'<option value="'+esc(v)+'"'+(v===current?' selected':'')+'>'+esc(v.slice(5,7)+'.'+v.slice(0,4))+'</option>').join('')+
   '</select></label>':'';
- const entries=(periodEntries||[]).filter(p=>p.start.slice(0,7)===current).map(p=>
+ const entries=visiblePeriods.filter(p=>p.start.slice(0,7)===current).map(p=>
   '<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
-  button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
+  (p.id<0?'<small>Будет сохранено с анкетой</small>':'')+button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
  const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
   esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
   '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
  return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
-  '<p class="input-note">Необязательный приватный дневник. Без отдельного согласия данные не отправляются в Yandex AI.</p>'+
+  '<p class="input-note">Приватный дневник. Новые даты можно ввести сразу — они сохранятся вместе с анкетой. Без согласия данные не передаются в Yandex AI.</p>'+
   '<p class="input-note">Для передачи данных цикла в Yandex AI действует единое согласие анкеты. Отзыв не удаляет записи.</p>'+
   '<div class="fq-live-grid" style="margin-top:15px">'+
   '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
