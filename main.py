@@ -3037,6 +3037,15 @@ def save_onboarding(chat,body):
                     reconcile_existing=True)
                 c.execute('''UPDATE training_cycles SET profile_fingerprint=%s
                     WHERE id=%s AND chat_id=%s''',(fingerprint(current),cycle[0],chat))
+            else:
+                # Create the first four-week schedule in the same transaction
+                # as the validated profile. A failed state refresh must not
+                # leave a saved onboarding with no training cycle.
+                new_cycle=c.execute('''INSERT INTO training_cycles(chat_id,starts_on,profile_fingerprint)
+                    VALUES(%s,%s,%s) RETURNING id''',
+                    (chat,new_today,fingerprint(current))).fetchone()[0]
+                reconcile_schedule_in(c,chat,new_cycle,new_today,current,new_today,
+                    reconcile_existing=True)
 
 
 # Проектные шаблоны документов: до публичного запуска необходимо заполнить
@@ -3684,7 +3693,13 @@ def mini_state(chat, just_finished=False):
        'monthly':MONTH_PRICES_RUB,'quarter':{'start':1470,'comfort':2970,'max':4170},'trial_days':TRIAL_DAYS}
     if just_finished:
         result['workout'] = {'finished':True}
-    if error is None:
+    # A safety restriction must not erase the calendar or send the owner
+    # back to onboarding. Keep unsafe exercise generation disabled, however.
+    complete = (p.get('age_group')=='adult' and
+        all(p.get(k) for k in ('goal','level','days','equipment','minutes')) and
+        result['agreed'] and h is not None and
+        all(result['metrics'].get(k) for k in ('age','height_cm','weight_kg')))
+    if complete:
         cycle, week = get_cycle(chat,p)
         result['week'] = week
         result['calendar']=scheduled_calendar(chat,p,cycle)
@@ -3702,11 +3717,16 @@ def mini_state(chat, just_finished=False):
         # PostgreSQL connections for every exercise in the library.
         result['library']=[{'key':k,'name':v[0]} for k,v in EX.items()
             if exercise_for_equipment(p.get('equipment'),k) and eligible_exercise(k,h)]
-        result['plan'] = [[{
-                'key':key,'name':EX[key][0], 'sets':n,
-                'low':lo, 'high':hi, 'unit':unit
-            } for key,n,lo,hi,unit in user_session(chat,p,week,day,cycle_id=cycle)]
-            for day in TRAINING_DAYS[:count]]
+        if error is None:
+            result['plan'] = [[{
+                    'key':key,'name':EX[key][0], 'sets':n,
+                    'low':lo, 'high':hi, 'unit':unit
+                } for key,n,lo,hi,unit in user_session(chat,p,week,day,cycle_id=cycle)]
+                for day in TRAINING_DAYS[:count]]
+        else:
+            # Persist/show the calendar, but never offer potentially unsafe
+            # exercises or a start button without a valid health clearance.
+            result['plan_warning'] = error
     return result
 
 
