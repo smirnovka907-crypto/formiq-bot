@@ -369,6 +369,9 @@ async function run(){
  assert.match(catalogClient.root.innerHTML,/Овсянка сухая/);
  await catalogClient.click({cmd:'food-catalog-link',foodId:'42',servingId:'13'});
  assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_attach'&&x.id===202));
+ await settle();
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_nutrition_day'),
+  'Daily macros must load automatically after provider verification');
  assert.match(catalogClient.root.innerHTML,/266.*ккал/,'Only verified serving may produce KБЖУ');
  await catalogClient.click({cmd:'food-nutrition-day'});
  assert.ok(catalogClient.requests.some(x=>x.action==='food_nutrition_day'));
@@ -379,6 +382,8 @@ async function run(){
     {id:202,name:'Овсянка сухая',grams:70,nutrition_source:'fatsecret'},
     {id:203,name:'Банан без базы',grams:120}]}]});
  await settle();await mixedClient.click({nav:'food'});await settle();
+ assert.ok(mixedClient.requests.some(x=>x.action==='food_nutrition_day'),
+  'Existing verified food macros load without an extra user action');
  await mixedClient.click({cmd:'food-nutrition-day'});
  assert.match(mixedClient.root.innerHTML,/Данные за день неполные/);
  assert.match(mixedClient.root.innerHTML,/1 из 2 продуктов/);
