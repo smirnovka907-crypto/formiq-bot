@@ -3346,8 +3346,15 @@ def ingest_garmin_verified_batch(chat, provider_user_id, payload):
 # Requires independently provisioned user-diary OAuth 1.0a credentials, an
 # application encryption key kept only in Render, and an HTTPS callback URL.
 def fatsecret_user_oauth_ready():
-    return bool(FATSECRET_OAUTH_CONSUMER_KEY and FATSECRET_OAUTH_CONSUMER_SECRET
-        and FORMIQ_INTEGRATION_ENCRYPTION_KEY and BASE_URL.startswith('https://'))
+    if not (FATSECRET_OAUTH_CONSUMER_KEY and FATSECRET_OAUTH_CONSUMER_SECRET
+            and FORMIQ_INTEGRATION_ENCRYPTION_KEY and BASE_URL.startswith('https://')):
+        return False
+    try:
+        # A present but invalid encryption key is NOT a usable connection.
+        Fernet(FORMIQ_INTEGRATION_ENCRYPTION_KEY.encode('ascii'))
+    except (ValueError,TypeError,UnicodeError):
+        return False
+    return True
 
 
 def fatsecret_user_cipher():
