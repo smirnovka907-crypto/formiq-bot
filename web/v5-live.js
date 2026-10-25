@@ -25,6 +25,7 @@ let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='';
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
+let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
@@ -591,6 +592,47 @@ async function uploadBodyWeight(mode){
  }catch(ex){weightImportError=ex.name==='AbortError'?'Импорт не ответил вовремя. Проверь историю перед повтором.':ex.message}
  finally{clearTimeout(timer);weightImportBusy=false;draw()}
 }
+async function loadGarminDay(){
+ if(!ready())return;
+ if(!garminDate)garminDate=localClock().date;
+ const expected=garminDate,seq=++garminSeq;
+ garminLoading=true;garminError='';garminSnapshot=null;
+ try{
+  const result=await request('garmin_day',{date:expected});
+  if(seq===garminSeq&&expected===garminDate)garminSnapshot=result;
+ }catch(ex){if(seq===garminSeq&&expected===garminDate)garminError=ex.message||'Нет доступа к данным Garmin'}
+ finally{if(seq===garminSeq&&expected===garminDate){garminLoading=false;if(view==='progress')draw()}}
+}
+function garminPanel(){
+ const g=garminSnapshot;
+ // No connected provider identity = no Garmin card, false activity or mock data.
+ if(!g?.connected)return '';
+ const prettyMetric=(label,v,unit='')=>v==null?'':'<div class="fq-live-row"><span>'+esc(label)+'</span><strong>'+esc(v)+esc(unit)+'</strong></div>';
+ const dailyFields=[['steps','Шаги',''],['resting_heart_rate_bpm','Пульс в покое',' уд/мин'],
+  ['active_calories_kcal','Калории активности',' ккал'],['total_daily_calories_kcal','Суточные энергозатраты',' ккал'],
+  ['resting_calories_kcal','Калории покоя',' ккал'],['average_stress_level','Стресс',''],
+  ['body_battery_charged','Body Battery · заряд',''],['body_battery_drained','Body Battery · расход','']];
+ const dailies=(g.dailies||[]).map(e=>dailyFields.map(([key,label,unit])=>
+  prettyMetric(label,e.values?.[key],unit)).join('')).join('');
+ const sleeps=(g.sleeps||[]).map(e=>'<div class="fq-live-row"><span>Сон</span><strong>'+
+  (e.values?.duration_minutes!=null?esc(e.values.duration_minutes)+' мин':'Длительность не получена')+
+  (e.values?.sleep_score!=null?' · оценка '+esc(e.values.sleep_score):'')+'</strong></div>').join('');
+ const activities=(g.activities||[]).map(e=>'<div class="fq-live-row"><span>'+
+  esc(e.values?.activity_type||'Активность Garmin')+
+  (e.date_basis==='profile_timezone'?' · дата по часовому поясу профиля':'')+
+  '</span><strong>'+(e.values?.duration_seconds!=null?
+    esc(Math.round(Number(e.values.duration_seconds)/60))+' мин':'Время не получено')+
+  (e.values?.active_calories_kcal!=null?' · '+esc(e.values.active_calories_kcal)+' ккал активности':'')+
+  '</strong></div>').join('');
+ return '<section class="surface"><h2>Garmin Connect</h2>'+
+  '<p class="input-note">Данные подключённого аккаунта, без дублирования ручных тренировок и калорий.</p>'+
+  (g.last_sync_at?'<p class="input-note">Последняя синхронизация: '+
+    esc(new Date(g.last_sync_at).toLocaleString('ru-RU'))+'</p>':'<p class="input-note">Синхронизация ещё не подтверждена.</p>')+
+  '<label class="field"><span>Дата Garmin</span><input type="date" id="garmin-date" value="'+esc(garminDate)+'"></label>'+
+  (dailies+sleeps+activities||'<p class="input-note">За выбранную дату показатели Garmin не получены.</p>')+
+  button(garminLoading?'Обновляем…':'Обновить данные','garmin-refresh',false,garminLoading?'disabled':'')+
+  button('Отключить Garmin','garmin-disconnect-open')+'</section>';
+}
 function progress(){
  const stats=state.stats||{},weight=state.metrics?.weight_kg;
  const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
@@ -635,7 +677,7 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+history();
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+garminPanel()+summary+history();
 }
 const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
 async function loadFoodHistory(){
@@ -819,6 +861,10 @@ function modalHTML(){
    (catalogMessage?'<p role="status" class="input-note">'+esc(catalogMessage)+'</p>':'')+
    cards+button('Вернуться','food-catalog-back');
  }
+ if(modal==='garmin-disconnect'){
+  content='<h2>Отключить Garmin?</h2><p>Доступ к показателям будет прекращён. История тренировок и существующие записи останутся.</p>'+
+   button('Отключить','garmin-disconnect-confirm')+button('Отмена','close');
+ }
  if(modal==='fatsecret-disconnect'){
   content='<h2>Отключить FatSecret?</h2>'+
    '<p>Доступ к дневнику будет удалён из FORMIQ. Ручные записи питания останутся.</p>'+
@@ -885,6 +931,7 @@ app.addEventListener('input',e=>{
 app.addEventListener('change',e=>{
  if(e.target.id==='food-date'){fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
+ if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
 });
@@ -903,7 +950,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -1117,6 +1164,18 @@ app.addEventListener('click',async e=>{
   const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
   if(!item)return;
   foodEdit={...item};catalogCandidates=[];catalogMessage='';modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='garmin-refresh'){if(!garminLoading)await loadGarminDay();return}
+ if(cmd==='garmin-disconnect-open'){if(garminSnapshot?.connected){modal='garmin-disconnect';draw()}return}
+ if(cmd==='garmin-disconnect-confirm'){
+  if(!garminSnapshot?.connected)return;
+  ++garminSeq;garminLoading=true;draw();
+  try{
+   await request('garmin_disconnect');
+   garminSnapshot={connected:false};garminError='';modal='';
+  }catch(ex){garminError=ex.message||'Не удалось отключить Garmin';modal=''}
+  finally{garminLoading=false;draw()}
+  return;
  }
  if(cmd==='fatsecret-connect'){
   if(!state?.fatsecret_diary_configured||fatsecretBusy)return;
