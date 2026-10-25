@@ -513,6 +513,19 @@ async function run(){
   await ownerCoach.click({cmd:'food-save'});await settle();
   assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/,
     'Editing the diary invalidates previous AI nutrition guidance');
+  const delayedAdviceClient=createClient(true,{tier:'max',
+    now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'},
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();await delayedAdviceClient.click({nav:'food'});await settle();
+  const releaseAdvice=delayedAdviceClient.deferOnce('ai_personalized_guidance');
+  const pendingAdvice=delayedAdviceClient.click({cmd:'ai-tip-nutrition'});await settle();
+  assert.ok(delayedAdviceClient.requests.some(x=>x.action==='ai_personalized_guidance'),
+      'AI request begins against existing food data');
+  await delayedAdviceClient.click({cmd:'food-parse'});await settle();
+  await delayedAdviceClient.click({cmd:'food-save'});await settle();
+  releaseAdvice();await pendingAdvice;await settle();
+  assert.doesNotMatch(delayedAdviceClient.root.innerHTML,/Совет по реальному дневнику питания/,
+      'A delayed AI response must not appear after editing the same-day diary');
   const diaryOnly=createClient(true,{tier:'start',
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();await diaryOnly.click({nav:'food'});await settle();
