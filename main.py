@@ -3280,6 +3280,61 @@ CARDIO_TYPES = {
 }
 CARDIO_LABELS = {v: k for k, v in CARDIO_TYPES.items()}
 
+# Conservative activity categories based on published Compendium-of-Physical-Activities
+# MET estimates. A number is not a device measurement or individual metabolic test.
+CARDIO_MET = {'walking':3.5,'running':8.0,'cycling':6.8,'swimming':6.0,
+              'tennis':7.3,'yoga':2.5,'gardening':4.0,'motorcycle':2.5,
+              'dance':5.0,'strength':5.0,'cleaning':3.3,'hiking':6.0}
+CARDIO_WORDS = (
+    ('motorcycle',('мотоцикл','мотоцикле','мото','байк на мотор')),
+    ('cycling',('велосипед','велопрогул','велотренаж')),
+    ('tennis',('теннис','ракетк')),
+    ('yoga',('йога','йогу')),
+    ('gardening',('сад','огород','гряд','копал землю')),
+    ('dance',('танц','зумба')),
+    ('cleaning',('уборк','мыл пол','пылесос')),
+    ('hiking',('поход','трекинг','хайкинг')),
+    ('running',('бег','пробеж')),
+    ('walking',('ходьб','гулял','гуляла','прогулк')),
+    ('swimming',('плаван','плавал','бассейн')),
+    ('strength',('силовая','гантел','тренажерный зал','тренажёрный зал')),
+)
+
+
+def met_category_from_activity(text,chat):
+    """Never ask AI for energy; accept only one category from a fixed MET table."""
+    lower=text.casefold()
+    for key,words in CARDIO_WORDS:
+        if any(word in lower for word in words):
+            return key
+    if not (YANDEX_KEY and FOLDER_ID and personalization_consent(chat)['profile']):
+        return None
+    allowed=', '.join(CARDIO_MET)
+    payload={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+      'completionOptions':{'stream':False,'temperature':0,'maxTokens':'35'},
+      'messages':[{'role':'system','text':'Классифицируй краткое название физической активности в ОДНУ из категорий: '+allowed+
+        '. Если недостаточно информации, ответь unknown. Только одно английское слово из списка, без объяснений, диагнозов или калорий.'},
+        {'role':'user','text':text}]}
+    req=urllib.request.Request(AI_URL,
+      data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),
+      headers={'Authorization':'Api-Key '+YANDEX_KEY,'Content-Type':'application/json'},method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=12) as response:
+            decoded=json.load(response)
+        category=str(decoded['result']['alternatives'][0]['message']['text']).strip().lower()
+        return category if category in CARDIO_MET else None
+    except (ValueError,KeyError,TypeError,IndexError,urllib.error.HTTPError,
+            urllib.error.URLError,TimeoutError,json.JSONDecodeError):
+        LOG.warning('Activity classification unavailable, saving without estimated energy')
+        return None
+
+
+def cardio_history_title(equipment,minutes,activity=None,kcal=None):
+    title=activity or CARDIO_LABELS.get(equipment,'Активность')
+    return 'Дополнительная тренировка · '+title+' · '+str(minutes)+' мин'+(
+        ' · ≈ '+str(kcal)+' ккал' if kcal is not None else '')
+
+
 
 def history_local_zone(chat):
     """Resolve the stored IANA timezone; never trust client-supplied timezone."""
@@ -3754,12 +3809,35 @@ def mini_aux(chat,action,body):
         if activity is not None and activity not in CARDIO_TYPES:
             raise ValueError('Неизвестный вид кардио')
         stored_type=CARDIO_TYPES[activity] if activity else 'elliptical'
+        raw_label=body.get('activity')
+        if stored_type=='other':
+            if not isinstance(raw_label,str) or not 3<=len(raw_label.strip())<=100:
+                raise ValueError('Укажи вид активности от 3 до 100 символов')
+            activity_label=' '.join(raw_label.strip().split())
+        else:
+            if raw_label not in (None,''):
+                raise ValueError('Название нужно только для категории «Другое»')
+            activity_label=None
+        intensity=body.get('intensity','moderate')
+        if intensity not in ('light','moderate','vigorous'):
+            raise ValueError('Проверь интенсивность активности')
         if type(mins) is not int or not 1<=mins<=300:raise ValueError('Минуты: от 1 до 300')
         if hr not in (None,'') and (type(hr) is not int or not 40<=hr<=220):
             raise ValueError('Пульс: от 40 до 220')
+        category=(met_category_from_activity(activity_label,chat) if activity_label
+                  else stored_type if stored_type in CARDIO_MET else None)
+        base_met=CARDIO_MET.get(category)
+        met=(round(max(1.3,min(14.,base_met*
+                  {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
+             if base_met is not None else None)
+        current_weight=metrics(chat).get('weight_kg')
+        kcal=(round(met*3.5*float(current_weight)*mins/200)
+              if met is not None and current_weight and float(current_weight)>0 else None)
         with db() as conn:
-            conn.execute('INSERT INTO cardio_sessions(chat_id,minutes,avg_hr,equipment) VALUES(%s,%s,%s,%s)',
-              (chat,mins,hr or None,stored_type))
+            conn.execute('''INSERT INTO cardio_sessions
+              (chat_id,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,intensity)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s)''',
+              (chat,mins,hr or None,stored_type,activity_label,met,kcal,intensity))
         return True
     if action=='ai_consent':
         require_tier(chat,'comfort')
