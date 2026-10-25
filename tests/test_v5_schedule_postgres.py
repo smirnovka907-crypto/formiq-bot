@@ -356,6 +356,54 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(fake.access_token.call_count,1)
         self.assertEqual(fake.diary.call_count,1)
 
+    def test_fatsecret_live_diary_rechecks_access_after_provider_reply(self):
+        """Revocation/reconnect during HTTP must not leak previous user's diary."""
+        from cryptography.fernet import Fernet
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        key=Fernet.generate_key()
+        cipher=Fernet(key)
+        initial_token=cipher.encrypt(b'old_access')
+        initial_secret=cipher.encrypt(b'old_secret')
+        payload={'food_entries':{'food_entry':[{
+            'food_entry_id':'1','food_entry_name':'Private diary entry',
+            'calories':'100','protein':'3','fat':'2','carbohydrate':'15'}]}}
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO fatsecret_user_connections
+                (chat_id,access_token_enc,access_secret_enc,connected_at)
+                VALUES(%s,%s,%s,NOW())""",(self.chat,initial_token,initial_secret))
+        fake=Mock()
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key.decode()), \\
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test'), \
+             patch.object(self.m,'fatsecret_user_client',return_value=fake):
+            def disconnect_during_request(*args):
+                self.m.fatsecret_user_disconnect(self.chat)
+                return payload
+            fake.diary.side_effect=disconnect_during_request
+            with self.assertRaisesRegex(ValueError,'отключён или переподключён'):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            with self.connect() as conn:
+                conn.execute("""INSERT INTO fatsecret_user_connections
+                   (chat_id,access_token_enc,access_secret_enc,connected_at)
+                   VALUES(%s,%s,%s,NOW())""",
+                   (self.chat,initial_token,initial_secret))
+            def replace_during_request(*args):
+                with self.connect() as conn:
+                    conn.execute("""UPDATE fatsecret_user_connections
+                       SET access_token_enc=%s,access_secret_enc=%s
+                       WHERE chat_id=%s""",
+                       (cipher.encrypt(b'new_access'),cipher.encrypt(b'new_secret'),self.chat))
+                return payload
+            fake.diary.side_effect=replace_during_request
+            with self.assertRaisesRegex(ValueError,'отключён или переподключён'):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                self.assertIsNone(conn.execute("""SELECT last_sync_at
+                    FROM fatsecret_user_connections WHERE chat_id=%s""",
+                    (self.chat,)).fetchone()[0])
+
     def test_fatsecret_connection_rejects_invalid_encryption_key(self):
         self.m.save_onboarding(self.chat,self.body())
         with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY','incorrect-key'), \
