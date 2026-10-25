@@ -130,8 +130,13 @@ async function run(){
     window.__fqFullscreen=0;
     window.Telegram={WebApp:{
      initData:'signed-for-browser-test',ready(){},expand(){},
-     requestFullscreen(){window.__fqFullscreen++},
-     isVersionAtLeast(){return true},onEvent(){},
+     requestFullscreen(){
+      window.__fqFullscreen++;
+      this.isFullscreen=true;
+      this.contentSafeAreaInset.top=52;
+     },
+     isVersionAtLeast(){return true},
+     onEvent(name,callback){(window.__fqTelegramEvents||(window.__fqTelegramEvents={}))[name]=callback},
      safeAreaInset:{top:24,bottom:8},contentSafeAreaInset:{top:0,bottom:0}
     }};
    });
@@ -222,6 +227,33 @@ async function run(){
    assert.equal(await nav.count(),3,'Exactly three bottom buttons');
    assert.deepEqual(await nav.allTextContents(),['Тренировки','Питание','Прогресс']);
    assert.equal(await page.evaluate(()=>window.__fqFullscreen),1,'Telegram fullscreen requested');
+   const safeHeader=await page.evaluate(()=>{
+    const header=document.querySelector('.header').getBoundingClientRect();
+    const brand=document.querySelector('.brand').getBoundingClientRect();
+    const profile=document.querySelector('.profile-open').getBoundingClientRect();
+    return {top:header.top,brandTop:brand.top,profileTop:profile.top,
+      contentTop:Telegram.WebApp.contentSafeAreaInset.top};
+   });
+   assert.ok(safeHeader.top>=24+52+18-1,'Header must clear system + Telegram top controls: '+JSON.stringify(safeHeader));
+   assert.ok(safeHeader.brandTop>=24+52,'Logo below Telegram controls');
+   assert.ok(safeHeader.profileTop>=24+52,'Profile button below Telegram controls');
+   // Telegram may report changed insets after fullscreen or orientation.
+   const shifted=await page.evaluate(()=>{
+    Telegram.WebApp.contentSafeAreaInset.top=76;
+    window.__fqTelegramEvents.contentSafeAreaChanged();
+    return document.querySelector('.header').getBoundingClientRect().top;
+   });
+   assert.ok(shifted>=24+76+18-1,'Header must follow content safe-area change: '+shifted);
+   const fallback=await page.evaluate(()=>{
+    Telegram.WebApp.contentSafeAreaInset.top=0;
+    window.__fqTelegramEvents.contentSafeAreaChanged();
+    return document.querySelector('.header').getBoundingClientRect().top;
+   });
+   assert.ok(fallback>=24+64+18-1,'Telegram fullscreen buttons protected when inset temporarily zero: '+fallback);
+   await page.evaluate(()=>{
+    Telegram.WebApp.contentSafeAreaInset.top=52;
+    window.__fqTelegramEvents.contentSafeAreaChanged();
+   });
    const checkInputAlignment=async()=>{
     const boxes=await page.locator('.workout-entry .workout-input-grid .field').evaluateAll(els=>els.map(el=>{
      const label=el.querySelector('span').getBoundingClientRect(),input=el.querySelector('input').getBoundingClientRect();
