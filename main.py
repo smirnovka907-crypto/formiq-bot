@@ -1343,25 +1343,28 @@ def next_day_in(c, chat, cycle_id, count):
     return next_slot[0] if next_slot else None
 
 
-def additional_recovery_advice(chat):
+def additional_recovery_advice(chat, conn=None):
     """Conservative, explainable adjustment from real additional sessions.
 
     No changes to historical data or automatically moved calendar slots.
     Use the last 36h; volume/intensity are heuristics, not wearable metrics.
     """
-    with db() as c:
-        cardio=c.execute("""SELECT minutes,intensity,equipment,activity_label,performed_at
-          FROM cardio_sessions WHERE chat_id=%s
-          AND performed_at>=NOW()-INTERVAL '36 hours'
-          ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
-        manual=c.execute("""SELECT w.id,w.difficulty,COUNT(s.*) FILTER(WHERE s.state='done'),
-            COUNT(DISTINCT i.exercise_key) FILTER(WHERE s.state='done')
-          FROM workouts w LEFT JOIN workout_items i ON i.workout_id=w.id
-          LEFT JOIN workout_sets s ON s.workout_id=i.workout_id AND s.position=i.position
-          WHERE w.chat_id=%s AND w.status='finished' AND w.source='manual'
-            AND w.finished_at>=NOW()-INTERVAL '36 hours'
-          GROUP BY w.id,w.difficulty ORDER BY w.id DESC LIMIT 10""",
-          (chat,)).fetchall()
+    if conn is None:
+        with db() as connection:
+            return additional_recovery_advice(chat,connection)
+    c=conn
+    cardio=c.execute("""SELECT minutes,intensity,equipment,activity_label,performed_at
+      FROM cardio_sessions WHERE chat_id=%s
+      AND performed_at>=NOW()-INTERVAL '36 hours'
+      ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
+    manual=c.execute("""SELECT w.id,w.difficulty,COUNT(s.*) FILTER(WHERE s.state='done'),
+        COUNT(DISTINCT i.exercise_key) FILTER(WHERE s.state='done')
+      FROM workouts w LEFT JOIN workout_items i ON i.workout_id=w.id
+      LEFT JOIN workout_sets s ON s.workout_id=i.workout_id AND s.position=i.position
+      WHERE w.chat_id=%s AND w.status='finished' AND w.source='manual'
+        AND w.finished_at>=NOW()-INTERVAL '36 hours'
+      GROUP BY w.id,w.difficulty ORDER BY w.id DESC LIMIT 10""",
+      (chat,)).fetchall()
     minutes=sum(int(row[0]) for row in cardio)
     high=sum(int(row[0]) for row in cardio if row[1]=='vigorous')
     hard_manual=any(difficulty=='hard' or (done or 0)>=10
@@ -1380,10 +1383,10 @@ def additional_recovery_advice(chat):
 
 
 def adjustment(chat, day):
-    extra=additional_recovery_advice(chat)
-    if extra is not None:
-        return extra
     with db() as c:
+        extra=additional_recovery_advice(chat,c)
+        if extra is not None:
+            return extra
         rows = c.execute('''SELECT id,difficulty FROM workouts WHERE chat_id=%s
                             AND plan_day=%s AND status='finished'
                             ORDER BY finished_at DESC,id DESC LIMIT 2''',
