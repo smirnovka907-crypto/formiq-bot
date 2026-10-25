@@ -1056,9 +1056,8 @@ def home(chat, mid=None, welcome_image=False):
     except Exception:
         LOG.exception('Failed to remove old Mini App menu button for chat')
     markup = formiq_chat_keyboard()
-    caption = ('<b>FORMIQ · AI Coach</b>\n'
-               'Тренировки, питание и прогресс — в одном приложении.\n'
-               'Персональный план и AI-помощник под твою цель.')
+    # Exact owner-approved welcome copy; keep it identical for photo and text fallback.
+    caption = 'Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. Тренируйся, следи за питанием и наблюдай за своим прогрессом. Веди дневник самостоятельно или доверь персональные рекомендации Yandex AI. FORMIQ — Твоя форма. Наш интеллект.'
     if welcome_image:
         from welcome_art import welcome_jpeg
         picture = BytesIO(welcome_jpeg())
