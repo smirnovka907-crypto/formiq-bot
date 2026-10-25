@@ -3818,12 +3818,19 @@ def food_parse(body):
     if len(parts)>30:
         raise ValueError('Максимум 30 продуктов за один ввод')
     recognized,manual=[],[]
-    pattern=r'(.+?)\s+(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:г|гр|грамм(?:а|ов)?|g)\.?'
+    # User text may start or end with the explicitly measured gram weight.
+    # Never infer 'one egg', cups, cooked/raw yield or nutritional data.
+    mass=r'(\d{1,4}(?:[.,]\d{1,2})?)'
+    unit=r'(?:граммов|грамма|грамм|гр|г|g)'
+    suffix=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+r'\.?',re.IGNORECASE)
+    prefix=re.compile(mass+r'\s*'+unit+r'\.?\s+(.+)',re.IGNORECASE)
     for part in parts:
-        found=re.fullmatch(pattern,part,re.IGNORECASE)
-        if found:
+        ending=suffix.fullmatch(part)
+        leading=prefix.fullmatch(part) if ending is None else None
+        if ending or leading:
             try:
-                name,grams=food_item(found.group(1),found.group(2))
+                name,grams=(food_item(ending.group(1),ending.group(2)) if ending
+                            else food_item(leading.group(2),leading.group(1)))
                 recognized.append({'name':name,'grams':float(grams)})
                 continue
             except ValueError:
