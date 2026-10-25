@@ -69,6 +69,23 @@ function createClient(auth=true,shared={}){
     workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
+   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='food_add'){
+    shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
+    response={ok:true,date:p.date,meals:shared.foodMeals,nutrients_available:false};
+   }else if(p.action==='food_update'){
+    for(const meal of shared.foodMeals||[])for(const item of meal.items)if(item.id===p.id){item.name=p.name;item.grams=p.grams}
+    response={ok:true,date:p.date,meals:shared.foodMeals||[]};
+   }else if(p.action==='food_delete'){
+    for(const meal of shared.foodMeals||[])meal.items=meal.items.filter(x=>x.id!==p.id);
+    response={ok:true,date:p.date,meals:shared.foodMeals||[]};
+   }else if(p.action==='training_preview'){
+    response={ok:true,preview:{id:p.id,week:1,day:'A',date:'2026-10-23',name:'Ноги и пресс',
+      duration_minutes:45,warmup_minutes:5,cooldown_minutes:3,cardio_note:'По программе',
+      can_start:true,exercises:[{name:'Жим ногами',key:'leg_press',sets:3,low:10,high:12,unit:'reps',
+      weight_kg:60,muscles:'Ноги',steps:['Настрой тренажёр','Двигай платформу плавно'],
+      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[]}]}};
    }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
    else if(p.action==='body_weight_history')response={ok:true,measurements:[]};
    else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
@@ -241,7 +258,7 @@ async function run(){
  assert.doesNotMatch(progressHtml,/id="training-plan"/,'Progress shows history, not training plan');
  assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
- assert.match(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Real cycle provides seven-day label');
+ assert.doesNotMatch(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Progress no longer includes plan dates');
  await app.click({nav:'home'});
  await app.click({cmd:'week',week:'1'});
  assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains owner calendar session');
