@@ -211,13 +211,24 @@ async function run(){
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
  await app.click({cmd:'close'});
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
-  await app.click({cmd:'plan-open'});
- assert.match(app.root.innerHTML,/19\.10\.2026 — 25\.10\.2026/,'Plan period must show all 7 days');
-  await app.click({cmd:'plan-back'});
-  assert.match(app.root.innerHTML,/Начать тренировку/,'Return from plan to workouts');
+ assert.doesNotMatch(app.root.innerHTML,/Тренировочный план/,'Today no longer contains training plan');
+ assert.match(app.root.innerHTML,/Начать тренировку/,'Workout start remains on Today');
  await app.click({nav:'progress'});
  await settle();
  assert.ok(app.requests.some(x=>x.action==='progress_series'),'Progress loads owner-scoped history separately');
+ const progressHtml=app.root.innerHTML;
+ assert.ok(progressHtml.indexOf('Garmin Connect')<progressHtml.indexOf('id="training-plan"')&&
+           progressHtml.indexOf('id="training-plan"')<progressHtml.indexOf('id="history-root"'),
+           'Existing plan is between Garmin and workout history in Progress');
+ assert.equal((progressHtml.match(/data-cmd="week" data-week="[1-4]"/g)||[]).length,4,
+              'Progress shows exactly four week buttons');
+ assert.match(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Real cycle provides seven-day label');
+ await app.click({cmd:'week',week:'1'});
+ assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains genuine owner calendar session');
+ assert.match(app.root.innerHTML,/week-details/,'Existing week details open inside Progress');
+ await app.click({cmd:'week',week:'1'});
+ assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button closes the existing detail panel');
+
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
  assert.match(app.root.innerHTML,/Изменить параметры/);
@@ -311,8 +322,9 @@ async function run(){
    await localCalendar.click({nav:'progress'});await localCalendar.click({cmd:'calendar'});
    assert.equal(localCalendar.requests.find(x=>x.action==='history_month').month,expected,'Calendar starts in the saved user timezone');
   }
-  await ux.click({cmd:'plan-open'});
-  assert.match(ux.root.innerHTML,/Твой план/);
+  assert.doesNotMatch(ux.root.innerHTML,/Тренировочный план/);
+  await ux.click({nav:'progress'});
+  assert.match(ux.root.innerHTML,/Тренировочный план/);
   assert.match(ux.root.innerHTML,/week-range/);
   await ux.click({nav:'profile'});
   await ux.click({cmd:'onboard-open'});
