@@ -61,8 +61,19 @@ class IntegrationTests(unittest.TestCase):
         output = g.normalize_garmin_webhook(sample, expected_user_id="tester")
         self.assertEqual(len(output), 2)
         self.assertEqual(output[0]["steps"], 7000)
+        self.assertIsNone(output[0]["total_daily_calories_kcal"])
+        self.assertIsNone(output[1]["total_daily_calories_kcal"])
         self.assertEqual(output[1]["duration_seconds"], 1800)
         self.assertEqual(len({g.stable_identity(x) for x in output}), 2)
+        energy=g.normalize_garmin_webhook({"dailies":[{
+            "userId":"tester","summaryId":"energy","calendarDate":"2026-10-22",
+            "activeKilocalories":500,"totalKilocalories":2100,
+            "bmrKilocalories":1600,"bodyBatteryChargedValue":48}]},
+            expected_user_id="tester")[0]
+        self.assertEqual(energy["active_calories_kcal"],500)
+        self.assertEqual(energy["total_daily_calories_kcal"],2100)
+        self.assertEqual(energy["resting_calories_kcal"],1600)
+        self.assertEqual(energy["body_battery_charged"],48)
         with self.assertRaises(PermissionError):
             g.normalize_garmin_webhook(sample, expected_user_id="someone-else")
         with self.assertRaises(ValueError):
