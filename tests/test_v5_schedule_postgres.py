@@ -373,7 +373,7 @@ class SchedulePostgresTests(unittest.TestCase):
                 (chat_id,access_token_enc,access_secret_enc,connected_at)
                 VALUES(%s,%s,%s,NOW())""",(self.chat,initial_token,initial_secret))
         fake=Mock()
-        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key.decode()), \\
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key.decode()), \
              patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test'), \
              patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test'), \
              patch.object(self.m,'fatsecret_user_client',return_value=fake):
