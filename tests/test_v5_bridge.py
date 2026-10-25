@@ -51,6 +51,12 @@ class V5StagingContract(unittest.TestCase):
         self.assertIn("role=\"status\"", js)
         self.assertNotIn("formiq_preview_cardio_v1", js)
 
+    def test_v6_privacy_policy_discloses_private_health_and_period_storage(self):
+        text=self.client.get('/mini/privacy').data.decode('utf-8')
+        self.assertIn('текстовое описание ограничений здоровья',text)
+        self.assertIn('даты менструаций',text)
+        self.assertIn('даты женского календаря не включаются',text)
+
     def test_nutrition_report_requires_telegram_and_explicit_consent(self):
         from unittest.mock import patch
         client = self.mod.APP.test_client()
