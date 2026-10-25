@@ -8,7 +8,7 @@ API-specific documentation. This module intentionally performs no I/O.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -22,7 +22,8 @@ def _number(value: Any, *, limit: int | float | None = None) -> float | None:
         val = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("Invalid Garmin numeric field") from exc
-    if not val.is_finite() or val < 0 or (limit is not None and val > limit):
+    # Reject huge finite Decimal values that overflow when converted to float.
+    if not val.is_finite() or val < 0 or val > Decimal('1e9') or (limit is not None and val > limit):
         raise ValueError("Unexpected Garmin metric")
     return float(val)
 
@@ -78,13 +79,20 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
             if identity in seen:
                 continue
             seen.add(identity)
+            day = _safe_text(record.get("calendarDate"), 10) or None
+            if day:
+                try:
+                    if date.fromisoformat(day).isoformat() != day:
+                        raise ValueError("Invalid Garmin calendar date")
+                except ValueError:
+                    raise ValueError("Invalid Garmin calendar date") from None
             item = {
                 "source": "garmin",
                 "source_user_id": user_id,
                 "external_id": summary_id,
                 "category": collection,
                 "start_at_utc": _timestamp(record.get("startTimeInSeconds")),
-                "calendar_date": _safe_text(record.get("calendarDate"), 10) or None,
+                "calendar_date": day,
             }
             if collection == "dailies":
                 item["steps"] = _number(record.get("steps"), limit=200000)
