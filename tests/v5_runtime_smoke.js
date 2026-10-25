@@ -53,7 +53,7 @@ function createClient(auth=true,shared={}){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',
+    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
     workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -62,7 +62,7 @@ function createClient(auth=true,shared={}){
    if(p.action==='state')response={ok:true,data:state()};
    else if(p.action==='start'){
     assert.ok(['normal','tired'].includes(p.mood));
-    workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно'}};
+    workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',key:'leg_press',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно',steps:['Настрой сиденье','Не блокируй колени'],start_position:'Сядь в тренажёр',muscles:'Бедра и ягодицы',mistakes:'Не блокируй колени',image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/'}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='record'){
@@ -70,7 +70,78 @@ function createClient(auth=true,shared={}){
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   else if(p.action==='ai_personalized_guidance')response={ok:true,advice:'Совет по реальному дневнику питания',used_ai:true};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='garmin_day'){
+    response={ok:true,date:p.date,connected:!!shared.garminConnected,
+     last_sync_at:shared.garminConnected?'2026-10-25T09:00:00Z':null,
+     dailies:shared.garminConnected?[{date_basis:'provider',
+       values:{steps:7600,resting_heart_rate_bpm:57,active_calories_kcal:340,
+         total_daily_calories_kcal:2260,body_battery_charged:42}}]:[],
+     sleeps:shared.garminConnected?[{date_basis:'provider',
+       values:{duration_minutes:420,sleep_score:81}}]:[],
+     activities:shared.garminConnected?[{date_basis:'profile_timezone',
+       values:{activity_type:'running',duration_seconds:1800,active_calories_kcal:215}}]:[]};
+   }
+   else if(p.action==='garmin_disconnect'){
+    shared.garminConnected=false;response={ok:true,connected:false};
+   }
+   else if(p.action==='fatsecret_account_status')
+    response={ok:true,available:!!shared.fatsecretReady,
+      connected:!!shared.fatsecretConnected,last_sync_at:null};
+   else if(p.action==='fatsecret_account_connect'){
+    shared.fatsecretConnected=false;
+    response={ok:true,authorization_url:
+     'https://authentication.fatsecret.com/oauth/authorize?oauth_token=TESTONLY',
+     expires_minutes:10};
+   }else if(p.action==='fatsecret_account_disconnect'){
+    shared.fatsecretConnected=false;response={ok:true,connected:false};
+   }else if(p.action==='fatsecret_diary_day'){
+    assert.equal(p.date,shared.expectedFatsecretDate||'2026-10-25');
+    const own=shared.fatsecretOverride||{};
+    response={ok:true,date:p.date,complete:true,source:'fatsecret',
+      totals:{calories_kcal:370,protein_g:32,fat_g:9,carbs_g:36},
+      entries:[{external_id:'17',meal:own.meal||'Breakfast',name:own.name||'Овсянка',
+        imported:!!shared.fatsecretImported,user_edited:!!(own.meal||own.name),
+        user_name_override:own.name||null,user_meal_override:own.meal||null,
+        kcal:200,protein:7,fat:4,carbs:32}]};
+   }else if(p.action==='fatsecret_diary_import'){
+    assert.equal(p.date,'2026-10-25');shared.fatsecretImported=true;
+    response={ok:true,date:p.date,imported_ids:['17'],imported_count:1};
+   }else if(p.action==='fatsecret_diary_import_edit'){
+    assert.equal(p.external_id,'17');
+    shared.fatsecretOverride={name:p.name_override,meal:p.meal_override};
+    response={ok:true,date:p.date,external_id:p.external_id,imported:true};
+   }else if(p.action==='fatsecret_diary_import_unlink'){
+    assert.equal(p.external_id,'17');shared.fatsecretImported=false;
+    shared.fatsecretOverride=null;
+    response={ok:true,date:p.date,external_id:p.external_id,imported:false};
+   }
+   else if(p.action==='food_nutrition_day'){
+    const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
+    const registered=entries.filter(x=>x.nutrition_source==='fatsecret');
+    const full=!!entries.length&&registered.length===entries.length;
+    const kcal=registered.length*266;
+    response={ok:true,source:'fatsecret',date:p.date,total_items:entries.length,
+      resolved_items:registered.length,complete:full,partial:!full,
+      totals:full?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
+      known_subtotal:registered.length?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
+      meals:(shared.foodMeals||[]).map(m=>({type:m.type,total_items:m.items.length,
+       resolved_items:m.items.filter(i=>i.nutrition_source==='fatsecret').length,
+       complete:m.items.every(i=>i.nutrition_source==='fatsecret'),
+       known_subtotal:m.items.some(i=>i.nutrition_source==='fatsecret')?
+          {kcal,protein_g:9.1,fat_g:4.9,carbs_g:46.9}:null})),
+      items:entries.map(x=>({id:x.id,source:x.nutrition_source||null,
+        nutrition:x.nutrition_source?{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}:null}))};
+   }
+   else if(p.action==='food_catalog_lookup')response={ok:true,source:'fatsecret',candidates:[{food_id:'42',name:'Овсянка сухая',servings:[{
+     serving_id:'13',description:'100 г',grams:100,per_serving:{kcal:380,protein_g:13,fat_g:7,carbs_g:67}
+   }]}]};
+   else if(p.action==='food_catalog_attach'){
+    assert.equal(p.food_id,'42');assert.equal(p.serving_id,'13');
+    for(const m of shared.foodMeals||[])for(const i of m.items||[])if(i.id===p.id)i.nutrition_source='fatsecret';
+    response={ok:true,item_id:p.id,source:'fatsecret',nutrients:{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}};
+   }
    else if(p.action==='food_add'){
     shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
     response={ok:true,date:p.date,meals:shared.foodMeals,nutrients_available:false};
@@ -85,7 +156,11 @@ function createClient(auth=true,shared={}){
       duration_minutes:45,warmup_minutes:5,cooldown_minutes:3,cardio_note:'По программе',
       can_start:true,exercises:[{name:'Жим ногами',key:'leg_press',sets:3,low:10,high:12,unit:'reps',
       weight_kg:60,muscles:'Ноги',steps:['Настрой тренажёр','Двигай платформу плавно'],
-      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[]}]}};
+      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[],
+      image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/'},
+      {name:'Приседания к стулу',key:'chair_squat',sets:2,low:8,high:10,unit:'reps',
+       weight_kg:null,steps:['Коснись стула','Встань плавно'],start_position:'Встань перед стулом',
+       mistakes:'Не падай на стул',image_url:null,image_credit:null,image_license_url:null,substitutions:[]}]}};
    }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
    else if(p.action==='body_weight_history')response={ok:true,measurements:[]};
    else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
@@ -196,6 +271,11 @@ async function run(){
  assert.match(app.root.innerHTML,/Жим ногами/);
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Active sets retain three approved bottom tabs');
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
+ await app.click({cmd:'exercise-live'});
+ assert.match(app.root.innerHTML,/fq-exercise-photo/,'Live card has vetted photo');
+ assert.match(app.root.innerHTML,/CC BY-SA 4[.]0/,'Live card credits images');
+ assert.match(app.root.innerHTML,/Не блокируй колени/,'Live card shows real cues');
+ await app.click({cmd:'exercise-back'});
  app.input('reps','12');app.input('weight','60');
  await app.click({nav:'profile'});
  await app.click({nav:'home'});
@@ -258,11 +338,42 @@ async function run(){
  assert.doesNotMatch(progressHtml,/id="training-plan"/,'Progress shows history, not training plan');
  assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
+ const garminClient=createClient(true,{garminConnected:true,
+   now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
+ await settle();await garminClient.click({nav:'progress'});await settle();
+ assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
+ assert.match(garminClient.root.innerHTML,/7600/,'Only observed Garmin steps');
+ assert.match(garminClient.root.innerHTML,/2260.*ккал/,'Total day energy shown separately');
+ assert.match(garminClient.root.innerHTML,/340.*ккал/,'Active calories remain distinct');
+ assert.match(garminClient.root.innerHTML,/215.*ккал активности/,'Activity calories not added to all-day totals');
+ assert.match(garminClient.root.innerHTML,/Сон/);
+ assert.match(garminClient.root.innerHTML,/42/);
+ await garminClient.click({cmd:'garmin-refresh'});await settle();
+ assert.ok(garminClient.requests.filter(x=>x.action==='garmin_day').length>=2);
+ await garminClient.click({cmd:'garmin-disconnect-open'});
+ assert.match(garminClient.root.innerHTML,/Отключить Garmin/);
+ await garminClient.click({cmd:'garmin-disconnect-confirm'});await settle();
+ assert.ok(garminClient.requests.some(x=>x.action==='garmin_disconnect'));
+ assert.doesNotMatch(garminClient.root.innerHTML,/Garmin Connect/,'Revoked Garmin never renders stale private metrics');
+
  assert.doesNotMatch(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Progress no longer includes plan dates');
  await app.click({nav:'home'});
  await app.click({cmd:'week',week:'1'});
  assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains owner calendar session');
  assert.match(app.root.innerHTML,/data-cmd="training-preview"/,'Every scheduled workout opens read-only preview');
+ await app.click({cmd:'training-preview',id:'2'});await settle();
+ await app.click({cmd:'exercise-card',index:'0'});
+ assert.match(app.root.innerHTML,/fq-exercise-photo/,'A matching photo appears in Mini App');
+ assert.match(app.root.innerHTML,/CC BY-SA 4[.]0/,'Source and license visible');
+ assert.match(app.root.innerHTML,/Настрой тренажёр/,'Specific motion cue shown');
+ await app.click({cmd:'exercise-back'});
+ await app.click({cmd:'exercise-card',index:'1'});
+ assert.doesNotMatch(app.root.innerHTML,/<img src=/,'Do not show Smith squat for chair squat');
+ assert.match(app.root.innerHTML,/Подтверждённого изображения/);
+ await app.click({cmd:'exercise-back'});
+ await app.click({cmd:'close'});
  await app.click({cmd:'week',week:'1'});
  assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button collapses details');
 
@@ -272,6 +383,9 @@ async function run(){
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
  assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
+ assert.match(app.root.innerHTML,/100 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/1 000 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/data-cmd="tier-select" data-tier="max"/);
  assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
  await app.click({nav:'home'});
@@ -329,7 +443,118 @@ async function run(){
  await app.click({cmd:'food-delete',id:'100'});
  await app.click({cmd:'food-delete-confirm'});
  assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
- const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
+ const catalogClient=createClient(true,{foodCatalogAvailable:true,
+  foodMeals:[{id:81,type:'breakfast',items:[{id:202,name:'овсянка сухая',grams:70}]}]});
+ await settle();await catalogClient.click({nav:'food'});await settle();
+ await catalogClient.click({cmd:'food-edit',id:'202'});
+ assert.match(catalogClient.root.innerHTML,/Найти в FatSecret/,'Official catalogue only when configured');
+ await catalogClient.click({cmd:'food-catalog-open'});
+ catalogClient.fields.set('food-catalog-query',{id:'food-catalog-query',value:'овсянка'});
+ await catalogClient.click({cmd:'food-catalog-search'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_lookup'&&x.query==='овсянка'));
+ assert.match(catalogClient.root.innerHTML,/Овсянка сухая/);
+ await catalogClient.click({cmd:'food-catalog-link',foodId:'42',servingId:'13'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_attach'&&x.id===202));
+ await settle();
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_nutrition_day'),
+  'Daily macros must load automatically after provider verification');
+ assert.match(catalogClient.root.innerHTML,/266.*ккал/,'Only verified serving may produce KБЖУ');
+ await catalogClient.click({cmd:'food-nutrition-day'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_nutrition_day'));
+ assert.match(catalogClient.root.innerHTML,/КБЖУ за день/,'Full day sum only for completely verified day');
+ assert.match(catalogClient.root.innerHTML,/266.*ккал/);
+ const mixedClient=createClient(true,{foodCatalogAvailable:true,
+  foodMeals:[{id:84,type:'breakfast',items:[
+    {id:202,name:'Овсянка сухая',grams:70,nutrition_source:'fatsecret'},
+    {id:203,name:'Банан без базы',grams:120}]}]});
+ await settle();await mixedClient.click({nav:'food'});await settle();
+ assert.ok(mixedClient.requests.some(x=>x.action==='food_nutrition_day'),
+  'Existing verified food macros load without an extra user action');
+ await mixedClient.click({cmd:'food-nutrition-day'});
+ assert.match(mixedClient.root.innerHTML,/Данные за день неполные/);
+ assert.match(mixedClient.root.innerHTML,/1 из 2 продуктов/);
+ assert.doesNotMatch(mixedClient.root.innerHTML,/КБЖУ за день:/,'Partial sum is never full day total');
+ const unconfigured=createClient(true,{foodCatalogAvailable:false});
+ await settle();await unconfigured.click({nav:'food'});await settle();
+ assert.doesNotMatch(unconfigured.root.innerHTML,/Рассчитать КБЖУ за день/);
+
+ const noOAuth=createClient(true,{fatsecretReady:false});
+ await settle();await noOAuth.click({nav:'food'});await settle();
+ assert.doesNotMatch(noOAuth.root.innerHTML,/Подключить FatSecret/);
+ assert.ok(!noOAuth.requests.some(x=>x.action==='fatsecret_account_connect'));
+ const oauthClient=createClient(true,{fatsecretReady:true,fatsecretConnected:false});
+ await settle();await oauthClient.click({nav:'food'});await settle();
+ assert.match(oauthClient.root.innerHTML,/Подключить FatSecret/);
+ await oauthClient.click({cmd:'fatsecret-connect'});
+ assert.ok(oauthClient.requests.some(x=>x.action==='fatsecret_account_connect'));
+ assert.match(oauthClient.root.innerHTML,/authentication.fatsecret.com\/oauth\/authorize/);
+ const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true});
+ await settle();await linkedClient.click({nav:'food'});await settle();
+ assert.match(linkedClient.root.innerHTML,/Аккаунт подключён/);
+ await linkedClient.click({cmd:'fatsecret-diary-day'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_day'));
+ assert.match(linkedClient.root.innerHTML,/370.*ккал/);
+ assert.match(linkedClient.root.innerHTML,/Овсянка/);
+ await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import'));
+ assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({cmd:'fatsecret-entry-edit',id:'17'});
+ assert.match(linkedClient.root.innerHTML,/Исправление импортированной записи/);
+ linkedClient.fields.set('fatsecret-override-name',{id:'fatsecret-override-name',value:'Моя овсянка'});
+ linkedClient.fields.set('fatsecret-override-meal',{id:'fatsecret-override-meal',value:'snack'});
+ await linkedClient.click({cmd:'fatsecret-entry-save'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_edit'&&x.name_override==='Моя овсянка'));
+ assert.match(linkedClient.root.innerHTML,/Моя овсянка/);
+ await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({cmd:'fatsecret-entry-unlink',id:'17'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_unlink'));
+ assert.doesNotMatch(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({cmd:'fatsecret-disconnect-open'});
+ assert.match(linkedClient.root.innerHTML,/Отключить FatSecret\?/);
+ await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
+ assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
+ const ownerCoach=createClient(true,{tier:'max',
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();
+  assert.match(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
+    'Trainer AI should expose a recommendation below the four-week plan');
+  await ownerCoach.click({cmd:'ai-tip-training'});await settle();
+  assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
+    x.purpose==='training'));
+  await ownerCoach.click({nav:'food'});await settle();
+  assert.match(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
+  await ownerCoach.click({cmd:'ai-tip-nutrition'});await settle();
+  assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
+    x.purpose==='nutrition'&&x.date==='2026-10-25'));
+  assert.match(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
+  await ownerCoach.click({cmd:'food-parse'});await settle();
+  await ownerCoach.click({cmd:'food-save'});await settle();
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/,
+    'Editing the diary invalidates previous AI nutrition guidance');
+  const delayedAdviceClient=createClient(true,{tier:'max',
+    now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'},
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();await delayedAdviceClient.click({nav:'food'});await settle();
+  const releaseAdvice=delayedAdviceClient.deferOnce('ai_personalized_guidance');
+  const pendingAdvice=delayedAdviceClient.click({cmd:'ai-tip-nutrition'});await settle();
+  assert.ok(delayedAdviceClient.requests.some(x=>x.action==='ai_personalized_guidance'),
+      'AI request begins against existing food data');
+  await delayedAdviceClient.click({cmd:'food-parse'});await settle();
+  await delayedAdviceClient.click({cmd:'food-save'});await settle();
+  releaseAdvice();await pendingAdvice;await settle();
+  assert.doesNotMatch(delayedAdviceClient.root.innerHTML,/Совет по реальному дневнику питания/,
+      'A delayed AI response must not appear after editing the same-day diary');
+  const diaryOnly=createClient(true,{tier:'start',
+    aiPermissions:{profile:true,health:true,cycle:false}});
+  await settle();await diaryOnly.click({nav:'food'});await settle();
+  assert.doesNotMatch(diaryOnly.root.innerHTML,/Совет Yandex AI по рациону/,
+    'Diary tier never exposes paid Yandex coaching');
+  assert.doesNotMatch(diaryOnly.root.innerHTML,/id="nutrition-file"/,
+    'Diary tier must not advertise AI report upload');
+  const reportClient=createClient(true,{tier:'max',
+  aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
  assert.doesNotMatch(reportClient.root.innerHTML,/nutrition-consent/);

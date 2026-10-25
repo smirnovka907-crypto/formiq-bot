@@ -98,6 +98,25 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual({week for week,_,_ in slots},{1,2,3,4})
         self.assertTrue(all(status=='auto' for _,_,status in slots))
 
+    def test_fourteen_day_onboarding_trial_not_reset_by_profile_edit(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            begun=conn.execute('SELECT trial_started_at FROM premium_access WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0]
+        self.assertIsNotNone(begun)
+        self.assertEqual(self.m.premium_state(self.chat)[0],'trial')
+        self.assertEqual(self.m.tier_for(self.chat),'max')
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            again=conn.execute('SELECT trial_started_at FROM premium_access WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0]
+        self.assertEqual(again,begun,'Editing onboarding must not restart the trial')
+        Clock.instant=begun+timedelta(days=15)
+        self.assertEqual(self.m.premium_state(self.chat)[0],'free')
+        self.assertEqual(self.m.tier_for(self.chat),'start')
+        self.m.select_demo_tier(self.chat,'max')
+        self.assertEqual(self.m.tier_for(self.chat),'max','Explicit demo tier still works')
+
     def test_health_safety_hold_retains_calendar_but_never_offers_exercises(self):
         body=self.body()
         body['health_profile']=dict(affected=['other'],pain_score=0,
@@ -124,7 +143,8 @@ class SchedulePostgresTests(unittest.TestCase):
         item_id=data['meals'][0]['items'][0]['id']
         another=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
             'items':[{'name':'банан','grams':110}]})
-        self.assertEqual(len(another['meals']),2,'Multiple meals of same type on same day')
+        self.assertEqual(len(another['meals']),1,'One breakfast card per day') 
+        self.assertEqual(len(another['meals'][0]['items']),3,'New products append to existing breakfast')
         self.m.food_add(self.chat,{'date':'2026-10-17','meal_type':'dinner',
             'items':[{'name':'рис сухой','grams':90}]})
         updated=self.m.food_change(self.chat,{'id':item_id,'name':'овсянка сухая','grams':75})
@@ -134,10 +154,543 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.food_change(self.chat+1,{'id':item_id,'name':'чужой','grams':12})
         after=self.m.food_change(self.chat,{'id':item_id},delete=True)
-        self.assertEqual(len(after['meals'][0]['items']),1)
+        self.assertEqual(len(after['meals'][0]['items']),2)
         self.assertEqual(len(self.m.food_history(self.chat,{'date':'2026-10-17'})['meals']),1)
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
+
+    def test_free_text_accepts_explicit_leading_and_trailing_grams_without_guessing(self):
+        result=self.m.food_parse({'text':
+            '80 г рис сухой; творог 150 граммов; 65,5 грамма яблоко; 2 яйца'})
+        self.assertEqual(result['items'],[
+            {'name':'рис сухой','grams':80.0},
+            {'name':'творог','grams':150.0},
+            {'name':'яблоко','grams':65.5}])
+        self.assertEqual(len(result['unparsed']),1)
+        self.assertIn('2 яйца',result['unparsed'][0]['text'])
+        # No household-unit conversion without a confirmed serving definition.
+        only_unknown=self.m.food_parse({'text':'один стакан молока'})
+        self.assertEqual(only_unknown['items'],[])
+        self.assertEqual(len(only_unknown['unparsed']),1)
+
+    def test_fatsecret_provider_lookup_and_link_are_owner_scoped_and_explicit(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        recorded=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка сухая','grams':70}]})
+        item_id=recorded['meals'][0]['items'][0]['id']
+        with self.assertRaisesRegex(ValueError,'не подключён'):
+            self.m.food_catalog_lookup(self.chat,{'query':'овсянка'})
+        from unittest.mock import Mock
+        candidate={'food_id':'42','name':'Овсянка сухая','servings':[{
+            'serving_id':'13','description':'100 г','grams':100,
+            'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='TEST_ONLY'
+        fake.search.return_value=[candidate]
+        fake.food_by_id.return_value=candidate
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            result=self.m.food_catalog_lookup(self.chat,{'query':'овсянка'})
+            self.assertEqual(result['candidates'][0]['food_id'],'42')
+            with self.assertRaises(ValueError):
+                self.m.food_catalog_lookup(self.chat,{'query':'test@example.com'})
+            with self.assertRaisesRegex(ValueError,'не найден'):
+                self.m.food_catalog_attach(self.chat+1,{'id':item_id,'food_id':'42','serving_id':'13'})
+            with self.assertRaisesRegex(ValueError,'подтверждённых'):
+                self.m.food_catalog_attach(self.chat,{'id':item_id,'food_id':'42','serving_id':'999'})
+            with self.connect() as conn:
+                self.assertEqual(conn.execute('''SELECT source_food_id FROM manual_food_items
+                    WHERE id=%s''',(item_id,)).fetchone()[0],None)
+            response=self.m.food_catalog_attach(self.chat,{'id':item_id,'food_id':'42','serving_id':'13'})
+            self.assertEqual(response['nutrients']['kcal'],266.0)
+            with self.connect() as conn:
+                fid,sid,name,grams=conn.execute('''SELECT source_food_id,source_serving_id,
+                    name,grams FROM manual_food_items WHERE id=%s''',(item_id,)).fetchone()
+            self.assertEqual((fid,sid),('42','13'))
+            self.assertEqual(name,'овсянка сухая')
+            self.assertEqual(grams,70)
+            self.assertIsNone(self.m.food_history(self.chat,{'date':'2026-10-18'})['meals'][0]['items'][0]['kcal'])
+            self.m.food_change(self.chat,{'id':item_id,'name':'творог 5%','grams':70})
+            with self.connect() as conn:
+                self.assertIsNone(conn.execute('''SELECT source_food_id FROM manual_food_items
+                    WHERE id=%s''',(item_id,)).fetchone()[0])
+        self.assertEqual(fake.search.call_count,1)
+        self.assertEqual(fake.food_by_id.call_count,2)
+
+    def test_food_preparation_prevents_cooked_raw_provider_mismatch(self):
+        """Different hydration yields different macros per cooked/raw gram."""
+        self.assertEqual(self.m.food_preparation_state('Рис сухой'),'raw')
+        self.assertEqual(self.m.food_preparation_state('Рис отварной'),'cooked')
+        self.assertEqual(self.m.food_preparation_state('Сырники'),None)
+        self.assertIsNone(self.m.food_preparation_state('Рис'))
+        self.m.save_onboarding(self.chat,self.body())
+        result=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'Рис сухой','grams':100},
+                     {'name':'Рис вареный','grams':200}]})
+        items=result['meals'][0]['items']
+        from unittest.mock import Mock
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_ONLY'
+        servings=[{'serving_id':'13','description':'100 граммов','grams':100,
+                   'per_serving':{'kcal':350,'protein_g':7,'fat_g':2,'carbs_g':76}}]
+        raw={'food_id':'42','name':'Рис сухой','servings':servings}
+        cooked={'food_id':'43','name':'Рис отварной','servings':servings}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','offline'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','offline'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            fake.food_by_id.return_value=cooked
+            with self.assertRaisesRegex(ValueError,'Сырой и приготовленный'):
+                self.m.food_catalog_attach(self.chat,
+                    {'id':items[0]['id'],'food_id':'43','serving_id':'13'})
+            fake.food_by_id.return_value=raw
+            with self.assertRaisesRegex(ValueError,'Сырой и приготовленный'):
+                self.m.food_catalog_attach(self.chat,
+                    {'id':items[1]['id'],'food_id':'42','serving_id':'13'})
+            with self.connect() as conn:
+                linked=conn.execute("""SELECT COUNT(*) FROM manual_food_items
+                    WHERE chat_id=%s AND source_food_id IS NOT NULL""",
+                    (self.chat,)).fetchone()[0]
+                self.assertEqual(linked,0)
+            matched=self.m.food_catalog_attach(self.chat,
+                {'id':items[0]['id'],'food_id':'42','serving_id':'13'})
+            self.assertEqual(matched['nutrients']['kcal'],350.0)
+
+    def test_fatsecret_link_cannot_override_user_edit_while_provider_responds(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        meal=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка сухая','grams':70}]})
+        iid=meal['meals'][0]['items'][0]['id']
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        candidate={'food_id':'42','name':'Овсянка','servings':[{
+            'serving_id':'13','grams':100,'per_serving':{
+                'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        def rename_before_response(*_):
+            self.m.food_change(self.chat,{'id':iid,'name':'творог 5%','grams':70})
+            return candidate
+        fake.food_by_id.side_effect=rename_before_response
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            with self.assertRaisesRegex(ValueError,'не найден'):
+                self.m.food_catalog_attach(self.chat,{
+                    'id':iid,'food_id':'42','serving_id':'13'})
+        with self.connect() as conn:
+            row=conn.execute('''SELECT name,grams,source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s''',(iid,)).fetchone()
+        self.assertEqual(row,('творог 5%',70,None,None))
+
+    def test_day_kbju_uses_only_owned_verified_portions_and_never_invents_totals(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        a=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+           'items':[{'name':'овсянка сухая','grams':70},
+                    {'name':'овсянка сухая','grams':30}]})
+        b=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+           'items':[{'name':'неизвестный продукт','grams':100}]})
+        item_ids=[x['id'] for x in a['meals'][0]['items']]
+        missing_id=b['meals'][1]['items'][0]['id']
+        with self.connect() as conn:
+            conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                source_serving_id='13' WHERE id=ANY(%s)""",(item_ids,))
+        sample={'food_id':'42','name':'Овсянка сухая',
+          'servings':[{'serving_id':'13','grams':100,
+          'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='token-only-test'
+        fake.food_by_id.return_value=sample
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            partial=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(partial['complete'])
+            self.assertTrue(partial['partial'])
+            self.assertIsNone(partial['totals'])
+            self.assertEqual(partial['total_items'],3)
+            self.assertEqual(partial['resolved_items'],2)
+            self.assertEqual(partial['known_subtotal']['kcal'],380)
+            self.assertEqual(len(partial['meals']),2)
+            self.assertEqual(partial['meals'][0]['known_subtotal']['protein_g'],13.0)
+            self.assertFalse(partial['meals'][1]['complete'])
+            self.assertIsNone(partial['meals'][1]['known_subtotal'])
+            self.assertEqual(fake.food_by_id.call_count,1,'Duplicate food ID queried once')
+            with self.connect() as conn:
+                conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                    source_serving_id='13' WHERE id=%s""",(missing_id,))
+            complete=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(complete['complete'])
+            self.assertEqual(complete['resolved_items'],3)
+            self.assertEqual(complete['totals']['kcal'],760)
+            self.assertEqual(complete['totals']['carbs_g'],134)
+            empty=self.m.food_day_totals(self.chat,{'date':'2026-10-17'})
+            self.assertFalse(empty['complete'])
+            self.assertIsNone(empty['totals'])
+            self.assertIsNone(empty['known_subtotal'])
+            self.m.save_onboarding(self.chat+1,self.body())
+            other=self.m.food_day_totals(self.chat+1,{'date':'2026-10-18'})
+            self.assertEqual(other['total_items'],0)
+            fake.food_by_id.side_effect=RuntimeError('Provider unavailable')
+            failure=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertIsNone(failure['totals'])
+            self.assertIsNone(failure['known_subtotal'])
+            self.assertEqual(failure['resolved_items'],0)
+        with self.connect() as conn:
+            nutrients=conn.execute("""SELECT column_name FROM information_schema.columns
+              WHERE table_schema=%s AND table_name='manual_food_items'
+              AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
+        self.assertEqual(nutrients,[],'Provider macro values must not be stored')
+
+    def test_fatsecret_oauth_links_owner_with_one_time_callback_encrypted_tokens(self):
+        from cryptography.fernet import Fernet
+        from urllib.parse import parse_qs,urlsplit
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        fake=Mock()
+        fake.request_token.return_value=('temp-provider-token','temp-provider-secret')
+        fake.authorize_url.return_value=(
+          'https://authentication.fatsecret.com/oauth/authorize?oauth_token=temp-provider-token')
+        fake.access_token.return_value=('SECRET_LONG_TERM_ACCESS','SECRET_LONG_TERM_SIGNING')
+        fake.diary.return_value={'food_entries':{'food_entry':[
+          {'food_entry_id':'17','food_entry_name':'Овсянка','meal':'Breakfast',
+           'calories':'200','protein':'7','fat':'4','carbohydrate':'32'},
+          {'food_entry_id':'18','food_entry_name':'Творог','meal':'Lunch',
+           'calories':'170','protein':'25','fat':'5','carbohydrate':'4'}]}}
+        key=Fernet.generate_key().decode('ascii')
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test-consumer'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test-secret'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            url=self.m.fatsecret_user_start(self.chat)['authorization_url']
+            self.assertTrue(url.startswith('https://authentication.fatsecret.com/'))
+            callback=fake.request_token.call_args.args[0]
+            self.assertIn('/mini/fatsecret/callback',callback)
+            state=parse_qs(urlsplit(callback).query)['state'][0]
+            with self.connect() as conn:
+                temporary=conn.execute("""SELECT request_token_enc,request_secret_enc
+                    FROM fatsecret_oauth_pending WHERE chat_id=%s""",(self.chat,)).fetchone()
+            self.assertNotIn(b'temp-provider-token',bytes(temporary[0]))
+            self.assertNotIn(b'temp-provider-secret',bytes(temporary[1]))
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'foreign-request-token','verifier')
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state+'tampered','temp-provider-token','verifier')
+            self.assertFalse(self.m.fatsecret_user_status(self.chat+1)['connected'])
+            self.assertTrue(self.m.fatsecret_user_finish(state,'temp-provider-token','verifier'))
+            self.assertTrue(self.m.fatsecret_user_status(self.chat)['connected'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'temp-provider-token','verifier')
+            with self.connect() as conn:
+                stored=conn.execute("""SELECT access_token_enc,access_secret_enc
+                    FROM fatsecret_user_connections WHERE chat_id=%s""",(self.chat,)).fetchone()
+                self.assertIsNone(conn.execute("""SELECT chat_id FROM fatsecret_oauth_pending
+                    WHERE chat_id=%s""",(self.chat,)).fetchone())
+            self.assertNotIn(b'SECRET_LONG_TERM_ACCESS',bytes(stored[0]))
+            self.assertNotIn(b'SECRET_LONG_TERM_SIGNING',bytes(stored[1]))
+            day=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(day['source'],'fatsecret')
+            self.assertTrue(day['complete'])
+            self.assertEqual(day['totals']['calories_kcal'],370)
+            self.assertEqual(len(day['entries']),2)
+            self.assertIsNotNone(self.m.fatsecret_user_status(self.chat)['last_sync_at'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_diary(self.chat+1,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM manual_food_items
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],0)
+            self.assertFalse(self.m.fatsecret_user_disconnect(self.chat)['connected'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(fake.access_token.call_count,1)
+        self.assertEqual(fake.diary.call_count,1)
+
+    def test_fatsecret_live_diary_rechecks_access_after_provider_reply(self):
+        """Revocation/reconnect during HTTP must not leak previous user's diary."""
+        from cryptography.fernet import Fernet
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        key=Fernet.generate_key()
+        cipher=Fernet(key)
+        initial_token=cipher.encrypt(b'old_access')
+        initial_secret=cipher.encrypt(b'old_secret')
+        payload={'food_entries':{'food_entry':[{
+            'food_entry_id':'1','food_entry_name':'Private diary entry',
+            'calories':'100','protein':'3','fat':'2','carbohydrate':'15'}]}}
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO fatsecret_user_connections
+                (chat_id,access_token_enc,access_secret_enc,connected_at)
+                VALUES(%s,%s,%s,NOW())""",(self.chat,initial_token,initial_secret))
+        fake=Mock()
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key.decode()), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test'), \
+             patch.object(self.m,'fatsecret_user_client',return_value=fake):
+            def disconnect_during_request(*args):
+                self.m.fatsecret_user_disconnect(self.chat)
+                return payload
+            fake.diary.side_effect=disconnect_during_request
+            with self.assertRaisesRegex(ValueError,'отключён или переподключён'):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            with self.connect() as conn:
+                conn.execute("""INSERT INTO fatsecret_user_connections
+                   (chat_id,access_token_enc,access_secret_enc,connected_at)
+                   VALUES(%s,%s,%s,NOW())""",
+                   (self.chat,initial_token,initial_secret))
+            def replace_during_request(*args):
+                with self.connect() as conn:
+                    conn.execute("""UPDATE fatsecret_user_connections
+                       SET access_token_enc=%s,access_secret_enc=%s
+                       WHERE chat_id=%s""",
+                       (cipher.encrypt(b'new_access'),cipher.encrypt(b'new_secret'),self.chat))
+                return payload
+            fake.diary.side_effect=replace_during_request
+            with self.assertRaisesRegex(ValueError,'отключён или переподключён'):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                self.assertIsNone(conn.execute("""SELECT last_sync_at
+                    FROM fatsecret_user_connections WHERE chat_id=%s""",
+                    (self.chat,)).fetchone()[0])
+
+    def test_fatsecret_import_refs_are_owner_scoped_editable_and_idempotent(self):
+        from cryptography.fernet import Fernet
+        from urllib.parse import urlsplit,parse_qs
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        original=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка ручная','grams':75}]})
+        item_id=original['meals'][0]['items'][0]['id']
+        fake=Mock()
+        fake.request_token.return_value=('request-token','request-secret')
+        fake.authorize_url.return_value='https://authentication.fatsecret.com/oauth/authorize?oauth_token=request-token'
+        fake.access_token.return_value=('secret-access','secret-signing')
+        fake.diary.return_value={'food_entries':{'food_entry':[
+            {'food_entry_id':'17','food_entry_name':'Овсянка','meal':'Breakfast',
+             'calories':'200','protein':'7','fat':'4','carbohydrate':'32'},
+            {'food_entry_id':'18','food_entry_name':'Творог','meal':'Lunch',
+             'calories':'170','protein':'25','fat':'5','carbohydrate':'4'}]}}
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',Fernet.generate_key().decode()), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','consumer'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','shared'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.m.fatsecret_user_start(self.chat)
+            cb=fake.request_token.call_args.args[0]
+            state=parse_qs(urlsplit(cb).query)['state'][0]
+            self.m.fatsecret_user_finish(state,'request-token','verifier')
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import(self.chat+1,{'date':'2026-10-18'})
+            once=self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            twice=self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(once['imported_count'],2)
+            self.assertEqual(twice['imported_count'],2)
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],2)
+                columns=conn.execute("""SELECT column_name FROM information_schema.columns
+                    WHERE table_schema=%s AND table_name='fatsecret_import_refs'""",
+                    (self.schema,)).fetchall()
+                self.assertFalse(any(n[0] in ('calories','protein','fat',
+                    'carbs','food_entry_name') for n in columns))
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import_edit(self.chat+1,{'date':'2026-10-18',
+                    'external_id':'17','name_override':'чужой'})
+            edited=self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                'external_id':'17','name_override':'Моя овсянка',
+                'meal_override':'snack'})
+            self.assertTrue(edited['imported'])
+            shown=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            first=next(x for x in shown['entries'] if x['external_id']=='17')
+            self.assertEqual(first['name'],'Моя овсянка')
+            self.assertEqual(first['meal'],'snack')
+            self.assertEqual(first['kcal'],200)
+            self.assertTrue(first['imported'])
+            self.assertTrue(first['user_edited'])
+            self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})['entries'][0]['name'],'Моя овсянка')
+            unlinked=self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                'external_id':'17'},delete=True)
+            self.assertFalse(unlinked['imported'])
+            with self.assertRaisesRegex(ValueError,'не найдена'):
+                self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                    'external_id':'17','name_override':'Ошибка'})
+            after=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(after['entries'][0]['imported'])
+            self.assertEqual(after['entries'][0]['name'],'Овсянка')
+            manual=self.m.food_history(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(manual['meals'][0]['items'][0]['id'],item_id)
+            self.assertEqual(manual['meals'][0]['items'][0]['grams'],75)
+            self.m.fatsecret_user_disconnect(self.chat)
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            # Disconnect invalidates credentials without destroying imported refs.
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],1)
+            # A different FatSecret authorization may reuse the same numeric
+            # provider entry IDs. Old owner edits MUST NOT attach to that diary.
+            self.m.fatsecret_user_start(self.chat)
+            callback2=fake.request_token.call_args.args[0]
+            state2=parse_qs(urlsplit(callback2).query)['state'][0]
+            self.assertNotEqual(state,state2)
+            self.m.fatsecret_user_finish(state2,'request-token','verifier')
+            fresh=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(len(fresh['entries']),2)
+            self.assertTrue(all(not e['imported'] for e in fresh['entries']))
+            with self.assertRaisesRegex(ValueError,'не найдена'):
+                self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                    'external_id':'18','name_override':'Не от старого аккаунта'})
+            self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                refs=conn.execute("""SELECT connection_id,external_id,user_name_override
+                    FROM fatsecret_import_refs WHERE chat_id=%s
+                    ORDER BY connection_id,external_id""",(self.chat,)).fetchall()
+                self.assertEqual(len(refs),3, 'Previous imported references remain preserved')
+                self.assertEqual(len({x[0] for x in refs}),2)
+                self.assertFalse(any(x[2] for x in refs))
+            self.assertEqual(self.m.food_history(self.chat,
+                {'date':'2026-10-18'})['meals'][0]['items'][0]['id'],item_id)
+
+    def test_fatsecret_connection_rejects_invalid_encryption_key(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY','incorrect-key'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','offline'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','offline'):
+            self.assertFalse(self.m.fatsecret_user_oauth_ready())
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['available'])
+            with self.assertRaisesRegex(ValueError,'не настроено'):
+                self.m.fatsecret_user_start(self.chat)
+        self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+
+    def test_fatsecret_oauth_callback_error_does_not_link_account(self):
+        from cryptography.fernet import Fernet
+        from unittest.mock import Mock
+        from urllib.parse import urlsplit,parse_qs
+        self.m.save_onboarding(self.chat,self.body())
+        fake=Mock()
+        fake.request_token.return_value=('request-token','request-secret')
+        fake.authorize_url.return_value='https://authentication.fatsecret.com/oauth/authorize?oauth_token=request-token'
+        fake.access_token.side_effect=RuntimeError('Provider rejected verifier')
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',Fernet.generate_key().decode()), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.m.fatsecret_user_start(self.chat)
+            callback=fake.request_token.call_args.args[0]
+            state=parse_qs(urlsplit(callback).query)['state'][0]
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'request-token','verifier')
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            self.assertFalse(self.m.fatsecret_user_disconnect(self.chat)['connected'])
+
+    def test_offline_garmin_import_requires_consent_mapping_and_is_idempotent(self):
+        self.m.save_onboarding(self.chat,self.body())
+        snapshot=self.snapshot_history()
+        payload={'dailies':[{'userId':'OFFLINE_GARMIN_1','summaryId':'d20261018',
+             'calendarDate':'2026-10-18','steps':7000,'activeKilocalories':450,
+             'totalKilocalories':2450,'bmrKilocalories':1600}],
+          'activities':[{'userId':'OFFLINE_GARMIN_1','summaryId':'a1',
+             'startTimeInSeconds':1792300000,'durationInSeconds':1800,
+             'activityType':'running','activeKilocalories':310}]}
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+               (chat_id,provider_user_id,health_consent_at)
+               VALUES(%s,%s,NOW())""",(self.chat,'OFFLINE_GARMIN_1'))
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat+1,'OFFLINE_GARMIN_1',payload)
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OTHER_ACCOUNT',payload)
+        first=self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        second=self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        self.assertEqual(first['processed'],2)
+        self.assertEqual(second['processed'],2)
+        with self.connect() as conn:
+            events=conn.execute("""SELECT category,metrics_json FROM garmin_metric_events
+                WHERE chat_id=%s ORDER BY category""",(self.chat,)).fetchall()
+            self.assertEqual(len(events),2,'A repeated Garmin delivery is an UPSERT, not a new workout')
+            daily=next(m for c,m in events if c=='dailies')
+            activity=next(m for c,m in events if c=='activities')
+            self.assertEqual(daily['active_calories_kcal'],450)
+            self.assertEqual(daily['total_daily_calories_kcal'],2450)
+            self.assertNotIn('total_daily_calories_kcal',activity)
+            self.assertEqual(activity['duration_seconds'],1800)
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+              WHERE chat_id=%s""",(self.chat+1,)).fetchone()[0],0)
+            self.assertIsNotNone(conn.execute("""SELECT last_sync_at
+               FROM garmin_authorized_identities WHERE chat_id=%s""",(self.chat,)).fetchone()[0])
+        edited={'dailies':[dict(payload['dailies'][0],steps=8200)]}
+        self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',edited)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+               WHERE chat_id=%s""",(self.chat,)).fetchone()[0],2)
+            self.assertEqual(conn.execute("""SELECT metrics_json->>'steps' FROM garmin_metric_events
+               WHERE chat_id=%s AND category='dailies'""",(self.chat,)).fetchone()[0],'8200.0')
+            conn.execute("""UPDATE garmin_authorized_identities SET disconnected_at=NOW()
+               WHERE chat_id=%s""",(self.chat,))
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        self.assertEqual(snapshot,self.snapshot_history(),'Never touch manual workout history')
+        with self.assertRaises(ValueError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',
+                {'dailies':[{'userId':'OFFLINE_GARMIN_1','summaryId':'bad','steps':9}]})
+
+    def test_garmin_read_day_does_not_expose_unconnected_foreign_or_revoked_data(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        day='2026-10-18'
+        offline=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertFalse(offline['connected'])
+        self.assertEqual(offline['dailies'],[])
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+                 (chat_id,provider_user_id,health_consent_at)
+                 VALUES(%s,'OFFLINE_GARMIN_TEST',NOW())""",(self.chat,))
+        supplied={'dailies':[{'userId':'OFFLINE_GARMIN_TEST','summaryId':'day01',
+                 'calendarDate':day,'steps':9000,'activeKilocalories':300,
+                 'totalKilocalories':2200,'restingHeartRateInBeatsPerMinute':55}],
+                 'activities':[{'userId':'OFFLINE_GARMIN_TEST','summaryId':'run01',
+                 'startTimeInSeconds':1792300000,'durationInSeconds':2400,
+                 'activityType':'running','activeKilocalories':240}]}
+        self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_TEST',supplied)
+        reading=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertTrue(reading['connected'])
+        self.assertIsNotNone(reading['last_sync_at'])
+        self.assertEqual(reading['dailies'][0]['values']['steps'],9000)
+        self.assertEqual(reading['dailies'][0]['values']['active_calories_kcal'],300)
+        self.assertEqual(reading['dailies'][0]['values']['total_daily_calories_kcal'],2200)
+        self.assertEqual(reading['dailies'][0]['values']['resting_heart_rate_bpm'],55)
+        self.assertNotIn('provider_user_id',str(reading))
+        self.assertEqual(len(reading['activities']),1)
+        self.assertNotIn('total_daily_calories_kcal',reading['activities'][0]['values'])
+        other=self.m.garmin_connected_day(self.chat+1,{'date':day})
+        self.assertFalse(other['connected'])
+        self.assertEqual(other['activities'],[])
+        empty=self.m.garmin_connected_day(self.chat,{'date':'2026-10-17'})
+        self.assertTrue(empty['connected'])
+        self.assertEqual(empty['dailies'],[])
+        with self.connect() as conn:
+            count_before=conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+                  WHERE chat_id=%s""",(self.chat,)).fetchone()[0]
+        self.assertFalse(self.m.garmin_disconnect_owner(self.chat+1)['connected'])
+        self.assertFalse(self.m.garmin_disconnect_owner(self.chat)['connected'])
+        revoked=self.m.garmin_connected_day(self.chat,{'date':day})
+        self.assertFalse(revoked['connected'])
+        self.assertEqual(revoked['dailies'],[])
+        with self.connect() as conn:
+            count_after=conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+                  WHERE chat_id=%s""",(self.chat,)).fetchone()[0]
+        self.assertEqual(count_before,count_after,'Disconnect must not erase private history')
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_TEST',supplied)
+        for bad in ('bad-date','2026-02-30'):
+            with self.assertRaises(ValueError):
+                self.m.garmin_connected_day(self.chat,{'date':bad})
 
     def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
         p,cycle,calendar=self.save((0,2,4))
@@ -169,6 +722,44 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.connect() as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM workouts WHERE chat_id=%s',
                 (self.chat,)).fetchone()[0],0,'Preview never starts or completes a workout')
+
+    def test_recent_consent_bound_garmin_activity_reduces_load_no_duplicates(self):
+        p,cycle,calendar=self.save((0,2,4))
+        self.m.save_onboarding(999,self.body((0,2,4)))
+        baseline=self.m.make_session(p,1,'A',adapt='normal',cycle_id=cycle)
+        # Unconnected and other-owner data never affect this user's training.
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+                (chat_id,provider_user_id,health_consent_at)
+                VALUES(%s,'GARMIN_TEST_999',NOW()),(%s,'GARMIN_TEST_777',NOW())""",
+                (999,self.chat))
+            conn.execute("""INSERT INTO garmin_metric_events
+                (chat_id,provider_user_id,category,external_id,event_at_utc,metrics_json)
+                VALUES(%s,'GARMIN_TEST_999','activities','a-1',
+                   NOW()-INTERVAL '3 hours','{"duration_seconds":7200}'::jsonb)""",(999,))
+        before=self.m.adjustment(self.chat,'A')
+        self.assertEqual(before[0],'normal')
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_metric_events
+                (chat_id,provider_user_id,category,external_id,event_at_utc,metrics_json)
+                VALUES(%s,'GARMIN_TEST_777','activities','a-1',
+                   NOW()-INTERVAL '3 hours','{"duration_seconds":5400,"activity_type":"cycling"}'::jsonb)""",
+                (self.chat,))
+        adapt,reason=self.m.adjustment(self.chat,'A')
+        self.assertEqual(adapt,'lighter')
+        self.assertIn('Garmin',reason)
+        reduced=self.m.make_session(p,1,'A',adapt=adapt,cycle_id=cycle)
+        self.assertLess(sum(x[1] for x in reduced),sum(x[1] for x in baseline))
+        with self.connect() as conn:
+            conn.execute("""UPDATE garmin_authorized_identities SET disconnected_at=NOW()
+                WHERE chat_id=%s""",(self.chat,))
+        self.assertEqual(self.m.adjustment(self.chat,'A')[0],'normal',
+            'After revocation, preserved Garmin history cannot affect adaptation')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM garmin_metric_events WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],1)
+            self.assertEqual(conn.execute('SELECT count(*) FROM workouts WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0)
 
     def test_manual_weight_does_not_replace_imported_measurements(self):
         self.m.save_onboarding(self.chat,self.body())
@@ -328,6 +919,72 @@ class SchedulePostgresTests(unittest.TestCase):
                 {'purpose':'training','mood':'severe'})
             self.assertFalse(severe['used_ai'])
             self.assertEqual(before,len(outbound))
+
+    def test_opt_in_yandex_nutrition_uses_only_owners_manual_food_date(self):
+        """Never fake macros or export another user's meal to Yandex."""
+        import io,json
+        data=self.body()
+        data['ai_profile_consent']=True
+        self.m.save_onboarding(self.chat,data)
+        self.m.save_onboarding(999,self.body())
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'рис сухой','grams':85}]})
+        self.m.food_add(999,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'ЧУЖОЙ УЖИН','grams':200}]})
+        submitted=[]
+        def provider(request,timeout=None):
+            body=json.loads(request.data)
+            submitted.append(json.loads(body['messages'][-1]['text']))
+            return io.BytesIO(json.dumps({'result':{'alternatives':[{
+                'message':{'text':'Собери сбалансированный рацион.'}}]}}).encode())
+        with patch.object(self.m,'YANDEX_KEY','offline-only'), \
+             patch.object(self.m,'FOLDER_ID','offline-only'), \
+             patch.object(self.m.urllib.request,'urlopen',side_effect=provider):
+            result=self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'nutrition','date':'2026-10-18'})
+            self.assertTrue(result['used_ai'])
+            self.assertEqual(len(submitted),1)
+            facts=submitted[-1]
+            self.assertEqual(facts['nutrition_day'],'2026-10-18')
+            self.assertEqual(len(facts['manual_food_entries']),1)
+            self.assertEqual(facts['manual_food_entries'][0]['user_entered_name'],'рис сухой')
+            self.assertEqual(facts['manual_food_entries'][0]['grams'],85)
+            self.assertIsNone(facts['verified_nutrition_values'])
+            self.assertNotIn('ЧУЖОЙ УЖИН',str(facts))
+            self.assertNotIn('chat_id',str(facts))
+            self.m.set_personalization_consent(self.chat,
+                {'field':'profile','enabled':False})
+            with self.assertRaisesRegex(ValueError,'Разреши'):
+                self.m.ai_personalized_guidance(self.chat,
+                    {'purpose':'nutrition','date':'2026-10-18'})
+            self.assertEqual(len(submitted),1)
+
+    def test_yandex_nutrition_discards_reply_after_concurrent_diary_edit(self):
+        """A second-device edit during provider HTTP must invalidate old advice."""
+        import io,json
+        profile=self.body()
+        profile['ai_profile_consent']=True
+        self.m.save_onboarding(self.chat,profile)
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'Рис сухой','grams':80}]})
+        calls=[]
+        def slow_reply(request,timeout=None):
+            calls.append(json.loads(request.data))
+            self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+                'items':[{'name':'Творог','grams':150}]})
+            return io.BytesIO(json.dumps({'result':{'alternatives':[{
+                'message':{'text':'Совет по устаревшим продуктам.'}}]}}).encode())
+        with patch.object(self.m,'YANDEX_KEY','offline-only'), \
+             patch.object(self.m,'FOLDER_ID','offline-only'), \
+             patch.object(self.m.urllib.request,'urlopen',side_effect=slow_reply):
+            with self.assertRaisesRegex(ValueError,'изменился во время анализа'):
+                self.m.ai_personalized_guidance(self.chat,
+                    {'purpose':'nutrition','date':'2026-10-18'})
+        self.assertEqual(len(calls),1)
+        products=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual([x['name'] for x in products['meals'][0]['items']],
+                         ['Рис сухой','Творог'],
+                         'Reject stale AI, not the real nutrition history')
 
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
@@ -955,6 +1612,59 @@ class SchedulePostgresTests(unittest.TestCase):
                     .format(sql.Identifier(table)),(self.chat,)).fetchone()[0],0,table)
                 self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
                     .format(sql.Identifier(table)),(999,)).fetchone()[0],1,table)
+
+    def test_confirmed_deletion_removes_only_owner_integration_data(self):
+        """Privacy regression in disposable PG18; never use a live database."""
+        monitored=('manual_food_meals','manual_food_items','body_measurements',
+                   'fatsecret_oauth_pending','fatsecret_user_connections',
+                   'fatsecret_import_refs','garmin_authorized_identities',
+                   'garmin_metric_events')
+        for owner in (self.chat,999):
+            self.m.save_onboarding(owner,self.body((0,2)))
+            self.m.food_add(owner,{'date':'2026-10-18',
+                'meal_type':'breakfast','items':[{'name':'Рис сухой','grams':80}]})
+            with self.connect() as conn:
+                conn.execute("""INSERT INTO body_measurements
+                    (chat_id,measured_at,weight_kg)
+                    VALUES(%s,'2026-10-18T09:00:00+00:00',82)""",(owner,))
+                conn.execute("""INSERT INTO fatsecret_oauth_pending
+                    (chat_id,state_hash,request_token_enc,request_secret_enc,expires_at)
+                    VALUES(%s,%s,%s,%s,NOW()+INTERVAL '10 minutes')""",
+                    (owner,'state-'+str(owner),b'temporary',b'secret'))
+                connection=conn.execute("""INSERT INTO fatsecret_user_connections
+                    (chat_id,access_token_enc,access_secret_enc)
+                    VALUES(%s,%s,%s) RETURNING connection_id""",
+                    (owner,b'token',b'signing')).fetchone()[0]
+                conn.execute("""INSERT INTO fatsecret_import_refs
+                    (chat_id,connection_id,eaten_on,external_id)
+                    VALUES(%s,%s,'2026-10-18','123')""",(owner,connection))
+                provider_id='DELETION_TEST_'+str(owner)
+                conn.execute("""INSERT INTO garmin_authorized_identities
+                    (chat_id,provider_user_id,health_consent_at)
+                    VALUES(%s,%s,NOW())""",(owner,provider_id))
+                conn.execute("""INSERT INTO garmin_metric_events
+                    (chat_id,provider_user_id,category,external_id,
+                     local_calendar_date,metrics_json)
+                    VALUES(%s,%s,'dailies','day-1','2026-10-18',
+                           '{"steps":7000}'::jsonb)""",(owner,provider_id))
+        with self.connect() as conn:
+            for table in monitored:
+                for owner in (self.chat,999):
+                    count=conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                        .format(sql.Identifier(table)),(owner,)).fetchone()[0]
+                    self.assertEqual(count,1,(table,owner))
+        with patch.object(self.m,'send') as send:
+            self.m.delete_all(self.chat)
+            send.assert_called_once()
+        with self.connect() as conn:
+            for table in monitored:
+                for owner,expected in ((self.chat,0),(999,1)):
+                    count=conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                        .format(sql.Identifier(table)),(owner,)).fetchone()[0]
+                    self.assertEqual(count,expected,(table,owner))
+        # The remaining user's account and all manual food must remain intact.
+        self.assertEqual(self.m.food_history(999,{'date':'2026-10-18'})
+            ['meals'][0]['items'][0]['name'],'Рис сухой')
 
     def test_private_female_period_dates_prediction_and_edit(self):
         # A historical 3-cycle series can estimate a *future* date but must

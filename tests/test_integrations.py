@@ -49,6 +49,33 @@ class IntegrationTests(unittest.TestCase):
             f.normalize_diary({"food_entries": {"food_entry": [
                 {"food_entry_id": "4", "calories": "-1"}]}})
 
+    def test_provider_error_reply_is_not_an_empty_food_diary(self):
+        f = module("fatsecret")
+        self.assertEqual(f.normalize_diary({})["entries"], [])
+        for failure in (
+            {"error": {"code": 9, "message": "OAuth access revoked"}},
+            {"food_entries": {"error": {"code": 9}}},
+            {"food_entries": "not a valid diary"},
+        ):
+            with self.assertRaises(ValueError):
+                f.normalize_diary(failure)
+        with self.assertRaises(ValueError):
+            f.normalize_catalog_search({"error": {"code": 14, "message": "missing scope"}})
+
+    def test_fatsecret_missing_nutrients_are_not_fabricated(self):
+        f=module("fatsecret")
+        missing={"food_entries":{"food_entry":[
+           {"food_entry_id":"7","meal":"Breakfast","food_entry_name":"Unknown food",
+            "calories":"100","protein":"3","fat":"2"}]}}
+        r=f.normalize_diary(missing)
+        self.assertFalse(r["complete"])
+        self.assertIsNone(r["carbs_g"])
+        self.assertIsNone(r["calories_kcal"])
+        self.assertIsNone(r["entries"][0]["carbs_g"])
+        empty=f.normalize_diary({})
+        self.assertFalse(empty["complete"])
+        self.assertIsNone(empty["calories_kcal"])
+
     def test_garmin_import_and_idempotency(self):
         g = module("garmin")
         sample = {"dailies": [
@@ -61,13 +88,90 @@ class IntegrationTests(unittest.TestCase):
         output = g.normalize_garmin_webhook(sample, expected_user_id="tester")
         self.assertEqual(len(output), 2)
         self.assertEqual(output[0]["steps"], 7000)
+        self.assertIsNone(output[0]["total_daily_calories_kcal"])
+        self.assertIsNone(output[1]["total_daily_calories_kcal"])
         self.assertEqual(output[1]["duration_seconds"], 1800)
         self.assertEqual(len({g.stable_identity(x) for x in output}), 2)
+        energy=g.normalize_garmin_webhook({"dailies":[{
+            "userId":"tester","summaryId":"energy","calendarDate":"2026-10-22",
+            "activeKilocalories":500,"totalKilocalories":2100,
+            "bmrKilocalories":1600,"bodyBatteryChargedValue":48}]},
+            expected_user_id="tester")[0]
+        self.assertEqual(energy["active_calories_kcal"],500)
+        self.assertEqual(energy["total_daily_calories_kcal"],2100)
+        self.assertEqual(energy["resting_calories_kcal"],1600)
+        self.assertEqual(energy["body_battery_charged"],48)
         with self.assertRaises(PermissionError):
             g.normalize_garmin_webhook(sample, expected_user_id="someone-else")
         with self.assertRaises(ValueError):
             g.normalize_garmin_webhook({"dailies": [{"userId": "tester", "steps": -1,
                                                      "summaryId": "bad"}]})
+
+    def test_garmin_rejects_malformed_dates_and_float_overflow(self):
+        g=module('garmin')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'bad-long-date',
+                'calendarDate':'2026-10-25-injected','steps':1000}]},
+                expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'X'*81,
+                'calendarDate':'2026-10-25','steps':1000}]},
+                expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'X'*81,'summaryId':'test',
+                'calendarDate':'2026-10-25','steps':1000}]})
+
+        for date_string in ('2026-02-30','2026/10/18','2026-10-1'):
+            with self.assertRaises(ValueError):
+                g.normalize_garmin_webhook({'dailies':[{
+                    'userId':'tester','summaryId':'bad-date',
+                    'calendarDate':date_string,'steps':1000}]},
+                    expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'huge',
+                'calendarDate':'2026-10-25','activeKilocalories':'1e10000'}]},
+                expected_user_id='tester')
+
+    def test_catalog_food_search_scales_only_verified_grams(self):
+        f=module("fatsecret")
+        food={"foods_search":{"food":[{
+            "food_id":"1042","food_name":"Овсянка сухая","food_type":"Generic",
+            "servings":{"serving":[{"serving_id":"27","serving_description":"100 g",
+                "metric_serving_amount":"100","metric_serving_unit":"g",
+                "calories":"380","protein":"13","fat":"7","carbohydrate":"67"}]}
+        }]}}
+        choices=f.normalize_catalog_search(food)
+        self.assertEqual(choices[0]["food_id"],"1042")
+        self.assertEqual(choices[0]["servings"][0]["per_serving"]["kcal"],380)
+        serving=food["foods_search"]["food"][0]["servings"]["serving"][0]
+        result=f.scale_verified_serving(serving,70)
+        self.assertEqual(result["kcal"],Decimal("266.00"))
+        self.assertEqual(result["protein_g"],Decimal("9.10"))
+        self.assertIsNone(f.scale_verified_serving({**serving,"metric_serving_unit":"ml"},70))
+        self.assertIsNone(f.scale_verified_serving({**serving,"protein":None},70))
+        self.assertIsNone(f.scale_verified_serving(serving,-1))
+        with self.assertRaises(ValueError):
+            f.FatSecretCatalogClient("","").get_token()
+        with self.assertRaises(ValueError):
+            f.FatSecretCatalogClient("id","secret").search("oats","")
+
+    def test_catalog_requires_manual_food_selection(self):
+        f=module("fatsecret")
+        p={"foods_search":{"food":[
+            {"food_id":"12","food_name":"Овсянка, сырая","servings":{}},
+            {"food_id":"13","food_name":"Овсянка, сваренная","servings":{}}
+        ]}}
+        found=f.normalize_catalog_search(p)
+        self.assertEqual(len(found),2)
+        self.assertNotEqual(found[0]["food_id"],found[1]["food_id"])
+        self.assertEqual(found[0]["servings"],[])
+        self.assertEqual(found[1]["servings"],[])
+        with self.assertRaises(ValueError):
+            f.normalize_catalog_search({"foods_search":{"food":[{"food_name":"без id"}]}})
 
     def test_import_does_not_require_secrets(self):
         module("fatsecret")

@@ -8,7 +8,7 @@ API-specific documentation. This module intentionally performs no I/O.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -22,7 +22,8 @@ def _number(value: Any, *, limit: int | float | None = None) -> float | None:
         val = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("Invalid Garmin numeric field") from exc
-    if not val.is_finite() or val < 0 or (limit is not None and val > limit):
+    # Reject huge finite Decimal values that overflow when converted to float.
+    if not val.is_finite() or val < 0 or val > Decimal('1e9') or (limit is not None and val > limit):
         raise ValueError("Unexpected Garmin metric")
     return float(val)
 
@@ -63,34 +64,49 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
         for record in summaries:
             if not isinstance(record, dict):
                 raise ValueError("Invalid Garmin summary")
-            user_id = _safe_text(record.get("userId"))
-            if not user_id:
-                raise ValueError("Missing Garmin identity")
+            user_id = record.get("userId")
+            if not isinstance(user_id, str) or not (1 <= len(user_id) <= 80):
+                raise ValueError("Missing or oversized Garmin identity")
             if expected_user_id is not None and user_id != expected_user_id:
                 raise PermissionError("Garmin identity does not match authorization")
-            summary_id = _safe_text(
-                record.get("summaryId") or record.get("activityId")
-                or record.get("calendarDate") or record.get("startTimeInSeconds")
-            )
-            if not summary_id:
-                raise ValueError("Missing Garmin record identity")
+            raw_id = (record.get("summaryId") or record.get("activityId")
+                      or record.get("calendarDate") or record.get("startTimeInSeconds"))
+            summary_id = str(raw_id) if raw_id is not None else ""
+            if not (1 <= len(summary_id) <= 80):
+                raise ValueError("Missing or oversized Garmin record identity")
             identity = (collection, user_id, summary_id)
             if identity in seen:
                 continue
             seen.add(identity)
+            raw_day = record.get("calendarDate")
+            day = raw_day if raw_day not in ("", None) else None
+            if day is not None:
+                if not isinstance(day,str) or len(day)!=10:
+                    raise ValueError("Invalid Garmin calendar date")
+                try:
+                    if date.fromisoformat(day).isoformat() != day:
+                        raise ValueError("Invalid Garmin calendar date")
+                except ValueError:
+                    raise ValueError("Invalid Garmin calendar date") from None
             item = {
                 "source": "garmin",
                 "source_user_id": user_id,
                 "external_id": summary_id,
                 "category": collection,
                 "start_at_utc": _timestamp(record.get("startTimeInSeconds")),
-                "calendar_date": _safe_text(record.get("calendarDate"), 10) or None,
+                "calendar_date": day,
             }
             if collection == "dailies":
                 item["steps"] = _number(record.get("steps"), limit=200000)
                 item["resting_heart_rate_bpm"] = _number(record.get("restingHeartRateInBeatsPerMinute"), limit=300)
+                # Garmin daily energy categories must remain distinct. Do not
+                # add active calories to total calories a second time.
                 item["active_calories_kcal"] = _number(record.get("activeKilocalories"))
+                item["total_daily_calories_kcal"] = _number(record.get("totalKilocalories"))
+                item["resting_calories_kcal"] = _number(record.get("bmrKilocalories"))
                 item["average_stress_level"] = _number(record.get("averageStressLevel"), limit=100)
+                item["body_battery_charged"] = _number(record.get("bodyBatteryChargedValue"),limit=100)
+                item["body_battery_drained"] = _number(record.get("bodyBatteryDrainedValue"),limit=100)
             elif collection == "sleeps":
                 seconds = _number(record.get("durationInSeconds"))
                 item["duration_seconds"] = seconds
@@ -102,6 +118,7 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
                 item["distance_meters"] = _number(record.get("distanceInMeters"))
                 item["average_heart_rate_bpm"] = _number(record.get("averageHeartRateInBeatsPerMinute"), limit=300)
                 item["active_calories_kcal"] = _number(record.get("activeKilocalories"))
+                item["total_daily_calories_kcal"] = None  # activity is not an all-day total
             out.append(item)
     return out
 

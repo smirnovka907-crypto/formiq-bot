@@ -523,6 +523,7 @@ body.theme-female .history-cal-inline .history-cal-grid button.is-today{border-c
 .fq-preview-exercise small{font-size:12px;color:var(--secondary);margin-top:4px;line-height:1.45}
 .fq-exercise-fallback{display:grid;place-items:center;flex:none;width:45px;height:45px;border-radius:14px;border:1px solid var(--line);background:var(--ivory);font-size:25px}
 .fq-exercise-illustration{display:flex;align-items:center;justify-content:center;text-align:center;background:var(--ivory);border:1px dashed var(--line);border-radius:16px;padding:22px;margin:15px 0;color:var(--secondary);min-height:110px}
+.fq-exercise-photo{margin:14px 0 18px}.fq-exercise-photo img{display:block;width:100%;max-height:310px;object-fit:contain;background:var(--ivory);border:1px solid var(--line);border-radius:16px}.fq-exercise-photo figcaption{font-size:12px;line-height:1.55;color:var(--secondary);margin-top:8px}.fq-exercise-photo a{color:var(--ink);text-underline-offset:2px}
 .fq-live-dialog:has(.fq-preview-exercise){overflow-y:auto;max-height:85dvh}
 .fq-live-dialog ol{padding-left:21px;line-height:1.65}
 body.theme-female .fq-preview-exercise,body.theme-female .fq-exercise-illustration{background:#fff8fc}
@@ -536,4 +537,16 @@ body.theme-female .fq-preview-exercise,body.theme-female .fq-exercise-illustrati
 .fq-food-draft .field{margin:0}
 @media(max-width:360px){.fq-food-draft{grid-template-columns:minmax(0,1fr) 90px}}
 body.theme-female .fq-food-product{border-bottom-color:#e5bfd2}
+.fq-tier-choice{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:13px 0}
+.fq-tier-choice button{min-width:0;border:1px solid var(--line);border-radius:14px;background:var(--ivory);color:var(--ink);min-height:88px;padding:12px;font:inherit;text-align:left}
+.fq-tier-choice button.on{border-color:var(--pistachio);box-shadow:inset 0 0 0 1px var(--pistachio)}
+.fq-tier-choice button strong,.fq-tier-choice button small{display:block}
+.fq-tier-choice button strong{font-size:15px}.fq-tier-choice button small{font-size:13px;color:var(--secondary);margin-top:5px}
+.fq-tier-choice button:disabled{opacity:.66}
+body.theme-female .fq-tier-choice button{background:#fff8fc}
+.fq-catalog-candidate{display:flex;flex-direction:column;gap:7px;padding:12px 0;border-bottom:1px solid var(--line)}
+.fq-catalog-candidate strong{font-size:15px;color:var(--ink)}
+.fq-catalog-candidate small{font-size:13px;color:var(--secondary)}
+.fq-catalog-candidate button{width:100%;text-align:left;font-size:13px;min-height:42px}
+.fq-live-dialog:has(.fq-catalog-candidate){max-height:85dvh;overflow-y:auto}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>

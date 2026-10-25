@@ -20,9 +20,13 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
+let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
+let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
+let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='',fatsecretEntry=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
-let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
+let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
+let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,foodRevision=0,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -111,8 +115,20 @@ function onboardForm(){
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?femaleCalendar():'';
  const connections=''; // Inactive integrations are not displayed in the app.
+ const tiers=view==='profile'&&state?.agreed?'<section class="surface" id="test-tariffs">'+
+  '<h2>Доступ FORMIQ</h2>'+
+  '<p class="input-note">Пробный период «Тренер AI» — 14 дней после первой анкеты, без банковской карты. После него — «Дневник». Данные остаются.</p>'+
+  '<p class="input-note">'+esc(state?.premium?.label||'')+
+   (state?.premium?.days_left!=null?' · '+esc(state.premium.days_left)+' дн.':'')+'</p>'+
+  '<div class="fq-tier-choice">'+
+   [['start','Дневник','100 ₽/мес.'],['max','Тренер AI','1 000 ₽/мес.']].map(([key,name,price])=>
+    '<button type="button" class="'+((key==='start'?state.tier!=='max':state.tier==='max')?'on':'')+
+    '" data-cmd="tier-select" data-tier="'+key+'"'+(state.tier_demo?'':' disabled')+
+    '><strong>'+name+'</strong><small>'+price+'</small></button>').join('')+'</div>'+
+  '<p class="input-note">'+(state.tier_demo?'Тестовое переключение прав без списаний.':'Оплата пока не подключена.')+'</p>'+
+  '</section>':'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
-  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
+  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal+tiers;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
@@ -392,9 +408,14 @@ function training(){
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
+ const trainingCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
+  '<section class="surface"><h2>Персональный совет Yandex AI</h2>'+
+  '<p class="input-note">Рекомендация учитывает анкету, результаты и самочувствие. Тренировочные ограничения проверяет сервер.</p>'+
+  button(aiTipBusy?'Анализируем…':'Получить совет по тренировке','ai-tip-training',false,aiTipBusy?'disabled':'')+
+  (aiTrainingTip?'<p role="status" class="fq-live-banner">'+esc(aiTrainingTip)+'</p>':'')+'</section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard();
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -576,6 +597,47 @@ async function uploadBodyWeight(mode){
  }catch(ex){weightImportError=ex.name==='AbortError'?'Импорт не ответил вовремя. Проверь историю перед повтором.':ex.message}
  finally{clearTimeout(timer);weightImportBusy=false;draw()}
 }
+async function loadGarminDay(){
+ if(!ready())return;
+ if(!garminDate)garminDate=localClock().date;
+ const expected=garminDate,seq=++garminSeq;
+ garminLoading=true;garminError='';garminSnapshot=null;
+ try{
+  const result=await request('garmin_day',{date:expected});
+  if(seq===garminSeq&&expected===garminDate)garminSnapshot=result;
+ }catch(ex){if(seq===garminSeq&&expected===garminDate)garminError=ex.message||'Нет доступа к данным Garmin'}
+ finally{if(seq===garminSeq&&expected===garminDate){garminLoading=false;if(view==='progress')draw()}}
+}
+function garminPanel(){
+ const g=garminSnapshot;
+ // No connected provider identity = no Garmin card, false activity or mock data.
+ if(!g?.connected)return '';
+ const prettyMetric=(label,v,unit='')=>v==null?'':'<div class="fq-live-row"><span>'+esc(label)+'</span><strong>'+esc(v)+esc(unit)+'</strong></div>';
+ const dailyFields=[['steps','Шаги',''],['resting_heart_rate_bpm','Пульс в покое',' уд/мин'],
+  ['active_calories_kcal','Калории активности',' ккал'],['total_daily_calories_kcal','Суточные энергозатраты',' ккал'],
+  ['resting_calories_kcal','Калории покоя',' ккал'],['average_stress_level','Стресс',''],
+  ['body_battery_charged','Body Battery · заряд',''],['body_battery_drained','Body Battery · расход','']];
+ const dailies=(g.dailies||[]).map(e=>dailyFields.map(([key,label,unit])=>
+  prettyMetric(label,e.values?.[key],unit)).join('')).join('');
+ const sleeps=(g.sleeps||[]).map(e=>'<div class="fq-live-row"><span>Сон</span><strong>'+
+  (e.values?.duration_minutes!=null?esc(e.values.duration_minutes)+' мин':'Длительность не получена')+
+  (e.values?.sleep_score!=null?' · оценка '+esc(e.values.sleep_score):'')+'</strong></div>').join('');
+ const activities=(g.activities||[]).map(e=>'<div class="fq-live-row"><span>'+
+  esc(e.values?.activity_type||'Активность Garmin')+
+  (e.date_basis==='profile_timezone'?' · дата по часовому поясу профиля':'')+
+  '</span><strong>'+(e.values?.duration_seconds!=null?
+    esc(Math.round(Number(e.values.duration_seconds)/60))+' мин':'Время не получено')+
+  (e.values?.active_calories_kcal!=null?' · '+esc(e.values.active_calories_kcal)+' ккал активности':'')+
+  '</strong></div>').join('');
+ return '<section class="surface"><h2>Garmin Connect</h2>'+
+  '<p class="input-note">Данные подключённого аккаунта, без дублирования ручных тренировок и калорий.</p>'+
+  (g.last_sync_at?'<p class="input-note">Последняя синхронизация: '+
+    esc(new Date(g.last_sync_at).toLocaleString('ru-RU'))+'</p>':'<p class="input-note">Синхронизация ещё не подтверждена.</p>')+
+  '<label class="field"><span>Дата Garmin</span><input type="date" id="garmin-date" value="'+esc(garminDate)+'"></label>'+
+  (dailies+sleeps+activities||'<p class="input-note">За выбранную дату показатели Garmin не получены.</p>')+
+  button(garminLoading?'Обновляем…':'Обновить данные','garmin-refresh',false,garminLoading?'disabled':'')+
+  button('Отключить Garmin','garmin-disconnect-open')+'</section>';
+}
 function progress(){
  const stats=state.stats||{},weight=state.metrics?.weight_kg;
  const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
@@ -620,18 +682,37 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+history();
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+garminPanel()+summary+history();
 }
 const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
 async function loadFoodHistory(){
  if(!foodDate)foodDate=localClock().date;
  const requested=foodDate;
+ ++foodRevision;aiNutritionTip='';
  foodLoading=true;draw();
  try{
   const result=await request('food_history',{date:requested});
-  if(requested===foodDate){foodHistory=result;foodNotice=''}
+  if(requested===foodDate){foodHistory=result;foodNotice='';catalogRecent=Object.create(null);void requestFoodDaily()}
  }catch(ex){if(requested===foodDate)foodNotice=ex.message||'Не удалось загрузить записи'}
  finally{foodLoading=false;draw()}
+}
+async function requestFoodDaily(){
+ // Any edit or re-fetch invalidates guidance for the previous food snapshot.
+ ++foodRevision;aiNutritionTip='';
+ const expected=foodDate,seq=++foodDailySeq;
+ const hasLinked=(foodHistory?.meals||[]).some(m=>(m.items||[]).some(x=>x.nutrition_source==='fatsecret'));
+ foodDaily=null;foodDailyError='';
+ foodDailyBusy=!!(state?.food_catalog_available&&hasLinked);
+ if(!foodDailyBusy){draw();return}
+ draw();
+ try{
+  const result=await request('food_nutrition_day',{date:expected});
+  if(seq===foodDailySeq&&expected===foodDate)foodDaily=result;
+ }catch(ex){
+  if(seq===foodDailySeq&&expected===foodDate)foodDailyError=ex.message||'Не удалось рассчитать КБЖУ';
+ }finally{
+  if(seq===foodDailySeq&&expected===foodDate){foodDailyBusy=false;draw()}
+ }
 }
 function syncFoodDraft(){
  const rows=document.querySelectorAll?.('[data-food-draft]')||[];
@@ -640,18 +721,44 @@ function syncFoodDraft(){
   if(Number.isInteger(index)&&foodDraft[index])foodDraft[index][el.dataset.field]=el.value;
  }
 }
+function nutritionLabel(row){
+ const current=foodDaily?.date===foodDate?foodDaily.items?.find(x=>x.id===row.id):null;
+ const hit=catalogRecent[row.id],n=current?.nutrition||(hit?.grams===row.grams?hit.nutrients:null);
+ if(n)return '≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' · Ж '+esc(n.fat_g)+' · У '+esc(n.carbs_g)+' г · FatSecret';
+ return row.nutrition_source==='fatsecret'?'FatSecret · КБЖУ по запросу':'КБЖУ нет данных';
+}
+async function loadFatSecretAccount(){
+ if(!state?.fatsecret_diary_configured)return;
+ try{fatsecretAccount=await request('fatsecret_account_status');fatsecretError=''}
+ catch(ex){fatsecretError=ex.message||'Статус FatSecret недоступен'}
+ draw();
+}
 function food(){
  if(!foodDate)foodDate=localClock().date;
  const saved=(foodHistory?.meals||[]);
  const dateField='<label class="field"><span>Дата дневника</span><input type="date" id="food-date" value="'+esc(foodDate)+'"></label>';
+ const totals=foodDaily?.date===foodDate?foodDaily:null;
+ const nutritionLine=n=>'≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' г · Ж '+esc(n.fat_g)+' г · У '+esc(n.carbs_g)+' г';
+ const totalContent=totals?(totals.complete?
+   '<p role="status"><strong>КБЖУ за день: '+nutritionLine(totals.totals)+'</strong></p>':
+   '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+esc(totals.total_items)+' продуктов.</strong>'+
+   (totals.known_subtotal?' Сумма только проверенных: '+nutritionLine(totals.known_subtotal)+'.':' Нет подтверждённой пищевой ценности.')+'</p>'):'';
+ const canRecheck=state?.food_catalog_available&&saved.some(m=>m.items.some(x=>x.nutrition_source==='fatsecret'));
+ const nutritionButton=canRecheck?
+    button(foodDailyBusy?'Обновляем КБЖУ…':'Обновить КБЖУ','food-nutrition-day',false,foodDailyBusy?'disabled':''):'';
  const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
   '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
   'Сохраняем только введённые продукты и вес. Калории и БЖУ не подставляем без достоверного источника.</p>'+
   (foodLoading?'<p role="status">Загружаем записи…</p>':'')+
-  dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+'</section>';
+  dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+
+  nutritionButton+(foodDailyError?'<p role="alert" class="input-note">'+esc(foodDailyError)+'</p>':'')+totalContent+'</section>';
  const cards=saved.map(meal=>'<section class="surface"><div class="heading-row"><h2>'+
   esc(mealLabels[meal.type]||meal.type)+'</h2><small>'+esc(meal.items.length)+' продуктов</small></div>'+
-  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · КБЖУ нет данных</small></div>'+
+  (totals?.meals?.find(x=>x.type===meal.type)?.known_subtotal?
+    '<p class="input-note">'+
+    (totals.meals.find(x=>x.type===meal.type).complete?'КБЖУ: ':'Учтённые продукты: ')+
+    nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
+  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
   '<button type="button" class="button-subtle" data-cmd="food-edit" data-id="'+row.id+'">Изменить</button>'+
   '<button type="button" class="button-subtle" data-cmd="food-delete" data-id="'+row.id+'">Удалить</button></div>').join('')+'</section>').join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
@@ -670,16 +777,43 @@ function food(){
     button('Сохранить приём пищи','food-save',true):
     button('Добавить продукт вручную','food-draft-add'))+
   '</section>';
- const reportAllowed=state?.ai_personalization?.profile===true;
+ const fsEntries=fatsecretDaily?.date===foodDate?fatsecretDaily:null;
+ const fsTotals=fsEntries?.totals;
+ const fsSection=state?.fatsecret_diary_configured?'<section class="surface">'+
+  '<h2>Личный дневник FatSecret</h2>'+
+  '<p class="input-note">Записи загружаются из FatSecret и не копируются в ручной дневник.</p>'+
+  (fatsecretAccount?.connected?
+   '<p class="input-note">Аккаунт подключён'+(fatsecretAccount.last_sync_at?' · проверка: '+esc(fatsecretAccount.last_sync_at.slice(0,16).replace('T',' ')):'')+'</p>'+
+   button(fatsecretBusy?'Загружаем…':'Посмотреть день из FatSecret','fatsecret-diary-day',false,fatsecretBusy?'disabled':'')+
+   button('Отключить FatSecret','fatsecret-disconnect-open'):
+   button(fatsecretBusy?'Подключаем…':'Подключить FatSecret','fatsecret-connect',false,fatsecretBusy?'disabled':'')+
+   (fatsecretAuthUrl?'<p><a href="'+esc(fatsecretAuthUrl)+'" rel="noopener noreferrer" target="_blank">Открыть разрешение FatSecret</a></p>':''))+
+  (fatsecretError?'<p role="alert" class="input-note">'+esc(fatsecretError)+'</p>':'')+
+  (fsEntries?
+   (fsTotals?'<p><strong>'+esc(fsTotals.calories_kcal)+' ккал · Б '+esc(fsTotals.protein_g)+
+    ' · Ж '+esc(fsTotals.fat_g)+' · У '+esc(fsTotals.carbs_g)+' г</strong></p>':
+    '<p class="input-note">Полный итог КБЖУ недоступен — не все значения получены.</p>')+
+   (fsEntries.entries||[]).map(e=>'<div class="fq-food-product"><strong>'+esc(e.name)+'</strong>'+ (e.imported?'<small>Импортировано в FORMIQ'+(e.user_edited?' · исправлено вручную':'')+'</small>':'')+
+    '<small>'+esc(mealLabels[e.meal?.toLowerCase()]||e.meal||'')+' · '+(e.kcal==null?'КБЖУ нет данных':esc(e.kcal)+' ккал')+'</small>'+
+    (e.imported?button('Изменить','fatsecret-entry-edit',false,'data-id="'+esc(e.external_id)+'"')+
+      button('Убрать из FORMIQ','fatsecret-entry-unlink',false,'data-id="'+esc(e.external_id)+'"'):'')+'</div>').join('')+
+   ((fsEntries.entries||[]).length?button('Импортировать день в FORMIQ','fatsecret-import-day',false,fatsecretBusy?'disabled':''):''):'')+
+  '</section>':'';
+ const nutritionCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
+  '<section class="surface"><h2>Совет Yandex AI по рациону</h2>'+
+  '<p class="input-note">Только твои реальные продукты за выбранную дату. Без подтверждённой базы КБЖУ не рассчитываем.</p>'+
+  button(aiTipBusy?'Анализируем…':'Получить совет по рациону','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
+  (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>':'';
+ const reportAllowed=state?.tier==='max'&&state?.ai_personalization?.profile===true;
  const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
   '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
   (reportAllowed?'<label class="field"><span>Выбранный отчёт</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
     button('Отправить выбранный отчёт в Yandex AI','nutrition-analyze',true):
-    '<p class="input-note">Для анализа отчёта Yandex AI разрешение можно включить в анкете. Ручной дневник работает без Yandex AI.</p>')+
+    '<p class="input-note">Анализ Yandex AI доступен в тарифе «Тренер AI» при согласии в анкете. Ручной дневник доступен отдельно.</p>')+
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function previewPanel(){
@@ -706,16 +840,31 @@ function previewPanel(){
 function exerciseCardPanel(){
  const x=exerciseDetails;
  if(!x)return '';
- return '<h2>'+esc(x.name)+'</h2>'+
-  '<div class="fq-exercise-illustration" role="img" aria-label="Иллюстрация пока недоступна">Иллюстрация техники появится после проверки прав</div>'+
-  '<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>'+
-  '<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>'+
-  '<h3>Техника выполнения</h3><ol>'+x.steps.map(step=>'<li>'+esc(step)+'</li>').join('')+'</ol>'+
-  '<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>'+
-  '<h3>Безопасные замены</h3><p>'+esc(x.substitutions?.map(y=>y.name).join(', ')||'Подбираются с учётом ограничений')+'</p>'+
-  '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
-  (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
-  button('Вернуться к тренировке','exercise-back',true);
+ const imageUrl=String(x.image_url||'');
+ // The server is authoritative, and this second allowlist guards mobile WebView
+ // against unexpected or injected remote URLs in archived workout responses.
+ const approved=/^https:\/\/raw\.githubusercontent\.com\/yuhonas\/free-exercise-db\/main\/exercises\/[A-Za-z0-9_-]+\/[01]\.jpg$/i.test(imageUrl)
+   && x.image_license_url==='https://creativecommons.org/licenses/by-sa/4.0/';
+ const photo=approved?
+  '<figure class="fq-exercise-photo"><img src="'+esc(imageUrl)+'" alt="Пример техники: '+esc(x.name)+'" loading="lazy" decoding="async" referrerpolicy="no-referrer">'+
+  '<figcaption>Иллюстрация · '+esc(x.image_credit||'Everkinetic · Free Exercise DB')+
+  ' · <a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener noreferrer">источник</a>'+
+  ' · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>. Без изменений.</figcaption></figure>':
+  '<div class="fq-exercise-illustration" role="note">Подтверждённого изображения для этого движения пока нет. Пользуйся текстовой инструкцией.</div>';
+ const steps=Array.isArray(x.steps)?x.steps.filter(y=>typeof y==='string'&&y.trim()):[];
+ const alternatives=Array.isArray(x.substitutions)?x.substitutions.filter(y=>y&&typeof y.name==='string'):[];
+ return '<h2>'+esc(x.name)+'</h2>'+photo+
+   (x.muscles?'<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>':'')+
+   (x.start_position?'<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>':'')+
+   '<h3>Техника выполнения</h3>'+
+   (steps.length?'<ol>'+steps.map(step=>'<li>'+esc(step)+'</li>').join('')+'</ol>':
+     '<p>Для этого движения проверенная подробная инструкция пока недоступна.</p>')+
+   (x.mistakes?'<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>':'')+
+   (alternatives.length?'<h3>Доступные замены</h3><p>'+esc(alternatives.map(y=>y.name).join(', '))+'</p>':'')+
+   '<p class="input-note">При боли прекрати упражнение. Нагрузку и амплитуду подбирай с учётом самочувствия.</p>'+
+   '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
+   (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
+   button('Вернуться к тренировке','exercise-back',true);
 }
 function modalHTML(){
  if(!modal)return '';
@@ -724,7 +873,45 @@ function modalHTML(){
   content='<h2>Изменить продукт</h2>'+
    '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
    '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
+   (state?.food_catalog_available?button('Найти в FatSecret','food-catalog-open'):'')+
    button('Сохранить изменения','food-edit-save',true)+button('Отмена','close');
+ }
+ if(modal==='food-catalog'&&foodEdit){
+  const cards=catalogCandidates.map(candidate=>{
+   const options=(candidate.servings||[]).filter(p=>p.grams&&p.per_serving).slice(0,6);
+   return '<div class="fq-catalog-candidate"><strong>'+esc(candidate.name)+'</strong>'+
+    (candidate.brand?'<small>'+esc(candidate.brand)+'</small>':'')+
+    (options.length?options.map(p=>button('Выбрать: '+(p.description||'Порция')+' · '+p.grams+' г','food-catalog-link',false,
+     'data-food-id="'+esc(candidate.food_id)+'" data-serving-id="'+esc(p.serving_id)+'"')).join(''):
+    '<p class="input-note">Нет проверенной порции в граммах.</p>')+'</div>';
+  }).join('');
+  content='<h2>Найти продукт в FatSecret</h2>'+
+   '<p class="input-note">Выбери сырой или приготовленный продукт и подходящую порцию. Отправляется только название продукта.</p>'+
+   '<label class="field"><span>Название</span><input id="food-catalog-query" maxlength="80" value="'+esc(catalogQuery||foodEdit.name)+'"></label>'+
+   button(catalogBusy?'Ищем…':'Искать','food-catalog-search',true,catalogBusy?'disabled':'')+
+   (catalogMessage?'<p role="status" class="input-note">'+esc(catalogMessage)+'</p>':'')+
+   cards+button('Вернуться','food-catalog-back');
+ }
+ if(modal==='garmin-disconnect'){
+  content='<h2>Отключить Garmin?</h2><p>Доступ к показателям будет прекращён. История тренировок и существующие записи останутся.</p>'+
+   button('Отключить','garmin-disconnect-confirm')+button('Отмена','close');
+ }
+ if(modal==='fatsecret-entry-edit'&&fatsecretEntry){
+   content='<h2>Исправление импортированной записи</h2>'+
+    '<p class="input-note">Оригинал FatSecret не изменяется. Здесь сохраняется только твоя собственная правка.</p>'+
+    '<p><strong>'+esc(fatsecretEntry.name)+'</strong></p>'+
+    '<label class="field"><span>Своё название (необязательно)</span>'+
+     '<input type="text" id="fatsecret-override-name" maxlength="120" value="'+esc(fatsecretEntry.user_name_override||'')+'" placeholder="Оставь пустым для оригинала"></label>'+
+    '<label class="field"><span>Приём пищи</span><select id="fatsecret-override-meal">'+
+      [['','Как в FatSecret'],...Object.entries(mealLabels)].map(([value,label])=>
+       '<option value="'+esc(value)+'"'+((fatsecretEntry.user_meal_override||'')===value?' selected':'')+'>'+esc(label)+'</option>').join('')+
+    '</select></label>'+
+    button('Сохранить правку','fatsecret-entry-save',true)+button('Отмена','close');
+ }
+ if(modal==='fatsecret-disconnect'){
+  content='<h2>Отключить FatSecret?</h2>'+
+   '<p>Доступ к дневнику будет удалён из FORMIQ. Ручные записи питания останутся.</p>'+
+   button('Отключить','fatsecret-disconnect-confirm')+button('Отмена','close');
  }
  if(modal==='food-delete'&&foodEdit){
   content='<h2>Удалить продукт?</h2><p>'+esc(foodEdit.name)+' · '+esc(foodEdit.grams)+' г</p>'+
@@ -785,8 +972,9 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
- if(e.target.id==='food-date'){foodDate=e.target.value;foodHistory=null;foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-date'){fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
+ if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
 });
@@ -805,7 +993,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food')loadFoodHistory();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -821,11 +1009,15 @@ app.addEventListener('click',async e=>{
  if(cmd==='ai-tip-training'||cmd==='ai-tip-nutrition'||cmd==='ai-tip-discomfort'){
   if(aiTipBusy)return;
   aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
+  const expectedFoodDate=purpose==='nutrition'?foodDate:null;
+  const expectedFoodRevision=foodRevision;
   try{
    const result=await request('ai_personalized_guidance',{
-      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal'});
+      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal',
+      ...(purpose==='nutrition'?{date:foodDate}:{})});
    if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
-   else aiNutritionTip=result.advice;
+   else if(expectedFoodDate===foodDate&&expectedFoodRevision===foodRevision)
+    aiNutritionTip=result.advice;
   }catch(ex){error=ex.message||'Не удалось получить совет Yandex AI'}
   finally{aiTipBusy=false;draw()}
   return;
@@ -911,6 +1103,13 @@ app.addEventListener('click',async e=>{
   }return;
  }
  if(cmd==='onboard-ai-apply'){if(onboard?.aiResult){onboard.aiReviewed=true;error='';draw()}return}
+ if(cmd==='tier-select'){
+  if(!state?.tier_demo){fail('Оплата пока не подключена.');return}
+  const tier=element.dataset.tier;
+  if(!['start','max'].includes(tier))return;
+  await send('set_demo_tier',{tier});
+  draw();return;
+ }
  if(cmd==='onboard-save'){
   if(!onboard)return;let payload;
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
@@ -959,11 +1158,11 @@ app.addEventListener('click',async e=>{
  if(cmd==='nutrition-analyze'){
   if(nutritionBusy)return;
   const file=document.getElementById('nutrition-file')?.files?.[0];
-  const consent=state?.ai_personalization?.profile===true;
+  const consent=state?.tier==='max'&&state?.ai_personalization?.profile===true;
   const alert=document.getElementById('nutrition-error');
   if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
   if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
-  if(!consent){if(alert)alert.textContent='Включи Yandex AI в анкете. Без него ручной дневник доступен.';return}
+  if(!consent){if(alert)alert.textContent='Нужен тариф «Тренер AI» и согласие на Yandex AI в анкете.';return}
   nutritionBusy=true;error='';draw();
   const data=new FormData();data.append('report',file);data.append('consent','yes');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
@@ -1002,7 +1201,7 @@ app.addEventListener('click',async e=>{
   if(!foodDraft.length){fail('Добавь продукт и граммовку');return}
   try{
    const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items:foodDraft});
-   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';
+   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';void requestFoodDaily();
    foodNotice='Приём пищи сохранён в дневнике.';error='';
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
   draw();return;
@@ -1011,7 +1210,144 @@ app.addEventListener('click',async e=>{
   const id=Number(element.dataset.id);
   const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
   if(!item)return;
-  foodEdit={...item};modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+  foodEdit={...item};catalogCandidates=[];catalogMessage='';modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='garmin-refresh'){if(!garminLoading)await loadGarminDay();return}
+ if(cmd==='garmin-disconnect-open'){if(garminSnapshot?.connected){modal='garmin-disconnect';draw()}return}
+ if(cmd==='garmin-disconnect-confirm'){
+  if(!garminSnapshot?.connected)return;
+  ++garminSeq;garminLoading=true;draw();
+  try{
+   await request('garmin_disconnect');
+   garminSnapshot={connected:false};garminError='';modal='';
+  }catch(ex){garminError=ex.message||'Не удалось отключить Garmin';modal=''}
+  finally{garminLoading=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-connect'){
+  if(!state?.fatsecret_diary_configured||fatsecretBusy)return;
+  fatsecretBusy=true;fatsecretError='';fatsecretAuthUrl='';draw();
+  try{
+   const r=await request('fatsecret_account_connect'),url=String(r.authorization_url||'');
+   if(!url.startsWith('https://authentication.fatsecret.com/oauth/authorize?'))
+    throw new Error('Некорректная ссылка подключения');
+   fatsecretAuthUrl=url;
+  }catch(ex){fatsecretError=ex.message||'Подключение недоступно'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-diary-day'){
+  if(!fatsecretAccount?.connected||fatsecretBusy)return;
+  const expected=foodDate;fatsecretBusy=true;fatsecretError='';fatsecretDaily=null;draw();
+  try{
+   const r=await request('fatsecret_diary_day',{date:expected});
+   if(expected===foodDate)fatsecretDaily=r;
+  }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Записи недоступны'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-import-day'){
+  if(!fatsecretAccount?.connected||fatsecretBusy||!fatsecretDaily)return;
+  const expected=foodDate;
+  fatsecretBusy=true;fatsecretError='';draw();
+  try{
+   const result=await request('fatsecret_diary_import',{date:expected});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     const saved=new Set(result.imported_ids||[]);
+     for(const e of fatsecretDaily.entries||[])if(saved.has(e.external_id))e.imported=true;
+     foodNotice='Импортированы ссылки на '+esc(result.imported_count)+' записей FatSecret.';
+   }
+  }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Импорт не выполнен'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-entry-edit'||cmd==='fatsecret-entry-unlink'){
+  const id=String(element.dataset.id||'');
+  const row=(fatsecretDaily?.entries||[]).find(x=>x.external_id===id&&x.imported);
+  if(!row)return;
+  fatsecretEntry={...row};
+  if(cmd==='fatsecret-entry-edit'){modal='fatsecret-entry-edit';draw();return}
+  if(fatsecretBusy)return;
+  const expected=foodDate;fatsecretBusy=true;draw();
+  try{
+   await request('fatsecret_diary_import_unlink',{date:expected,external_id:id});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     row.imported=false;row.user_edited=false;row.user_name_override=null;
+     row.user_meal_override=null;
+     foodNotice='Запись убрана из FORMIQ. FatSecret не изменён.';
+   }
+  }catch(ex){fatsecretError=ex.message||'Не удалось убрать импортированную запись'}
+  finally{fatsecretBusy=false;fatsecretEntry=null;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-entry-save'){
+  if(!fatsecretEntry||fatsecretBusy)return;
+  const expected=foodDate,entryId=fatsecretEntry.external_id;
+  const name=String(document.getElementById('fatsecret-override-name')?.value||'').trim();
+  const meal=String(document.getElementById('fatsecret-override-meal')?.value||'');
+  fatsecretBusy=true;fatsecretError='';draw();
+  try{
+   await request('fatsecret_diary_import_edit',{date:expected,external_id:entryId,
+       name_override:name||null,meal_override:meal||null});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     // Refresh from authorized source; don't fake the restored provider name.
+     const latest=await request('fatsecret_diary_day',{date:expected});
+     if(expected===foodDate)fatsecretDaily=latest;
+   }
+   modal='';fatsecretEntry=null;foodNotice='Исправление записи сохранено.';
+  }catch(ex){fatsecretError=ex.message||'Не удалось сохранить исправление';modal=''}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-disconnect-open'){modal='fatsecret-disconnect';draw();return}
+ if(cmd==='fatsecret-disconnect-confirm'){
+  if(fatsecretBusy)return;
+  fatsecretBusy=true;draw();
+  try{
+   await request('fatsecret_account_disconnect');
+   fatsecretAccount={connected:false,available:true};
+   fatsecretAuthUrl='';fatsecretDaily=null;fatsecretError='';modal='';
+  }catch(ex){fatsecretError=ex.message||'Не удалось отключить аккаунт';modal=''}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='food-nutrition-day'){
+  if(!state?.food_catalog_available||foodDailyBusy)return;
+  await requestFoodDaily();
+  return;
+ }
+ if(cmd==='food-catalog-open'){
+  if(!foodEdit||!state?.food_catalog_available)return;
+  catalogCandidates=[];catalogMessage='';catalogQuery=foodEdit.name;modal='food-catalog';draw();return;
+ }
+ if(cmd==='food-catalog-back'){modal='food-edit';draw();return}
+ if(cmd==='food-catalog-search'){
+  if(!foodEdit||!state?.food_catalog_available||catalogBusy)return;
+  const query=String(document.getElementById('food-catalog-query')?.value||'').trim();
+  catalogQuery=query;
+  catalogBusy=true;catalogCandidates=[];catalogMessage='';draw();
+  try{
+   const result=await request('food_catalog_lookup',{query});
+   catalogCandidates=result.candidates||[];
+   catalogMessage=catalogCandidates.length?'Выбери порцию конкретного продукта.':'Продукты не найдены.';
+  }catch(ex){catalogMessage=ex.message||'Поиск недоступен'}
+  finally{catalogBusy=false;draw()}
+  return;
+ }
+ if(cmd==='food-catalog-link'){
+  if(!foodEdit||!state?.food_catalog_available||catalogBusy)return;
+  const fid=element.dataset.foodId,sid=element.dataset.servingId;
+  if(!/^\d{1,20}$/.test(fid||'')||!/^\d{1,20}$/.test(sid||''))return;
+  catalogBusy=true;catalogMessage='';draw();
+  try{
+   const result=await request('food_catalog_attach',{id:foodEdit.id,food_id:fid,serving_id:sid});
+   foodDaily=null;catalogRecent[foodEdit.id]={grams:foodEdit.grams,nutrients:result.nutrients};
+   for(const m of foodHistory?.meals||[])for(const item of m.items||[])if(item.id===foodEdit.id)item.nutrition_source='fatsecret';
+   foodNotice='Продукт сопоставлен с FatSecret по выбранной порции.';
+   foodEdit=null;catalogCandidates=[];modal='';error='';void requestFoodDaily();
+  }catch(ex){catalogMessage=ex.message||'Порция недоступна'}
+  finally{catalogBusy=false;draw()}
+  return;
  }
  if(cmd==='food-edit-save'){
   if(!foodEdit)return;
@@ -1019,7 +1355,7 @@ app.addEventListener('click',async e=>{
    foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
    foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
    const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
-   foodHistory=result;foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';void requestFoodDaily();
   }catch(ex){error=ex.message||'Ошибка изменения продукта'}
   draw();return;
  }
@@ -1027,7 +1363,7 @@ app.addEventListener('click',async e=>{
   if(!foodEdit)return;
   try{
    const result=await request('food_delete',{id:foodEdit.id});
-   foodHistory=result;foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';void requestFoodDaily();
   }catch(ex){error=ex.message||'Не удалось удалить продукт'}
   draw();return;
  }
@@ -1044,10 +1380,12 @@ app.addEventListener('click',async e=>{
   if(!c)return;
   exerciseOrigin='live';
   exerciseDetails={key:c.key,name:c.name,sets:c.set_count,low:c.low,high:c.high,unit:c.unit,
-   weight_kg:null,muscles:'Подробности зависят от движения',
-   start_position:'Проверь устойчивость, положение тела и настройку оборудования.',
-   steps:['Прими исходное положение.',c.tip||'Двигайся плавно и контролируемо.','Вернись к началу движения без рывка.'],
-   mistakes:c.caution||'Не выполняй через боль.',substitutions:[]};
+   weight_kg:null,muscles:c.muscles||null,
+   start_position:c.start_position||null,
+   steps:Array.isArray(c.steps)&&c.steps.length?c.steps:(c.tip?[c.tip]:[]),
+   mistakes:c.mistakes||c.caution||null,substitutions:[],
+   image_url:c.image_url||null,image_credit:c.image_credit||null,
+   image_license_url:c.image_license_url||null};
   modal='exercise-card';draw();return;
  }
  if(cmd==='exercise-card'){
