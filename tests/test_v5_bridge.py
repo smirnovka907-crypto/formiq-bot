@@ -57,6 +57,44 @@ class V5StagingContract(unittest.TestCase):
         self.assertIn('даты менструаций',text)
         self.assertIn('даты женского календаря не включаются',text)
 
+    def test_wake_callback_sends_visible_confirmation_in_private_chat(self):
+        """A real message must survive the short Telegram callback-popup expiry."""
+        from types import SimpleNamespace
+        call = SimpleNamespace(
+            data='wake', id='wake-test',
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(chat=SimpleNamespace(id=123, type='private')))
+        with patch.object(self.mod.BOT,'send_message') as send_msg, \
+             patch.object(self.mod.BOT,'answer_callback_query') as answer:
+            self.mod.callback(call)
+            send_msg.assert_called_once()
+            args, kwargs=send_msg.call_args
+            self.assertEqual(args[0], 123)
+            self.assertIn('FORMIQ на связи', args[1])
+            self.assertEqual(
+                [button.text for row in kwargs['reply_markup'].keyboard for button in row],
+                ['FormIQ','Разбудить'])
+            answer.assert_called_once()
+        # An expired answer-popup may be rejected, but the chat confirmation
+        # has already been sent; don't depend on a transient 2-second popup.
+        with patch.object(self.mod.BOT,'send_message') as send_msg, \
+             patch.object(self.mod.BOT,'answer_callback_query',
+                          side_effect=RuntimeError('Telegram popup expired')):
+            self.mod.callback(call)
+            send_msg.assert_called_once()
+
+    def test_wake_callback_rejects_other_chat_users(self):
+        from types import SimpleNamespace
+        call=SimpleNamespace(
+            data='wake', id='wake-test',
+            from_user=SimpleNamespace(id=123),
+            message=SimpleNamespace(chat=SimpleNamespace(id=456, type='private')))
+        with patch.object(self.mod.BOT,'send_message') as send_msg, \
+             patch.object(self.mod.BOT,'answer_callback_query') as answer:
+            self.mod.callback(call)
+            send_msg.assert_not_called()
+            answer.assert_not_called()
+
     def test_nutrition_report_requires_telegram_and_explicit_consent(self):
         from unittest.mock import patch
         client = self.mod.APP.test_client()
