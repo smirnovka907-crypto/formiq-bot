@@ -802,12 +802,12 @@ function food(){
   '<p class="input-note">Только твои реальные продукты за выбранную дату. Без подтверждённой базы КБЖУ не рассчитываем.</p>'+
   button(aiTipBusy?'Анализируем…':'Получить совет по рациону','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
   (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>':'';
- const reportAllowed=state?.ai_personalization?.profile===true;
+ const reportAllowed=state?.tier==='max'&&state?.ai_personalization?.profile===true;
  const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
   '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
   (reportAllowed?'<label class="field"><span>Выбранный отчёт</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
     button('Отправить выбранный отчёт в Yandex AI','nutrition-analyze',true):
-    '<p class="input-note">Для анализа отчёта Yandex AI разрешение можно включить в анкете. Ручной дневник работает без Yandex AI.</p>')+
+    '<p class="input-note">Анализ Yandex AI доступен в тарифе «Тренер AI» при согласии в анкете. Ручной дневник доступен отдельно.</p>')+
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
@@ -1139,11 +1139,11 @@ app.addEventListener('click',async e=>{
  if(cmd==='nutrition-analyze'){
   if(nutritionBusy)return;
   const file=document.getElementById('nutrition-file')?.files?.[0];
-  const consent=state?.ai_personalization?.profile===true;
+  const consent=state?.tier==='max'&&state?.ai_personalization?.profile===true;
   const alert=document.getElementById('nutrition-error');
   if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
   if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
-  if(!consent){if(alert)alert.textContent='Включи Yandex AI в анкете. Без него ручной дневник доступен.';return}
+  if(!consent){if(alert)alert.textContent='Нужен тариф «Тренер AI» и согласие на Yandex AI в анкете.';return}
   nutritionBusy=true;error='';draw();
   const data=new FormData();data.append('report',file);data.append('consent','yes');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
