@@ -121,6 +121,17 @@ async function run(){
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
+ for(const [instant,expected] of [
+  ['2026-10-25T02:00:00Z','Доброй ночи!'],
+  ['2026-10-25T08:00:00Z','Доброе утро!'],
+  ['2026-10-25T14:00:00Z','Добрый день!'],
+  ['2026-10-25T20:00:00Z','Добрый вечер!']
+ ]){
+  const local=createClient(true,{now:instant,metrics:{timezone:'UTC'}});await settle();
+  assert.ok(local.root.innerHTML.includes(expected),'Greeting must follow saved timezone: '+instant);
+  assert.match(local.root.innerHTML,/Воскресенье, 25 октября/,'Date is capitalized and localized');
+  assert.match(local.root.innerHTML,/Сегодня день восстановления/,'No workout is scheduled today');
+ }
  const severe=createClient(true,{metrics:{sex:'female'}});await settle();
  await severe.click({cmd:'mood'});
  assert.match(severe.root.innerHTML,/Сильная боль или слабость/);
