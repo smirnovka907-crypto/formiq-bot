@@ -1,3 +1,23 @@
+# FORMIQ | ТЗ редакция 2 — безопасность FatSecret и импорт (25.10.2026)
+
+**Только Draft PR [#23](https://github.com/smirnovka907-crypto/formiq-bot/pull/23), рабочая ветка `feature/formiq-tz2-nutrition-integrations-20261025`.** Production: Render LIVE прежний код `cf61f1b777f80886704a4f31f6ac952ab3ec5528`; `main` документальный HEAD `a220a14a40670ef3a6806d49e1a2e472fc345c1f`. Ни merge, ни deploy, ни смена bot/token/webhook, ни изменение production PostgreSQL не выполнялись.
+
+## Написано в PR
+- **FatSecret delegated OAuth1:** официальная авторизация владельца, краткоживущая одноразовая OAuth state, encrypted temporary/access tokens с `FORMIQ_INTEGRATION_ENCRYPTION_KEY`, disconnect, live-only просмотр; без логинов и паролей FatSecret. Строгая повторная проверка токенов после внешнего HTTP: ответ старого аккаунта больше не возвращается после его отключения/переподключения. Параметры callback скрыты из логов Werkzeug.
+- **Импорт дневника:** аддитивная таблица `fatsecret_import_refs` хранит только разрешённые `food_entry_id`, дату, введённую пользователем и его собственные исправления. Повторный импорт idempotent. Импорт не создаёт дублей в ручном питании, не копирует навсегда лицензируемые пищевые значения. Правила хранения и атрибуции провайдера требуют проверки по реальному договору.
+- **Пищевая база / КБЖУ:** проверенные FatSecret `food_id/serving_id`, текущая сумма по дню и приёмам пищи и честные частичные итоги без вымышленных чисел; без API-ключей кнопка реального расчёта не выдаётся за работающую.
+- **Garmin offline:** нормализованный provider ingest, owner-scoped и consent-scoped PostgreSQL UPSERT, read-only статистика подключённого аккаунта, отключение с сохранением истории; без имитации работающего Garmin OAuth/Business push.
+
+## Проверки и ограничения
+- **CI [#40215478422](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40215478422) — SUCCESS на `21c2db197c4c1bbc48159ec32dd7662f26c5ee50`:** Python/JS/API/PostgreSQL18/mobile Chromium, в т.ч. регрессии отзыва доступа, токенов и логов.
+- **CI [#40215626021](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40215626021) — SUCCESS на `6cb94d0adb641745cc60dec7e4696464af2fca91`:** идемпотентный импорт идентификаторов, проверка прав владельца и отсутствие хранения чужой пищевой ценности.
+- Для последующих коммитов повторно проверить точный HEAD CI перед готовностью к выпуску. **Настоящие пользовательские OAuth-связки и Garmin/FatSecret provider credentials не подтверждены**, физическая приёмка Android/iOS Telegram не выполнена.
+- Не хватает реальной авторизации Garmin Business, проверенного FatSecret API grants, полноценного AI-планирования и атрибутированных, юридически разрешённых иллюстраций/медиа. Не заявлять эти части готовыми.
+
+**Один следующий шаг:** получить официальные provider-grants и проверить сквозной OAuth на реальном аккаунте в закрытом тестировании; до этого продолжать только безопасные offline-тесты. Публикация — исключительно по отдельному разрешению владельца.
+
+---
+
 # FORMIQ | ТЗ редакция 2 — этап 1.3, проверенная offline-основа (25.10.2026)
 
 **Рабочий PR:** [Draft #23](https://github.com/smirnovka907-crypto/formiq-bot/pull/23), ветка `feature/formiq-tz2-nutrition-integrations-20261025`. **Опубликованный main / Render не менялись; production БД, webhook, токены и единственный Telegram-бот не затронуты.**
