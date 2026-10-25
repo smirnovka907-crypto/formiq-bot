@@ -89,8 +89,14 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
             if collection == "dailies":
                 item["steps"] = _number(record.get("steps"), limit=200000)
                 item["resting_heart_rate_bpm"] = _number(record.get("restingHeartRateInBeatsPerMinute"), limit=300)
+                # Garmin daily energy categories must remain distinct. Do not
+                # add active calories to total calories a second time.
                 item["active_calories_kcal"] = _number(record.get("activeKilocalories"))
+                item["total_daily_calories_kcal"] = _number(record.get("totalKilocalories"))
+                item["resting_calories_kcal"] = _number(record.get("bmrKilocalories"))
                 item["average_stress_level"] = _number(record.get("averageStressLevel"), limit=100)
+                item["body_battery_charged"] = _number(record.get("bodyBatteryChargedValue"),limit=100)
+                item["body_battery_drained"] = _number(record.get("bodyBatteryDrainedValue"),limit=100)
             elif collection == "sleeps":
                 seconds = _number(record.get("durationInSeconds"))
                 item["duration_seconds"] = seconds
@@ -102,6 +108,7 @@ def normalize_garmin_webhook(payload: dict, *, expected_user_id: str | None = No
                 item["distance_meters"] = _number(record.get("distanceInMeters"))
                 item["average_heart_rate_bpm"] = _number(record.get("averageHeartRateInBeatsPerMinute"), limit=300)
                 item["active_calories_kcal"] = _number(record.get("activeKilocalories"))
+                item["total_daily_calories_kcal"] = None  # activity is not an all-day total
             out.append(item)
     return out
 
