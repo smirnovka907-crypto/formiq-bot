@@ -19,7 +19,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 
 let onboardOpen=false,onboard=null,onboardErrors={};
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
-let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null;
+let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
@@ -536,6 +536,30 @@ async function loadProgressSeries(){
   if(view==='progress'&&!onboardOpen)draw();
  }
 }
+async function loadBodyWeight(){
+ try{const response=await request('body_weight_history');weightHistory=Array.isArray(response.measurements)?response.measurements:[]}
+ catch(_e){weightImportError='Не удалось загрузить историю измерений'}
+ if(view==='progress'&&!onboardOpen)draw();
+}
+async function uploadBodyWeight(mode){
+ if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл Fitdays (CSV, XLSX или XLS).';draw();return}
+ if(weightFile.size>2000000){weightImportError='Отчёт не должен превышать 2 МБ';draw();return}
+ weightImportBusy=true;weightImportError='';draw();
+ const fd=new FormData();fd.append('report',weightFile);fd.append('mode',mode);
+ if(mode==='import'){fd.append('confirmed','yes');fd.append('file_hash',weightPreview?.file_hash||'')}
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),30000);
+ try{
+  const response=await fetch('/mini/body-weight/report',{method:'POST',
+   headers:{'X-Formiq-Init':token},body:fd,credentials:'same-origin',cache:'no-store',signal:abort.signal});
+  const data=await response.json();if(!response.ok||!data.ok)throw Error(data.error||'Ошибка файла весов');
+  if(mode==='preview'){weightPreview=data;weightImportNotice='Проверь измерения перед сохранением.'}
+  else{
+   weightImportNotice='Добавлено измерений: '+data.imported+'. Уже были: '+data.duplicates+'.';
+   weightPreview=null;weightFile=null;await loadBodyWeight();
+  }
+ }catch(ex){weightImportError=ex.name==='AbortError'?'Импорт не ответил вовремя. Проверь историю перед повтором.':ex.message}
+ finally{clearTimeout(timer);weightImportBusy=false;draw()}
+}
 function progress(){
  const stats=state.stats||{},weight=state.metrics?.weight_kg;
  const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
@@ -552,9 +576,26 @@ function progress(){
    '<p class="chart-leg">Максимальный сохранённый вес по каждому дню. Только завершённые тренировки.</p>':
   '<div class="chart-block fq-empty-chart" role="status">Пока нет завершённых подходов с записанным весом.</div>';
  const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>По записям подходов</small></div>'+chart+'</section>';
- const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Последнее измерение</small></div>'+
-  '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong><span>'+
-  (valid?'Последнее сохранённое значение · динамика пока недоступна':'Нет измерений')+'</span></div></section>';
+ const lastWeight=weightHistory[0];
+ const showMeasure=(row)=>new Date(row.date).toLocaleString('ru-RU',{timeZone:state?.metrics?.timezone||deviceZone(),day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+ const additions=lastWeight?Object.entries({body_fat_pct:'Жир, %',muscle_mass_kg:'Мышцы, кг',body_water_pct:'Вода, %',visceral_fat:'Висцеральный жир',bmr_kcal:'Базовый обмен, ккал',bmi:'ИМТ'})
+  .filter(([key])=>lastWeight[key]!=null).map(([key,label])=>'<span>'+esc(label)+': '+esc(lastWeight[key])+'</span>').join(' · '):'';
+ const weightPoints=weightHistory.slice(0,30).reverse().map(x=>({weight:x.weight_kg,date:new Intl.DateTimeFormat('sv-SE',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(x.date))}));
+ const preview=weightPreview?'<div class="fq-weight-preview"><p class="input-note">Найдено '+esc(weightPreview.count)+' измерений; пропущено '+esc(weightPreview.invalid)+'. Последние записи:</p>'+
+  (weightPreview.preview||[]).map(x=>'<div class="fq-live-row"><span>'+esc(showMeasure(x.measured_at))+'</span><strong>'+esc(x.weight_kg)+' кг</strong></div>').join('')+'</div>'+
+  button(weightImportBusy?'Сохраняем...':'Подтвердить и сохранить','weight-import',true,weightImportBusy?'disabled':''):'';
+ const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Только реальные измерения</small></div>'+
+  '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong></div>'+
+  (lastWeight?'<div class="metric" style="margin-top:10px"><span>Последний импорт: '+esc(showMeasure(lastWeight))+'</span><strong>'+esc(lastWeight.weight_kg)+' кг</strong>'+
+   '<span>'+additions+'</span></div>'+weightChart(weightPoints,'Масса тела'):'<p class="input-note">Истории измерений пока нет.</p>')+
+  '<h3 class="section-label">Загрузить отчёт умных весов</h3>'+
+  '<p class="input-note">Fitdays и совместимые CSV, XLSX, XLS. Без отправки в Yandex AI и без сохранения исходного файла.</p>'+
+  '<label class="field"><span>Файл с измерениями</span><input id="weight-report-file" type="file" accept=".csv,.xlsx,.xls"></label>'+
+  (weightFile?'<p class="input-note">Выбрано: '+esc(weightFile.name)+'</p>':'')+
+  (weightImportError?'<p role="alert" class="fq-form-error">'+esc(weightImportError)+'</p>':'')+
+  (weightImportNotice?'<p role="status" class="input-note">'+esc(weightImportNotice)+'</p>':'')+
+  '<div style="margin-top:13px">'+button(weightImportBusy?'Обрабатываем...':'Проверить отчёт','weight-preview',true,weightImportBusy?'disabled':'')+'</div>'+
+  preview+'</section>';
  const summary='<section class="surface"><h2 style="font-size:20px;margin:0 0 14px">Результаты</h2>'+
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
@@ -636,7 +677,10 @@ app.addEventListener('input',e=>{
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
-app.addEventListener('change',onboardChanged);
+app.addEventListener('change',e=>{
+ if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
+ onboardChanged(e);
+});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
@@ -652,7 +696,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress')loadProgressSeries();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -720,6 +764,7 @@ app.addEventListener('click',async e=>{
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
   draw();return;
  }
+ if(cmd==='weight-preview'||cmd==='weight-import'){await uploadBodyWeight(cmd==='weight-import'?'import':'preview');return}
  if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
    if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
