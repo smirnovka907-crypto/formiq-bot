@@ -159,6 +159,51 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
 
+    def test_fatsecret_provider_lookup_and_link_are_owner_scoped_and_explicit(self):
+        self.m.save_onboarding(self.chat,self.body())
+        recorded=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка сухая','grams':70}]})
+        item_id=recorded['meals'][0]['items'][0]['id']
+        with self.assertRaisesRegex(ValueError,'не подключён'):
+            self.m.food_catalog_lookup(self.chat,{'query':'овсянка'})
+        from unittest.mock import Mock
+        candidate={'food_id':'42','name':'Овсянка сухая','servings':[{
+            'serving_id':'13','description':'100 г','grams':100,
+            'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='TEST_ONLY'
+        fake.search.return_value=[candidate]
+        fake.food_by_id.return_value=candidate
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \\
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \\
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            result=self.m.food_catalog_lookup(self.chat,{'query':'овсянка'})
+            self.assertEqual(result['candidates'][0]['food_id'],'42')
+            with self.assertRaises(ValueError):
+                self.m.food_catalog_lookup(self.chat,{'query':'test@example.com'})
+            with self.assertRaisesRegex(ValueError,'не найден'):
+                self.m.food_catalog_attach(self.chat+1,{'id':item_id,'food_id':'42','serving_id':'13'})
+            with self.assertRaisesRegex(ValueError,'подтверждённых'):
+                self.m.food_catalog_attach(self.chat,{'id':item_id,'food_id':'42','serving_id':'999'})
+            with self.connect() as conn:
+                self.assertEqual(conn.execute('''SELECT source_food_id FROM manual_food_items
+                    WHERE id=%s''',(item_id,)).fetchone()[0],None)
+            response=self.m.food_catalog_attach(self.chat,{'id':item_id,'food_id':'42','serving_id':'13'})
+            self.assertEqual(response['nutrients']['kcal'],266.0)
+            with self.connect() as conn:
+                fid,sid,name,grams=conn.execute('''SELECT source_food_id,source_serving_id,
+                    name,grams FROM manual_food_items WHERE id=%s''',(item_id,)).fetchone()
+            self.assertEqual((fid,sid),('42','13'))
+            self.assertEqual(name,'овсянка сухая')
+            self.assertEqual(grams,70)
+            self.assertIsNone(self.m.food_history(self.chat,{'date':'2026-10-18'})['meals'][0]['items'][0]['kcal'])
+            self.m.food_change(self.chat,{'id':item_id,'name':'творог 5%','grams':70})
+            with self.connect() as conn:
+                self.assertIsNone(conn.execute('''SELECT source_food_id FROM manual_food_items
+                    WHERE id=%s''',(item_id,)).fetchone()[0])
+        self.assertEqual(fake.search.call_count,1)
+        self.assertEqual(fake.food_by_id.call_count,2)
+
     def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
         p,cycle,calendar=self.save((0,2,4))
         slot=calendar[0]
