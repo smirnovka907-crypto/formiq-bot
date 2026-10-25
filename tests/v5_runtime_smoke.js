@@ -54,7 +54,7 @@ function createClient(auth=true,shared={}){
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',
-    workout,history,
+    workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
@@ -74,6 +74,7 @@ function createClient(auth=true,shared={}){
    else if(p.action==='history_page')response={ok:true,history:history.filter(x=>!p.date||x.date.split('.').reverse().join('-')===p.date),next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
    else if(p.action==='cardio'){assert.equal(p.type,'Велосипед');if(shared.trackHistory)history=[{id:81,date:'23.10.2026',title:'Кардио · Велосипед'},...history];response={ok:true,data:state()};}
+   else if(p.action==='feedback')response={ok:true,saved:true,message:'Отзыв сохранён'};
    else if(p.action==='health_analyze'){
      assert.equal(p.adult,true);assert.equal(p.privacy_ack,true);assert.equal(p.ai_consent,true,'No Yandex health request without opt-in');
      response={ok:true,analysis:{affected:['knee'],pain_score:3,symptom_course:'stable',danger_signs:false,short_summary:'Беспокоит колено'}};
@@ -217,9 +218,9 @@ async function run(){
  await settle();
  assert.ok(app.requests.some(x=>x.action==='progress_series'),'Progress loads owner-scoped history separately');
  const progressHtml=app.root.innerHTML;
- assert.ok(progressHtml.indexOf('Garmin Connect')<progressHtml.indexOf('id="training-plan"')&&
-           progressHtml.indexOf('id="training-plan"')<progressHtml.indexOf('id="history-root"'),
-           'Existing plan is between Garmin and workout history in Progress');
+ assert.ok(progressHtml.indexOf('id="training-plan"')<progressHtml.indexOf('id="history-root"'),
+           'Existing plan precedes history in Progress');
+ assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
  assert.equal((progressHtml.match(/data-cmd="week" data-week="[1-4]"/g)||[]).length,4,
               'Progress shows exactly four week buttons');
  assert.match(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Real cycle provides seven-day label');
@@ -230,32 +231,24 @@ async function run(){
  assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button closes the existing detail panel');
 
  await app.click({nav:'profile'});
- assert.match(app.root.innerHTML,/data-nav="home"/,'User must be able to exit profile without Back');
- assert.match(app.root.innerHTML,/Изменить параметры/);
- await app.click({cmd:'profile-metrics-edit'});
- assert.match(app.root.innerHTML,/id="profile-age"[^>]*value="34"/);
- app.input('profile-age','34');app.input('profile-height_cm','181');app.input('profile-weight_kg','84,5');
- const totalStatesBefore=app.requests.filter(x=>x.action==='state').length;
- await app.click({cmd:'profile-metrics-save'});
- assert.equal(app.requests.filter(x=>x.action==='state').length,totalStatesBefore,'metric patch should avoid reloading full dashboard');
- const metricSaves=app.requests.filter(x=>x.action==='save_metrics');
- assert.equal(metricSaves.length,1);
- assert.deepEqual(metricSaves[0].metrics,{weight_kg:84.5},'Saving weight must not alter age or height');
- assert.match(app.root.innerHTML,/84.5/);
- assert.match(app.root.innerHTML,/Изменения сохранены/);
- await app.click({cmd:'profile-metrics-edit'});
- app.input('profile-age','10');app.input('profile-height_cm','181');app.input('profile-weight_kg','84.5');
- await app.click({cmd:'profile-metrics-save'});
- assert.equal(app.requests.filter(x=>x.action==='save_metrics').length,1,'Invalid age must not reach API');
- assert.match(app.root.innerHTML,/Проверь допустимые значения/);
- app.input('profile-height_cm','190');app.input('profile-weight_kg','90');
- await app.click({cmd:'profile-metrics-save'});
- assert.match(app.root.innerHTML,/id="profile-height_cm"[^>]*value="190"/,'Invalid age must not erase other unsaved measurements');
- assert.match(app.root.innerHTML,/id="profile-weight_kg"[^>]*value="90"/);
- await app.click({nav:'home'});await app.click({nav:'profile'});
- assert.match(app.root.innerHTML,/id="profile-height_cm"[^>]*value="190"/,'Profile drafts survive navigation');
- await app.click({cmd:'profile-metrics-cancel'});
- assert.doesNotMatch(app.root.innerHTML,/id="profile-age"/);
+ assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
+ assert.match(app.root.innerHTML,/data-onboard="age"/);
+ assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
+ assert.match(app.root.innerHTML,/data-onboard="timezone"/);
+ assert.match(app.root.innerHTML,/Сохранить изменения/);
+ assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
+ assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
+ await app.click({nav:'home'});
+ assert.match(app.root.innerHTML,/Доброе|Добрый|Доброй/);
+ assert.match(app.root.innerHTML,/Отзывы и предложения/);
+ await app.click({cmd:'feedback-open'});
+ assert.match(app.root.innerHTML,/id="feedback-text"/);
+ await app.click({cmd:'feedback-send'});
+ assert.equal(app.requests.filter(x=>x.action==='feedback').length,0,'Invalid feedback not submitted');
+ app.input('feedback-text','Очень полезное приложение');
+ await app.click({cmd:'feedback-send'});
+ assert.ok(app.requests.some(x=>x.action==='feedback'),'Feedback calls signed API');
+ assert.match(app.root.innerHTML,/Отзыв сохранён/);
  const inputField={id:'cardio-min',closest(){return {getBoundingClientRect(){return {top:210}}}}};
  app.fields.set('cardio-min',inputField);
  app.handlers.focusin({target:inputField});
@@ -327,7 +320,7 @@ async function run(){
   assert.match(ux.root.innerHTML,/Тренировочный план/);
   assert.match(ux.root.innerHTML,/week-range/);
   await ux.click({nav:'profile'});
-  await ux.click({cmd:'onboard-open'});
+  
   assert.equal((ux.root.innerHTML.match(/data-onboard-weekday="[0-6]"/g)||[]).length,7);
   assert.match(ux.root.innerHTML,/Количество тренировок определяется автоматически/);
   assert.doesNotMatch(ux.root.innerHTML,/data-onboard="days"/,'No redundant count selector');
@@ -346,6 +339,7 @@ async function run(){
   assert.match(ux.root.innerHTML,/Выбери Мужской или Женский/);
   await ux.click({onboardWeekday:'0'});await ux.click({onboardWeekday:'3'});
   await ux.click({onboardPick:'sex',value:'female'});
+  ux.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   ux.handlers.change({target:{dataset:{onboard:'minutes'},type:'select-one',value:'120'}});
   ux.handlers.input({target:{dataset:{onboard:'equipment_description'},type:'textarea',value:'гантели, резинки'}});
   await ux.click({cmd:'onboard-save'});
@@ -359,23 +353,24 @@ async function run(){
   assert.equal(edits[0].equipment_description,'гантели, резинки');
   assert.match(ux.root.innerHTML,/Тренировки/,'Returns to main app after successful save');
   await ux.click({nav:'profile'});
-  assert.match(ux.root.innerHTML,/Пн, Чт/);
-  await ux.click({cmd:'onboard-open'});
+  assert.match(ux.root.innerHTML,/data-onboard-weekday="0" aria-pressed="true"/);
+  
   assert.match(ux.root.innerHTML,/data-onboard-weekday="0" aria-pressed="true"/);
   assert.match(ux.root.innerHTML,/data-onboard-weekday="3" aria-pressed="true"/);
 
   const sevenDays=createClient(true,{profileRaw:{days:'7',weekdays:[0,1,2,3,4,5,6]}});await settle();
-  await sevenDays.click({nav:'profile'});await sevenDays.click({cmd:'onboard-open'});
+  await sevenDays.click({nav:'profile'});
   assert.equal((sevenDays.root.innerHTML.match(/data-onboard-weekday="[0-6]" aria-pressed="true"/g)||[]).length,7);
   for(const key of ['adult','terms','privacy','health'])sevenDays.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
   await sevenDays.click({onboardPick:'sex',value:'male'});
+  sevenDays.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   for(let day=1;day<7;day++)await sevenDays.click({onboardWeekday:String(day)});
   await sevenDays.click({cmd:'onboard-save'});
   assert.deepEqual(Array.from(sevenDays.requests.find(x=>x.action==='onboarding').answers.weekdays),[0]);
   assert.equal(sevenDays.requests.find(x=>x.action==='onboarding').answers.days,'1');
 
   const ai=createClient(true,{storage:new Map()});await settle();
-  await ai.click({nav:'profile'});await ai.click({cmd:'onboard-open'});
+  await ai.click({nav:'profile'});
   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
   await ai.click({onboardPick:'sex',value:'male'});
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
