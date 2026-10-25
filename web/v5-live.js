@@ -22,7 +22,7 @@ let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exercise
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
-let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='';
+let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='',fatsecretEntry=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
@@ -785,8 +785,11 @@ function food(){
    (fsTotals?'<p><strong>'+esc(fsTotals.calories_kcal)+' ккал · Б '+esc(fsTotals.protein_g)+
     ' · Ж '+esc(fsTotals.fat_g)+' · У '+esc(fsTotals.carbs_g)+' г</strong></p>':
     '<p class="input-note">Полный итог КБЖУ недоступен — не все значения получены.</p>')+
-   (fsEntries.entries||[]).map(e=>'<div class="fq-food-product"><strong>'+esc(e.name)+'</strong>'+
-    '<small>'+esc(mealLabels[e.meal?.toLowerCase()]||e.meal||'')+' · '+(e.kcal==null?'КБЖУ нет данных':esc(e.kcal)+' ккал')+'</small></div>').join(''):'')+
+   (fsEntries.entries||[]).map(e=>'<div class="fq-food-product"><strong>'+esc(e.name)+'</strong>'+ (e.imported?'<small>Импортировано в FORMIQ'+(e.user_edited?' · исправлено вручную':'')+'</small>':'')+
+    '<small>'+esc(mealLabels[e.meal?.toLowerCase()]||e.meal||'')+' · '+(e.kcal==null?'КБЖУ нет данных':esc(e.kcal)+' ккал')+'</small>'+
+    (e.imported?button('Изменить','fatsecret-entry-edit',false,'data-id="'+esc(e.external_id)+'"')+
+      button('Убрать из FORMIQ','fatsecret-entry-unlink',false,'data-id="'+esc(e.external_id)+'"'):'')+'</div>').join('')+
+   ((fsEntries.entries||[]).length?button('Импортировать день в FORMIQ','fatsecret-import-day',false,fatsecretBusy?'disabled':''):''):'')+
   '</section>':'';
  const reportAllowed=state?.ai_personalization?.profile===true;
  const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
@@ -864,6 +867,18 @@ function modalHTML(){
  if(modal==='garmin-disconnect'){
   content='<h2>Отключить Garmin?</h2><p>Доступ к показателям будет прекращён. История тренировок и существующие записи останутся.</p>'+
    button('Отключить','garmin-disconnect-confirm')+button('Отмена','close');
+ }
+ if(modal==='fatsecret-entry-edit'&&fatsecretEntry){
+   content='<h2>Исправление импортированной записи</h2>'+
+    '<p class="input-note">Оригинал FatSecret не изменяется. Здесь сохраняется только твоя собственная правка.</p>'+
+    '<p><strong>'+esc(fatsecretEntry.name)+'</strong></p>'+
+    '<label class="field"><span>Своё название (необязательно)</span>'+
+     '<input type="text" id="fatsecret-override-name" maxlength="120" value="'+esc(fatsecretEntry.user_name_override||'')+'" placeholder="Оставь пустым для оригинала"></label>'+
+    '<label class="field"><span>Приём пищи</span><select id="fatsecret-override-meal">'+
+      [['','Как в FatSecret'],...Object.entries(mealLabels)].map(([value,label])=>
+       '<option value="'+esc(value)+'"'+((fatsecretEntry.user_meal_override||'')===value?' selected':'')+'>'+esc(label)+'</option>').join('')+
+    '</select></label>'+
+    button('Сохранить правку','fatsecret-entry-save',true)+button('Отмена','close');
  }
  if(modal==='fatsecret-disconnect'){
   content='<h2>Отключить FatSecret?</h2>'+
@@ -1196,6 +1211,59 @@ app.addEventListener('click',async e=>{
    const r=await request('fatsecret_diary_day',{date:expected});
    if(expected===foodDate)fatsecretDaily=r;
   }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Записи недоступны'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-import-day'){
+  if(!fatsecretAccount?.connected||fatsecretBusy||!fatsecretDaily)return;
+  const expected=foodDate;
+  fatsecretBusy=true;fatsecretError='';draw();
+  try{
+   const result=await request('fatsecret_diary_import',{date:expected});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     const saved=new Set(result.imported_ids||[]);
+     for(const e of fatsecretDaily.entries||[])if(saved.has(e.external_id))e.imported=true;
+     foodNotice='Импортированы ссылки на '+esc(result.imported_count)+' записей FatSecret.';
+   }
+  }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Импорт не выполнен'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-entry-edit'||cmd==='fatsecret-entry-unlink'){
+  const id=String(element.dataset.id||'');
+  const row=(fatsecretDaily?.entries||[]).find(x=>x.external_id===id&&x.imported);
+  if(!row)return;
+  fatsecretEntry={...row};
+  if(cmd==='fatsecret-entry-edit'){modal='fatsecret-entry-edit';draw();return}
+  if(fatsecretBusy)return;
+  const expected=foodDate;fatsecretBusy=true;draw();
+  try{
+   await request('fatsecret_diary_import_unlink',{date:expected,external_id:id});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     row.imported=false;row.user_edited=false;row.user_name_override=null;
+     row.user_meal_override=null;
+     foodNotice='Запись убрана из FORMIQ. FatSecret не изменён.';
+   }
+  }catch(ex){fatsecretError=ex.message||'Не удалось убрать импортированную запись'}
+  finally{fatsecretBusy=false;fatsecretEntry=null;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-entry-save'){
+  if(!fatsecretEntry||fatsecretBusy)return;
+  const expected=foodDate,entryId=fatsecretEntry.external_id;
+  const name=String(document.getElementById('fatsecret-override-name')?.value||'').trim();
+  const meal=String(document.getElementById('fatsecret-override-meal')?.value||'');
+  fatsecretBusy=true;fatsecretError='';draw();
+  try{
+   await request('fatsecret_diary_import_edit',{date:expected,external_id:entryId,
+       name_override:name||null,meal_override:meal||null});
+   if(expected===foodDate&&fatsecretDaily?.date===expected){
+     // Refresh from authorized source; don't fake the restored provider name.
+     const latest=await request('fatsecret_diary_day',{date:expected});
+     if(expected===foodDate)fatsecretDaily=latest;
+   }
+   modal='';fatsecretEntry=null;foodNotice='Исправление записи сохранено.';
+  }catch(ex){fatsecretError=ex.message||'Не удалось сохранить исправление';modal=''}
   finally{fatsecretBusy=false;draw()}
   return;
  }
