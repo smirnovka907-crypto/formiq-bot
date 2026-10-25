@@ -71,6 +71,20 @@ function createClient(auth=true,shared={}){
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='garmin_day'){
+    response={ok:true,date:p.date,connected:!!shared.garminConnected,
+     last_sync_at:shared.garminConnected?'2026-10-25T09:00:00Z':null,
+     dailies:shared.garminConnected?[{date_basis:'provider',
+       values:{steps:7600,resting_heart_rate_bpm:57,active_calories_kcal:340,
+         total_daily_calories_kcal:2260,body_battery_charged:42}}]:[],
+     sleeps:shared.garminConnected?[{date_basis:'provider',
+       values:{duration_minutes:420,sleep_score:81}}]:[],
+     activities:shared.garminConnected?[{date_basis:'profile_timezone',
+       values:{activity_type:'running',duration_seconds:1800,active_calories_kcal:215}}]:[]};
+   }
+   else if(p.action==='garmin_disconnect'){
+    shared.garminConnected=false;response={ok:true,connected:false};
+   }
    else if(p.action==='fatsecret_account_status')
     response={ok:true,available:!!shared.fatsecretReady,
       connected:!!shared.fatsecretConnected,last_sync_at:null};
@@ -299,6 +313,26 @@ async function run(){
  assert.doesNotMatch(progressHtml,/id="training-plan"/,'Progress shows history, not training plan');
  assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
+ const garminClient=createClient(true,{garminConnected:true,
+   now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
+ await settle();await garminClient.click({nav:'progress'});await settle();
+ assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
+ assert.match(garminClient.root.innerHTML,/7600/,'Only observed Garmin steps');
+ assert.match(garminClient.root.innerHTML,/2260.*ккал/,'Total day energy shown separately');
+ assert.match(garminClient.root.innerHTML,/340.*ккал/,'Active calories remain distinct');
+ assert.match(garminClient.root.innerHTML,/215.*ккал активности/,'Activity calories not added to all-day totals');
+ assert.match(garminClient.root.innerHTML,/Сон/);
+ assert.match(garminClient.root.innerHTML,/42/);
+ await garminClient.click({cmd:'garmin-refresh'});await settle();
+ assert.ok(garminClient.requests.filter(x=>x.action==='garmin_day').length>=2);
+ await garminClient.click({cmd:'garmin-disconnect-open'});
+ assert.match(garminClient.root.innerHTML,/Отключить Garmin/);
+ await garminClient.click({cmd:'garmin-disconnect-confirm'});await settle();
+ assert.ok(garminClient.requests.some(x=>x.action==='garmin_disconnect'));
+ assert.doesNotMatch(garminClient.root.innerHTML,/Garmin Connect/,'Revoked Garmin never renders stale private metrics');
+
  assert.doesNotMatch(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Progress no longer includes plan dates');
  await app.click({nav:'home'});
  await app.click({cmd:'week',week:'1'});
