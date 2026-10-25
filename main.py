@@ -441,6 +441,11 @@ def init_db():
             minutes INT NOT NULL CHECK(minutes BETWEEN 1 AND 300),
             avg_hr INT, distance_km NUMERIC(6,2),
             equipment TEXT NOT NULL DEFAULT 'elliptical')""")
+        # Optional columns preserve all historical cardio rows and timestamps.
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS activity_label TEXT")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_met NUMERIC(4,1)")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_kcal INTEGER")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS intensity TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS cardio_user_date
             ON cardio_sessions(chat_id,performed_at DESC)""")
         c.execute("""CREATE TABLE IF NOT EXISTS user_agreements(
@@ -2768,8 +2773,8 @@ def analyze_health_description(chat, body):
     """
     # Server-side, per-request opt-in: a forged authenticated Mini App
     # action must not send health notes to Yandex without separate consent.
-    if body.get('ai_consent') is not True:
-        raise ValueError('Для передачи описания в Yandex AI нужно отдельное согласие')
+    if body.get('ai_consent') is not True or not personalization_consent(chat)['health']:
+        raise ValueError('Для передачи описания сначала сохрани согласие на Yandex AI в анкете')
     if body.get('adult') is not True or body.get('privacy_ack') is not True:
         raise ValueError('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности')
     raw=body.get('text')
@@ -2873,6 +2878,10 @@ def save_onboarding(chat,body):
     if body.get('terms') is not True or body.get('privacy') is not True or body.get('health') is not True:
         raise ValueError('Нужно подтвердить все три пункта')
     if vals.get('age_group')!='adult':raise ValueError('FORMIQ только для 18+')
+    if body.get('timezone_confirmed') is False:
+        raise ValueError('Подтверди выбранный часовой пояс')
+    if body.get('unified_ai_consent') not in (None,True,False):
+        raise ValueError('Некорректное согласие')
     user_tz=body.get('timezone','Europe/Moscow')
     if not isinstance(user_tz,str) or len(user_tz)>64:raise ValueError('Проверь часовой пояс')
     try:ZoneInfo(user_tz)
@@ -2961,12 +2970,20 @@ def save_onboarding(chat,body):
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
         if body.get('ai_profile_consent') not in (True,False,None) or \
-           body.get('ai_health_consent') not in (True,False,None):
+           body.get('ai_health_consent') not in (True,False,None) or \
+           body.get('ai_cycle_consent') not in (True,False,None):
             raise ValueError('Некорректное согласие на ИИ')
+        unified=body.get('unified_ai_consent')
+        if unified is not None and (
+            body.get('ai_profile_consent') is not unified or
+            body.get('ai_health_consent') is not unified or
+            body.get('ai_cycle_consent') is not (unified and sex=='female')):
+            raise ValueError('Подтверди единое согласие на Yandex AI')
         c.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
         c.execute('''UPDATE ai_personalization_consents SET profile_allowed=%s,
-            health_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
-            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,chat))
+            health_allowed=%s,cycle_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
+            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,
+             sex=='female' and body.get('ai_cycle_consent') is True,chat))
         if body.get('ai_profile_consent') is not True:
             c.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
         if sex!='female':
