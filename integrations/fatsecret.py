@@ -128,13 +128,16 @@ class FatSecretClient:
         return result
 
 
-def _number(value: object) -> Decimal:
+def _number(value: object) -> Decimal | None:
+    # Missing provider nutrition is unknown, NOT zero.
+    if value is None or value == "":
+        return None
     try:
-        num = Decimal(str(value if value is not None else "0"))
+        num = Decimal(str(value))
         if not num.is_finite() or num < 0:
             raise ValueError("Invalid nutrition number")
         return num
-    except InvalidOperation as exc:
+    except (InvalidOperation, TypeError) as exc:
         raise ValueError("Invalid nutrition number") from exc
 
 
@@ -163,13 +166,16 @@ def normalize_diary(payload: dict) -> dict:
             "carbs_g": _number(item.get("carbohydrate")),
         }
     records = list(unique.values())
-    return {
-        "source": "fatsecret", "entries": records,
-        "calories_kcal": sum((x["calories_kcal"] for x in records), Decimal("0")),
-        "protein_g": sum((x["protein_g"] for x in records), Decimal("0")),
-        "fat_g": sum((x["fat_g"] for x in records), Decimal("0")),
-        "carbs_g": sum((x["carbs_g"] for x in records), Decimal("0")),
-    }
+    # A missing nutrient prevents a fabricated complete total. An actually
+    # empty diary day has no nutrient measurement, not an observed 0 kcal.
+    fields = ("calories_kcal", "protein_g", "fat_g", "carbs_g")
+    complete = bool(records) and all(
+        record[field] is not None for record in records for field in fields)
+    result = {"source": "fatsecret", "entries": records, "complete": complete}
+    for field in fields:
+        result[field] = (sum((record[field] for record in records), Decimal("0"))
+                         if complete else None)
+    return result
 
 
 # Food database access is a DIFFERENT authorization from a user's diary:
