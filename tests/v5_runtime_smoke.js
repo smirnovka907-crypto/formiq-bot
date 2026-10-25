@@ -366,7 +366,7 @@ async function run(){
    await localCalendar.click({nav:'progress'});await localCalendar.click({cmd:'calendar'});
    assert.equal(localCalendar.requests.find(x=>x.action==='history_month').month,expected,'Calendar starts in the saved user timezone');
   }
-  assert.doesNotMatch(ux.root.innerHTML,/Тренировочный план/);
+  assert.match(ux.root.innerHTML,/Тренировочный план/);
   await ux.click({nav:'progress'});
   assert.match(ux.root.innerHTML,/Тренировочный план/);
   assert.match(ux.root.innerHTML,/week-range/);
