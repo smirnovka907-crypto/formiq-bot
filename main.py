@@ -584,7 +584,7 @@ def has_premium(chat):
 
 # No billing: test-only access levels. Never treat a self-selected demo tier as payment.
 TIER_ORDER = {'start':0, 'comfort':0, 'max':1}
-TIER_LABEL = {'start':'Coach', 'comfort':'Coach', 'max':'360'}
+TIER_LABEL = {'start':'Дневник', 'comfort':'Дневник', 'max':'Тренер AI'}
 
 
 def tier_for(chat):
@@ -3272,9 +3272,11 @@ def food_history(chat,body):
               ON i.meal_id=m.id AND i.chat_id=%s
             WHERE m.chat_id=%s AND m.eaten_on=%s
             ORDER BY m.id,i.id""",(chat,chat,day)).fetchall()
+    # Older releases allowed multiple rows for the same meal/day. Combine
+    # their visible cards without rewriting, merging or deleting any history.
     meals={}
     for mid,meal_type,iid,name,grams in rows:
-        entry=meals.setdefault(mid,{'id':mid,'type':meal_type,'items':[]})
+        entry=meals.setdefault(meal_type,{'id':mid,'type':meal_type,'items':[]})
         if iid is not None:
             entry['items'].append({'id':iid,'name':name,'grams':float(grams),
                 'kcal':None,'protein':None,'fat':None,'carbs':None})
@@ -3298,8 +3300,18 @@ def food_add(chat,body):
             raise ValueError('Некорректная строка продукта')
         items.append(food_item(row.get('name'),row.get('grams')))
     with db() as conn:
-        meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
-            VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
+        # Transaction-scoped per-user lock prevents two simultaneous saves
+        # from creating duplicate meal groups. Existing duplicate rows stay
+        # untouched and continue appearing in the one grouped card.
+        conn.execute("SELECT pg_advisory_xact_lock(%s::bigint)",(chat,))
+        existing=conn.execute("""SELECT id FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s AND meal_type=%s
+            ORDER BY id LIMIT 1""",(chat,day,meal_type)).fetchone()
+        if existing:
+            meal_id=existing[0]
+        else:
+            meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
+                VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
         for name,grams in items:
             conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
                 VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
