@@ -3405,7 +3405,7 @@ def garmin_disconnect_owner(chat):
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         conn.execute("""UPDATE garmin_authorized_identities
-            SET disconnected_at=NOW(),health_consent_at=NULL
+            SET disconnected_at=NOW()
             WHERE chat_id=%s AND disconnected_at IS NULL""",(chat,))
     return {'connected':False,
             'notice':'Garmin отключён в FORMIQ. Проверь отзыв доступа также в настройках Garmin.'}
