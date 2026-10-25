@@ -291,6 +291,92 @@ class SchedulePostgresTests(unittest.TestCase):
               AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
         self.assertEqual(nutrients,[],'Provider macro values must not be stored')
 
+    def test_fatsecret_oauth_links_owner_with_one_time_callback_encrypted_tokens(self):
+        from cryptography.fernet import Fernet
+        from urllib.parse import parse_qs,urlsplit
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        fake=Mock()
+        fake.request_token.return_value=('temp-provider-token','temp-provider-secret')
+        fake.authorize_url.return_value=(
+          'https://authentication.fatsecret.com/oauth/authorize?oauth_token=temp-provider-token')
+        fake.access_token.return_value=('SECRET_LONG_TERM_ACCESS','SECRET_LONG_TERM_SIGNING')
+        fake.diary.return_value={'food_entries':{'food_entry':[
+          {'food_entry_id':'17','food_entry_name':'Овсянка','meal':'Breakfast',
+           'calories':'200','protein':'7','fat':'4','carbohydrate':'32'},
+          {'food_entry_id':'18','food_entry_name':'Творог','meal':'Lunch',
+           'calories':'170','protein':'25','fat':'5','carbohydrate':'4'}]}}
+        key=Fernet.generate_key().decode('ascii')
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',key), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test-consumer'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test-secret'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            url=self.m.fatsecret_user_start(self.chat)['authorization_url']
+            self.assertTrue(url.startswith('https://authentication.fatsecret.com/'))
+            callback=fake.request_token.call_args.args[0]
+            self.assertIn('/mini/fatsecret/callback',callback)
+            state=parse_qs(urlsplit(callback).query)['state'][0]
+            with self.connect() as conn:
+                temporary=conn.execute("""SELECT request_token_enc,request_secret_enc
+                    FROM fatsecret_oauth_pending WHERE chat_id=%s""",(self.chat,)).fetchone()
+            self.assertNotIn(b'temp-provider-token',bytes(temporary[0]))
+            self.assertNotIn(b'temp-provider-secret',bytes(temporary[1]))
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'foreign-request-token','verifier')
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state+'tampered','temp-provider-token','verifier')
+            self.assertFalse(self.m.fatsecret_user_status(self.chat+1)['connected'])
+            self.assertTrue(self.m.fatsecret_user_finish(state,'temp-provider-token','verifier'))
+            self.assertTrue(self.m.fatsecret_user_status(self.chat)['connected'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'temp-provider-token','verifier')
+            with self.connect() as conn:
+                stored=conn.execute("""SELECT access_token_enc,access_secret_enc
+                    FROM fatsecret_user_connections WHERE chat_id=%s""",(self.chat,)).fetchone()
+                self.assertIsNone(conn.execute("""SELECT chat_id FROM fatsecret_oauth_pending
+                    WHERE chat_id=%s""",(self.chat,)).fetchone())
+            self.assertNotIn(b'SECRET_LONG_TERM_ACCESS',bytes(stored[0]))
+            self.assertNotIn(b'SECRET_LONG_TERM_SIGNING',bytes(stored[1]))
+            day=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(day['source'],'fatsecret')
+            self.assertTrue(day['complete'])
+            self.assertEqual(day['totals']['calories_kcal'],370)
+            self.assertEqual(len(day['entries']),2)
+            self.assertIsNotNone(self.m.fatsecret_user_status(self.chat)['last_sync_at'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_diary(self.chat+1,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                self.assertEqual(conn.execute("""SELECT COUNT(*) FROM manual_food_items
+                    WHERE chat_id=%s""",(self.chat,)).fetchone()[0],0)
+            self.assertFalse(self.m.fatsecret_user_disconnect(self.chat)['connected'])
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(fake.access_token.call_count,1)
+        self.assertEqual(fake.diary.call_count,1)
+
+    def test_fatsecret_oauth_callback_error_does_not_link_account(self):
+        from cryptography.fernet import Fernet
+        from unittest.mock import Mock
+        from urllib.parse import urlsplit,parse_qs
+        self.m.save_onboarding(self.chat,self.body())
+        fake=Mock()
+        fake.request_token.return_value=('request-token','request-secret')
+        fake.authorize_url.return_value='https://authentication.fatsecret.com/oauth/authorize?oauth_token=request-token'
+        fake.access_token.side_effect=RuntimeError('Provider rejected verifier')
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY',Fernet.generate_key().decode()), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','test'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','test'), \
+             patch.object(self.m,'FatSecretClient',return_value=fake):
+            self.m.fatsecret_user_start(self.chat)
+            callback=fake.request_token.call_args.args[0]
+            state=parse_qs(urlsplit(callback).query)['state'][0]
+            with self.assertRaises(ValueError):
+                self.m.fatsecret_user_finish(state,'request-token','verifier')
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+            self.assertFalse(self.m.fatsecret_user_disconnect(self.chat)['connected'])
+
     def test_offline_garmin_import_requires_consent_mapping_and_is_idempotent(self):
         self.m.save_onboarding(self.chat,self.body())
         snapshot=self.snapshot_history()
