@@ -371,12 +371,9 @@ function training(){
   '<p class="input-note">Только с согласия в анкете. Рекомендация не меняет автоматически твой план и ограничения безопасности.</p>'+
   button(aiTipBusy?'Подготавливаем...':'Совет для моей тренировки','ai-tip-training',false,aiTipBusy?'disabled':'')+
   (aiTrainingTip?'<p class="fq-live-banner" role="status">'+esc(aiTrainingTip)+'</p>':'')+'</section>';
- const plan='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 12px">Тренировочный план</h2>'+
-  '<p class="subtitle" style="margin-bottom:14px">Расписание и упражнения на четыре недели.</p>'+
-  button('Мой план','plan-open')+'</section>';
  return h()+'<span class="kicker">'+esc(dayLabel)+'</span><h1 class="title">Сегодня</h1>'+
   '<p class="intro">Главное на сегодня — без лишнего.</p>'+
-  trainingCard+cardioCard+aiCard+plan;
+  trainingCard+cardioCard+aiCard;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -464,7 +461,13 @@ function periodShortLabel(i){
   :a.getUTCDate()+' '+month(a)+' — '+b.getUTCDate()+' '+month(b);
 }
 
-function planPage(){
+function trainingPlanCard(){
+ // Reuse the actual PostgreSQL-backed cycle calendar and original week details;
+ // this is not a second schedule, nor a newly generated four-week cycle.
+ if(!state?.cycle_start||!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(state.cycle_start)){
+  return '<section class="surface" id="training-plan"><h2 style="font-size:20px;margin:0 0 14px">Тренировочный план</h2>'+
+   '<p class="empty">План появится после формирования тренировочного цикла.</p></section>';
+ }
  const rows=state?.calendar||[];
  const periods=[1,2,3,4].map(i=>{
   const dates=rows.filter(r=>r.week===i);
@@ -477,10 +480,10 @@ function planPage(){
   return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
    (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
  }).join('');
- return h()+'<span class="kicker">Расписание</span><h1 class="title">Твой план</h1>'+
-  '<p class="intro">Четыре периода. Выбери период, чтобы увидеть свои занятия.</p>'+
-  '<section class="week-selector fq-plan-period-grid" aria-label="План тренировок">'+periods+'</section>'+
-  button('Назад к тренировкам','plan-back');
+ return '<section class="surface" id="training-plan" aria-label="Тренировочный план">'+
+  '<h2 style="font-size:20px;margin:0 0 14px">Тренировочный план</h2>'+
+  '<div class="week-selector fq-plan-period-grid" role="group" aria-label="Четыре недели тренировок">'+periods+'</div>'+
+  '</section>';
 }
 function weightChart(points,exerciseName){
  const data=(Array.isArray(points)?points:[]).filter(p=>
@@ -553,7 +556,8 @@ function progress(){
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
   '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+femaleCalendar()+
   '<section class="surface soft"><div class="heading-row"><h2 style="font-size:20px;margin:0">Garmin Connect</h2><span class="badge">Не подключён</span></div>'+
-  '<p class="input-note" style="margin-top:13px">Показатели устройств не подменяются расчётами.</p></section>'+history();
+  '<p class="input-note" style="margin-top:13px">Показатели устройств не подменяются расчётами.</p></section>'+
+  trainingPlanCard()+history();
 }
 function food(){
  const today='<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПИТАНИЕ</span>'+
@@ -662,7 +666,7 @@ function draw(){
  document.body?.classList?.remove('cardio-typing','workout-typing');
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
- app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${onboardOpen?onboardForm():view==='home'?training():view==='plan'?planPage():view==='progress'?progress():view==='food'?food():profile()}</main>${ready()&&!onboardOpen?nav():''}${modalHTML()}`;
+ app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${onboardOpen?onboardForm():view==='home'?training():view==='progress'?progress():view==='food'?food():profile()}</main>${ready()&&!onboardOpen?nav():''}${modalHTML()}`;
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
@@ -752,8 +756,7 @@ app.addEventListener('click',async e=>{
   draw();return;
  }
  if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
- if(cmd==='plan-open'||cmd==='plan-back'){view=cmd==='plan-open'?'plan':'home';error='';draw();window.scrollTo(0,0);return}
-  if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
+   if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
  if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
   if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
@@ -879,7 +882,14 @@ app.addEventListener('click',async e=>{
   else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
   return;
  }
- if(cmd==='week'){week=week===Number(element.dataset.week)?0:Number(element.dataset.week);draw();return}
+ if(cmd==='week'){
+  const selected=Number(element.dataset.week);
+  if(!Number.isInteger(selected)||selected<1||selected>4)return;
+  week=week===selected?0:selected;
+  const card=document.getElementById('training-plan');
+  if(card)card.outerHTML=trainingPlanCard();else draw();
+  return;
+ }
  if(cmd==='calendar'){calendarOpen=!calendarOpen;month=date.slice(0,7)||currentMonth();monthMarks=new Set();partialHistory();if(calendarOpen)await fetchMonthMarks();return}
  if(cmd==='prev-month'||cmd==='next-month'){const [y,m]=month.split('-').map(Number);month=new Date(Date.UTC(y,m-1+(cmd==='prev-month'?-1:1),1)).toISOString().slice(0,7);monthMarks=new Set();partialHistory();await fetchMonthMarks();return}
  if(cmd==='reset-date'){date='';dayRows=null;calendarOpen=false;partialHistory();return}
