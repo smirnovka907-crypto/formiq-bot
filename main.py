@@ -507,6 +507,22 @@ def init_db():
             access_secret_enc BYTEA NOT NULL,
             connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             last_sync_at TIMESTAMPTZ)""")
+        # Only provider-approved food_entry_id is retained from FatSecret.
+        # Dates and corrections are authored by the FORMIQ user; no FatSecret
+        # nutrition, serving amounts, or source names are permanently cached.
+        c.execute("""CREATE TABLE IF NOT EXISTS fatsecret_import_refs (
+            chat_id BIGINT NOT NULL,
+            eaten_on DATE NOT NULL,
+            external_id TEXT NOT NULL CHECK(length(external_id) BETWEEN 1 AND 40),
+            user_name_override TEXT,
+            user_meal_override TEXT CHECK (
+              user_meal_override IS NULL OR
+              user_meal_override IN ('breakfast','lunch','dinner','snack')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY(chat_id,eaten_on,external_id))""")
+        c.execute("""CREATE INDEX IF NOT EXISTS fatsecret_import_refs_owner_date
+            ON fatsecret_import_refs(chat_id,eaten_on)""")
         c.execute("""CREATE TABLE IF NOT EXISTS garmin_authorized_identities (
             chat_id BIGINT PRIMARY KEY,
             provider_user_id TEXT NOT NULL UNIQUE,
@@ -3569,7 +3585,7 @@ def fatsecret_user_disconnect(chat):
     return {'connected':False,'notice':'FatSecret отключён в FORMIQ. При необходимости отзови доступ также в FatSecret.'}
 
 
-def fatsecret_user_diary(chat,body):
+def fatsecret_user_diary(chat,body, *, internal=False):
     """Fetch user's delegated FatSecret diary LIVE; no licensed data cached."""
     if not has_agreement(chat):
         raise ValueError('Сначала заполни анкету')
@@ -3603,22 +3619,35 @@ def fatsecret_user_diary(chat,body):
             RETURNING chat_id""",(chat,row[0],row[1])).fetchone()
     if not still_connected:
         raise ValueError('FatSecret был отключён или переподключён во время загрузки. Повтори запрос')
+    with db() as conn:
+        imported=conn.execute("""SELECT external_id,user_name_override,user_meal_override
+            FROM fatsecret_import_refs WHERE chat_id=%s AND eaten_on=%s""",
+            (chat,day)).fetchall()
+    saved={entry_id:(name,meal) for entry_id,name,meal in imported}
     if len(normalized['entries'])>150:
         raise ValueError('Слишком много записей FatSecret за один день')
     entries=[]
     for value in normalized['entries']:
+        user_name,user_meal=saved.get(value['external_id'],(None,None))
         entries.append({'external_id':value['external_id'],
-            'meal':value['meal'],'name':value['name'],
+            'imported':value['external_id'] in saved,
+            'user_edited':bool(user_name or user_meal),
+            'meal':user_meal or value['meal'],
+            'name':user_name or value['name'],
             'kcal':float(value['calories_kcal']) if value['calories_kcal'] is not None else None,
             'protein':float(value['protein_g']) if value['protein_g'] is not None else None,
             'fat':float(value['fat_g']) if value['fat_g'] is not None else None,
             'carbs':float(value['carbs_g']) if value['carbs_g'] is not None else None})
-    return {'date':day.isoformat(),'source':'fatsecret','entries':entries,
+    result={'date':day.isoformat(),'source':'fatsecret','entries':entries,
         'complete':normalized['complete'],
         'totals':({field:float(normalized[field])
                     for field in ('calories_kcal','protein_g','fat_g','carbs_g')}
                    if normalized['complete'] else None),
         'notice':'Данные FatSecret показаны напрямую. Они не скопированы в ручной дневник FORMIQ.'}
+    if internal:
+        # Encrypted credential pair never leaves this server-side helper.
+        return result,(bytes(row[0]),bytes(row[1]))
+    return result
 
 
 
