@@ -110,7 +110,7 @@ function onboardForm(){
   onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
-  '<div class="fq-onboard-actions">'+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
+  '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?(state?.metrics?.sex==='female'?femaleCalendar():block('<h2>Женский календарь</h2><p>Сохрани выбранный пол, чтобы открыть календарь.</p>')):'';
  const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
@@ -121,6 +121,8 @@ function onboardingPayload(){
  if(!['male','female'].includes(d.sex))errs.sex='Выбери Мужской или Женский.';
  if(!Array.isArray(d.weekdays)||d.weekdays.length<1)errs.weekdays='Выбери хотя бы один день недели.';
  if(!d.adult)errs.adult='Подтверди возраст 18+.';
+ if(!d.timezoneConfirmed)errs.timezoneConfirmed='Подтверди часовой пояс.';
+ try{new Intl.DateTimeFormat('ru-RU',{timeZone:d.timezone})}catch(_e){errs.timezone='Введи корректный IANA-часовой пояс.'}
  for(const key of ['terms','privacy','health'])if(!d[key])errs[key]='Подтверди согласие.';
  const mm={};
  for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
@@ -145,12 +147,12 @@ function onboardingPayload(){
   (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
- const timezone=m.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow';
+ const timezone=d.timezone;
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
-  metrics:{...mm,sex:d.sex},timezone,
+  metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
   health_description:description,health_storage_consent:!!d.healthStorageConsent,
-  ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!(description&&d.healthAiStored),
+  ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!d.profileAiConsent,ai_cycle_consent:!!(d.profileAiConsent&&d.sex==='female'),
   health_profile:{affected,pain_score:reviewed?Number(d.pain||0):Number(prior.pain_score||0),
    symptom_course:course,danger_signs:reviewed?d.danger:prior.danger_signs===true,
    activity_cleared:reviewed?d.cleared:prior.activity_cleared===true},
@@ -219,7 +221,7 @@ async function onboardChanged(e){
   if(e.type==='change')draw();
  }
  if(field==='aiConsent'&&!target.checked){onboard.aiResult=null;onboard.aiReviewed=false}
- if(field==='equipment'||field==='aiConsent'||field==='profileAiConsent')draw();
+ if(field==='equipment'||field==='profileAiConsent')draw();
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -715,7 +717,7 @@ app.addEventListener('click',async e=>{
    if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
  if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
-  if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
+  if(!onboard?.profileAiConsent||!state?.ai_personalization?.health){fail('Для разбора сначала сохрани единое согласие Yandex AI в анкете.');return}
   if(!onboard.adult||!onboard.privacy){fail('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности.');return}
   const original=String(onboard.description||'').trim();
   const extra=cmd==='onboard-ai-clarify'?String(onboard.clarification||'').trim():'';
@@ -726,7 +728,7 @@ app.addEventListener('click',async e=>{
   if(result?.analysis){
    if(onboard!==analyzedForm||String(onboard.description||'').trim()!==original||
       (cmd==='onboard-ai-clarify'&&String(onboard.clarification||'').trim()!==extra)||
-      !onboard.aiConsent||!onboard.adult||!onboard.privacy){
+      !onboard.profileAiConsent||!onboard.adult||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
    }
    const a=result.analysis;onboard.limitation='yes';
