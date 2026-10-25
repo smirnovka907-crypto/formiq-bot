@@ -596,14 +596,17 @@ function modalHTML(){
   '<label class="field"><span>Отзыв, ошибка или идея</span><textarea id="feedback-text" rows="5" maxlength="800" placeholder="8–800 символов">'+esc(drafts['feedback-text']||'')+'</textarea></label>'+
   button('Отправить','feedback-send',true)+button('Отмена','close');
  if(modal==='cardio'){
-  content='<h2>Дополнительная тренировка</h2><p>Запиши кардио, которое сделал самостоятельно.</p>'+
-  '<label class="field"><span>Вид кардио</span>'+button(cardioType||'Выбрать вид кардио','cardio-types')+'</label>'+
-  (typesOpen?'<div class="fq-live-actions">'+['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,'data-type="'+esc(x)+'"')).join('')+'</div>':'')+
-  '<div class="fq-live-grid" style="margin-top:15px">'+
-   input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')+
-   input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')+
-  '</div><p class="input-note">Пульс необязателен. Garmin пока не подключён.</p>'+
-  button('Сохранить кардио','cardio',true)+button('Отмена','close');
+  content='<h2>Дополнительная тренировка</h2><p>Активность вне основного плана.</p>'+
+   '<label class="field"><span>Вид активности</span>'+button(cardioType||'Выбрать вид активности','cardio-types')+'</label>'+
+   (typesOpen?'<div class="fq-live-actions">'+['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,'data-type="'+esc(x)+'"')).join('')+'</div>':'')+
+   (cardioType==='Другое'?'<label class="field"><span>Название активности</span><textarea id="cardio-activity" rows="2" maxlength="100" placeholder="Играл в теннис, работал в саду...">'+esc(drafts['cardio-activity']||'')+'</textarea></label>'+
+     '<label class="field"><span>Предполагаемая интенсивность</span><select id="cardio-intensity">'+
+      [['light','Лёгкая'],['moderate','Средняя'],['vigorous','Высокая']].map(([v,label])=>'<option value="'+v+'"'+((drafts['cardio-intensity']||'moderate')===v?' selected':'')+'>'+label+'</option>').join('')+'</select></label>':'')+
+   '<div class="fq-live-grid" style="margin-top:15px">'+
+    input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')+
+    input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')+
+   '</div><p class="input-note">Пульс необязателен. Калории по MET — приблизительная оценка.</p>'+
+   button('Сохранить тренировку','cardio',true)+button('Отмена','close');
  }
  if(modal==='mood')content=state?.metrics?.sex==='female'?
   `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет ИИ при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
