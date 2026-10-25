@@ -553,7 +553,7 @@ async function run(){
   await onboarding.locator('[data-onboard="age"]').fill('34');
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
-  for(const field of ['terms','privacy','health']await onboarding.locator('[data-onboard="'+field+'"]').check();
+  for(const field of ['terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
   await onboarding.locator('[data-onboard-pick="sex"][data-value="female"]').click();
   await onboarding.locator('body.theme-female').waitFor();
   await onboarding.locator('[data-onboard="minutes"]').selectOption('120');
