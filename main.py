@@ -19,6 +19,7 @@ import csv
 import re
 import difflib
 from collections import Counter
+from weight_import import parse_report, MAX_FILE_SIZE
 
 import psycopg
 import telebot
@@ -448,6 +449,23 @@ def init_db():
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS intensity TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS cardio_user_date
             ON cardio_sessions(chat_id,performed_at DESC)""")
+        # №8: additive only; keeps existing metrics, training and calendar untouched.
+        c.execute("""CREATE TABLE IF NOT EXISTS body_measurements (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            measured_at TIMESTAMPTZ NOT NULL,
+            source TEXT NOT NULL DEFAULT 'fitdays',
+            weight_kg NUMERIC(6,2) NOT NULL CHECK(weight_kg BETWEEN 20 AND 400),
+            body_fat_pct NUMERIC(5,2),
+            muscle_mass_kg NUMERIC(6,2),
+            body_water_pct NUMERIC(5,2),
+            visceral_fat NUMERIC(5,2),
+            bmr_kcal NUMERIC(7,2),
+            bmi NUMERIC(5,2),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(chat_id, measured_at, source))""")
+        c.execute("""CREATE INDEX IF NOT EXISTS body_measurements_user_date
+            ON body_measurements(chat_id,measured_at DESC)""")
         c.execute("""CREATE TABLE IF NOT EXISTS user_agreements(
             chat_id BIGINT PRIMARY KEY, version TEXT NOT NULL,
             terms_accepted_at TIMESTAMPTZ NOT NULL,
@@ -4142,6 +4160,70 @@ def analyze_nutrition_report(chat, data_bytes, filename, mime):
     return {'answer':result,'left':ai_quota(chat)}
 
 
+@APP.post('/mini/body-weight/report')
+def mini_body_weight_report():
+    """Local Fitdays CSV/XLS/XLSX: preview, user confirmation, then DB import."""
+    chat=mini_auth(request.headers.get('X-Formiq-Init',''))
+    if not chat:return jsonify(ok=False,error='Открой FORMIQ из Telegram'),401
+    if request.content_length and request.content_length>MAX_FILE_SIZE+100_000:
+        return jsonify(ok=False,error='Отчёт слишком большой (не более 2 МБ)'),413
+    try:
+        if not has_agreement(chat):
+            raise ValueError('Сначала сохрани анкету')
+        upload=request.files.get('report')
+        if upload is None:raise ValueError('Выбери отчёт Fitdays или другой файл весов')
+        data=upload.read(MAX_FILE_SIZE+1)
+        if len(data)>MAX_FILE_SIZE:raise ValueError('Файл превышает 2 МБ')
+        digest=hashlib.sha256(data).hexdigest()
+        zone=metrics(chat).get('timezone') or 'Europe/Moscow'
+        parsed=parse_report(data,upload.filename or '',zone)
+        mode=request.form.get('mode','preview')
+        if mode=='preview':
+            rows=parsed['rows']
+            response=jsonify(ok=True,count=len(rows),invalid=parsed['invalid'],
+                newest=rows[-1],preview=rows[-10:],file_hash=digest,
+                note='Проверяй даты, единицы веса и показатели перед сохранением')
+        elif mode=='import':
+            if request.form.get('confirmed')!='yes' or request.form.get('file_hash')!=digest:
+                raise ValueError('Повторно проверь файл перед импортом')
+            inserted=0
+            with db() as conn:
+                conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+                for row in parsed['rows']:
+                    result=conn.execute("""INSERT INTO body_measurements
+                        (chat_id,measured_at,source,weight_kg,body_fat_pct,muscle_mass_kg,
+                         body_water_pct,visceral_fat,bmr_kcal,bmi)
+                        VALUES(%s,%s,'fitdays',%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT(chat_id,measured_at,source) DO NOTHING RETURNING id""",
+                        (chat,row['measured_at'],row['weight_kg'],row.get('body_fat_pct'),
+                         row.get('muscle_mass_kg'),row.get('body_water_pct'),
+                         row.get('visceral_fat'),row.get('bmr_kcal'),row.get('bmi')))
+                    if result.fetchone():inserted+=1
+            response=jsonify(ok=True,imported=inserted,duplicates=len(parsed['rows'])-inserted,
+                invalid=parsed['invalid'])
+        else:raise ValueError('Неизвестный режим импорта')
+        response.headers['Cache-Control']='no-store'
+        return response
+    except ValueError as e:
+        return jsonify(ok=False,error=str(e)),400
+    except Exception:
+        LOG.exception('Local body-weight report failed')
+        return jsonify(ok=False,error='Не удалось прочитать отчёт весов'),500
+
+
+def mini_body_weight_history(chat):
+    with db() as conn:
+        rows=conn.execute("""SELECT measured_at,weight_kg,body_fat_pct,muscle_mass_kg,
+            body_water_pct,visceral_fat,bmr_kcal,bmi
+            FROM body_measurements WHERE chat_id=%s ORDER BY measured_at DESC LIMIT 120""",
+            (chat,)).fetchall()
+    return [{'date':dt.isoformat(),'weight_kg':float(kg),
+             **{key:float(value) for key,value in zip(
+                 ('body_fat_pct','muscle_mass_kg','body_water_pct','visceral_fat','bmr_kcal','bmi'),
+                 extras) if value is not None}}
+            for dt,kg,*extras in rows]
+
+
 @APP.post('/mini/report')
 def mini_report():
     chat=mini_auth(request.headers.get('X-Formiq-Init',''))
@@ -4149,7 +4231,7 @@ def mini_report():
     if request.content_length and request.content_length>1_650_000:
         return jsonify(ok=False,error='Файл слишком большой (до 1,5 МБ)'),413
     try:
-        if request.form.get('consent')!='yes':raise ValueError('Подтверди отправку отчёта в ИИ')
+        if request.form.get('consent')!='yes':raise ValueError('Подтверди отправку отчёта в Yandex AI')
         file=request.files.get('report')
         if file is None:raise ValueError('Выбери файл')
         data=file.read(1_500_001)
@@ -4470,6 +4552,8 @@ def mini_api():
             payload = {'ok': True, **mini_history_month(chat, data)}
         elif action == 'progress_series':
             payload = {'ok': True, **mini_progress_series(chat)}
+        elif action == 'body_weight_history':
+            payload = {'ok': True, 'measurements':mini_body_weight_history(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'ai_personalized_guidance':
