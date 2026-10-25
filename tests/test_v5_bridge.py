@@ -260,6 +260,38 @@ class V5StagingContract(unittest.TestCase):
                     'minutes': 30, 'avg_hr': None, 'type': 'Неизвестно'})
 
 
+    def test_extra_activity_met_is_saved_with_owner_and_unmeasured_energy(self):
+        from unittest.mock import MagicMock
+        conn=MagicMock()
+        conn.__enter__.return_value=conn
+        with patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'require_tier'), \
+             patch.object(self.mod,'metrics',return_value={'weight_kg':80}):
+            self.mod.mini_aux(777,'cardio',{
+                'minutes':60,'avg_hr':None,'type':'Другое',
+                'activity':'Играл в теннис','intensity':'moderate'})
+        sql,params=conn.execute.call_args.args
+        self.assertIn('cardio_sessions',sql)
+        self.assertEqual(params[0:5],(777,60,None,'other','Играл в теннис'))
+        self.assertEqual(params[5],7.3)
+        self.assertEqual(params[6],613)
+        self.assertEqual(params[7],'moderate')
+        # Unrecognized activity stays saved but never receives invented kcal.
+        with patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'require_tier'), \
+             patch.object(self.mod,'metrics',return_value={'weight_kg':80}), \
+             patch.object(self.mod,'personalization_consent',return_value={
+                  'profile':False,'health':False,'cycle':False}):
+            self.mod.mini_aux(777,'cardio',{
+                'minutes':20,'avg_hr':None,'type':'Другое',
+                'activity':'Неизвестная активность'})
+        _,params=conn.execute.call_args.args
+        self.assertIsNone(params[5])
+        self.assertIsNone(params[6])
+        with patch.object(self.mod,'require_tier'):
+            with self.assertRaises(ValueError):
+                self.mod.mini_aux(777,'cardio',{'minutes':30,'avg_hr':None,'type':'Другое'})
+
     def test_signed_v5_workout_and_history_api_contract(self):
         """Flask dispatches authenticated actions without touching real DB."""
         actions = [
