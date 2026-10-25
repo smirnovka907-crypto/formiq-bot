@@ -436,6 +436,23 @@ def init_db():
             chat_id BIGINT NOT NULL,day_code TEXT NOT NULL,
             exercise_keys JSONB NOT NULL,updated_at TIMESTAMPTZ DEFAULT NOW(),
             PRIMARY KEY(chat_id,day_code))""")
+        # Manual nutrition is independent of AI providers and contains no
+        # inferred nutrients. Both tables are additive and owner-scoped.
+        c.execute("""CREATE TABLE IF NOT EXISTS manual_food_meals (
+            id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL,
+            eaten_on DATE NOT NULL, meal_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
+            ON manual_food_meals(chat_id,eaten_on,id)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
+            id BIGSERIAL PRIMARY KEY, meal_id BIGINT NOT NULL
+                REFERENCES manual_food_meals(id) ON DELETE CASCADE,
+            chat_id BIGINT NOT NULL, name TEXT NOT NULL,
+            grams NUMERIC(8,2) NOT NULL CHECK (grams>0 AND grams<=5000),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE INDEX IF NOT EXISTS manual_food_items_owner_meal
+            ON manual_food_items(chat_id,meal_id,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS cardio_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             performed_at TIMESTAMPTZ DEFAULT NOW(),
@@ -3158,6 +3175,125 @@ def scheduled_calendar(chat,p,cycle):
 
 
 
+def food_day(raw):
+    if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
+        raise ValueError('Укажи дату питания')
+    try:
+        value=date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError('Дата питания не распознана') from None
+    if not 2000<=value.year<=2100:
+        raise ValueError('Дата вне допустимого диапазона')
+    return value
+
+
+def food_item(name,grams):
+    if not isinstance(name,str) or not 2<=len(name.strip())<=120:
+        raise ValueError('Название продукта: от 2 до 120 символов')
+    name=' '.join(name.strip().split())
+    try:
+        amount=Decimal(str(grams).replace(',','.'))
+    except (ValueError,TypeError,InvalidOperation):
+        raise ValueError('Проверь граммовку') from None
+    if not amount.is_finite() or not Decimal('0.1')<=amount<=Decimal('5000') or amount.as_tuple().exponent < -2:
+        raise ValueError('Укажи вес от 0,1 до 5000 г, не более двух знаков после запятой')
+    return name,amount
+
+
+def food_parse(body):
+    text=body.get('text')
+    if not isinstance(text,str) or not 2<=len(text.strip())<=2000:
+        raise ValueError('Опиши продукты обычным текстом (до 2000 символов)')
+    parts=[part.strip(' .\t') for part in re.split(r'[,;\n]+',text) if part.strip()]
+    if len(parts)>30:
+        raise ValueError('Максимум 30 продуктов за один ввод')
+    recognized,manual=[],[]
+    pattern=r'(.+?)\s+(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:г|гр|грамм(?:а|ов)?|g)\.?'
+    for part in parts:
+        found=re.fullmatch(pattern,part,re.IGNORECASE)
+        if found:
+            try:
+                name,grams=food_item(found.group(1),found.group(2))
+                recognized.append({'name':name,'grams':float(grams)})
+                continue
+            except ValueError:
+                pass
+        manual.append({'text':part,'reason':'Укажи название и вес в граммах'})
+    return {'items':recognized,'unparsed':manual,'nutrition_source':'not_available'}
+
+
+def food_history(chat,body):
+    day=food_day(body.get('date'))
+    with db() as conn:
+        rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams
+            FROM manual_food_meals m LEFT JOIN manual_food_items i
+              ON i.meal_id=m.id AND i.chat_id=%s
+            WHERE m.chat_id=%s AND m.eaten_on=%s
+            ORDER BY m.id,i.id""",(chat,chat,day)).fetchall()
+    meals={}
+    for mid,meal_type,iid,name,grams in rows:
+        entry=meals.setdefault(mid,{'id':mid,'type':meal_type,'items':[]})
+        if iid is not None:
+            entry['items'].append({'id':iid,'name':name,'grams':float(grams),
+                'kcal':None,'protein':None,'fat':None,'carbs':None})
+    return {'date':day.isoformat(),'meals':list(meals.values()),
+        'nutrients_available':False}
+
+
+def food_add(chat,body):
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    meal_type=body.get('meal_type')
+    if meal_type not in ('breakfast','lunch','dinner','snack'):
+        raise ValueError('Выбери приём пищи')
+    raw=body.get('items')
+    if not isinstance(raw,list) or not 1<=len(raw)<=30:
+        raise ValueError('Добавь от 1 до 30 продуктов')
+    items=[]
+    for row in raw:
+        if not isinstance(row,dict):
+            raise ValueError('Некорректная строка продукта')
+        items.append(food_item(row.get('name'),row.get('grams')))
+    with db() as conn:
+        meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
+            VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
+        for name,grams in items:
+            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+    return food_history(chat,{'date':day.isoformat()})
+
+
+def food_change(chat,body,delete=False):
+    iid=body.get('id')
+    if type(iid) is not int or iid<=0:
+        raise ValueError('Выбери продукт')
+    if not delete:
+        name,grams=food_item(body.get('name'),body.get('grams'))
+    with db() as conn:
+        if delete:
+            changed=conn.execute("""DELETE FROM manual_food_items i
+                USING manual_food_meals m
+                WHERE i.id=%s AND i.chat_id=%s AND m.id=i.meal_id
+                  AND m.chat_id=%s RETURNING m.id,m.eaten_on""",
+                (iid,chat,chat)).fetchone()
+            if changed:
+                conn.execute("""DELETE FROM manual_food_meals m WHERE id=%s
+                    AND chat_id=%s AND NOT EXISTS (
+                    SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
+                    (changed[0],chat))
+        else:
+            changed=conn.execute("""UPDATE manual_food_items i
+                SET name=%s,grams=%s,updated_at=NOW()
+                FROM manual_food_meals m WHERE i.id=%s AND i.chat_id=%s
+                AND m.id=i.meal_id AND m.chat_id=%s
+                RETURNING m.id,m.eaten_on""",
+                (name,grams,iid,chat,chat)).fetchone()
+    if not changed:
+        raise ValueError('Продукт не найден')
+    return food_history(chat,{'date':changed[1].isoformat()})
+
+
 def mini_training_preview(chat, body):
     """Read-only preview of a saved, owner-scoped calendar slot.
 
@@ -4668,6 +4804,16 @@ def mini_api():
             payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'training_preview':
             payload = {'ok': True, **mini_training_preview(chat,data)}
+        elif action == 'food_parse':
+            payload = {'ok': True, **food_parse(data)}
+        elif action == 'food_history':
+            payload = {'ok': True, **food_history(chat,data)}
+        elif action == 'food_add':
+            payload = {'ok': True, **food_add(chat,data)}
+        elif action == 'food_update':
+            payload = {'ok': True, **food_change(chat,data)}
+        elif action == 'food_delete':
+            payload = {'ok': True, **food_change(chat,data,delete=True)}
         elif action == 'body_weight_history':
             payload = {'ok': True, 'measurements':mini_body_weight_history(chat)}
         elif action == 'health_analyze':
