@@ -111,8 +111,20 @@ function onboardForm(){
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?femaleCalendar():'';
  const connections=''; // Inactive integrations are not displayed in the app.
+ const tiers=view==='profile'&&state?.agreed?'<section class="surface" id="test-tariffs">'+
+  '<h2>Доступ FORMIQ</h2>'+
+  '<p class="input-note">Пробный период «Тренер AI» — 14 дней после первой анкеты, без банковской карты. После него — «Дневник». Данные остаются.</p>'+
+  '<p class="input-note">'+esc(state?.premium?.label||'')+
+   (state?.premium?.days_left!=null?' · '+esc(state.premium.days_left)+' дн.':'')+'</p>'+
+  '<div class="fq-tier-choice">'+
+   [['start','Дневник','100 ₽/мес.'],['max','Тренер AI','1 000 ₽/мес.']].map(([key,name,price])=>
+    '<button type="button" class="'+((key==='start'?state.tier!=='max':state.tier==='max')?'on':'')+
+    '" data-cmd="tier-select" data-tier="'+key+'"'+(state.tier_demo?'':' disabled')+
+    '><strong>'+name+'</strong><small>'+price+'</small></button>').join('')+'</div>'+
+  '<p class="input-note">'+(state.tier_demo?'Тестовое переключение прав без списаний.':'Оплата пока не подключена.')+'</p>'+
+  '</section>':'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
-  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
+  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal+tiers;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
@@ -911,6 +923,13 @@ app.addEventListener('click',async e=>{
   }return;
  }
  if(cmd==='onboard-ai-apply'){if(onboard?.aiResult){onboard.aiReviewed=true;error='';draw()}return}
+ if(cmd==='tier-select'){
+  if(!state?.tier_demo){fail('Оплата пока не подключена.');return}
+  const tier=element.dataset.tier;
+  if(!['start','max'].includes(tier))return;
+  await send('set_demo_tier',{tier});
+  draw();return;
+ }
  if(cmd==='onboard-save'){
   if(!onboard)return;let payload;
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
