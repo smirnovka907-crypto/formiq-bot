@@ -408,9 +408,14 @@ function training(){
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
+ const trainingCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
+  '<section class="surface"><h2>Персональный совет Yandex AI</h2>'+
+  '<p class="input-note">Рекомендация учитывает анкету, результаты и самочувствие. Тренировочные ограничения проверяет сервер.</p>'+
+  button(aiTipBusy?'Анализируем…':'Получить совет по тренировке','ai-tip-training',false,aiTipBusy?'disabled':'')+
+  (aiTrainingTip?'<p role="status" class="fq-live-banner">'+esc(aiTrainingTip)+'</p>':'')+'</section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard();
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
