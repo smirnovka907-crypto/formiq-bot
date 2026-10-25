@@ -93,7 +93,7 @@ function onboardForm(){
     (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь результат ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+'</div>'+
        (d.aiResult.needs_clarification&&d.aiResult.clarification_question?'<label class="field"><span>'+
         esc(d.aiResult.clarification_question)+'</span><textarea data-onboard="clarification" rows="2" maxlength="220" placeholder="Ответ необязателен"></textarea></label>'+
-        (d.clarification.trim()?button('Уточнить с ИИ','onboard-ai-clarify'):''):'')+
+        button('Уточнить с ИИ (необязательно)','onboard-ai-clarify'):'')+
        onboardCheckbox('aiReviewed','Подтверждаю проверенные результаты анализа'):''):'')+
   onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
