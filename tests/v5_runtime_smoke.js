@@ -514,7 +514,10 @@ async function run(){
   await settle();await diaryOnly.click({nav:'food'});await settle();
   assert.doesNotMatch(diaryOnly.root.innerHTML,/Совет Yandex AI по рациону/,
     'Diary tier never exposes paid Yandex coaching');
-  const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
+  assert.doesNotMatch(diaryOnly.root.innerHTML,/id="nutrition-file"/,
+    'Diary tier must not advertise AI report upload');
+  const reportClient=createClient(true,{tier:'max',
+  aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
  assert.doesNotMatch(reportClient.root.innerHTML,/nutrition-consent/);
