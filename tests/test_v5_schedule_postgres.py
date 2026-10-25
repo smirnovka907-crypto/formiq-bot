@@ -223,8 +223,8 @@ class SchedulePostgresTests(unittest.TestCase):
                    'per_serving':{'kcal':350,'protein_g':7,'fat_g':2,'carbs_g':76}}]
         raw={'food_id':'42','name':'Рис сухой','servings':servings}
         cooked={'food_id':'43','name':'Рис отварной','servings':servings}
-        with patch.object(self.m,'FATSECRET_CLIENT_ID','offline'), \\
-             patch.object(self.m,'FATSECRET_CLIENT_SECRET','offline'), \\
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','offline'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','offline'), \
              patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
             fake.food_by_id.return_value=cooked
             with self.assertRaisesRegex(ValueError,'Сырой и приготовленный'):
