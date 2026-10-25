@@ -13,7 +13,7 @@
 - FatSecret: настоящие 3-legged OAuth1 credentials и привилегии private diary; отдельный OAuth2 food catalogue grant (Search v5), операторский Fernet key, условия использования данных и фактическое тестирование аккаунта — **BLOCKED external**.
 - Garmin: официальное одобрение Connect Developer Program Health/Activity, OAuth2, разрешённый push/подтверждение доставки, проверенный HRV формат и реальная привязка — **BLOCKED external**. Offline нормализация не означает подключение.
 - Упражнения/иллюстрации, iOS, фактическая эстетика Android, эксплуатационные тесты и резервирование/восстановление PostgreSQL остаются открытыми. См. `docs/TZ2_ACCEPTANCE.md`.
-- Кодовый CI последовательно успешно проходил на предыдущем `46addad2ac16617a8e7f5deb049a425a33768da1` (run [#40218899030](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40218899030)). **Новые изменения свободного ввода, сброса AI и финальный HEAD ещё требуют точного SUCCESS.**
+- [GitHub Actions #40219352250](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40219352250) — **SUCCESS на кодовом SHA `fec8a47e8117d6021358335ea0bcda645c77bbf3`**: Python/JS/API/PostgreSQL 18/mobile Chromium, в том числе `65,5 г`, AI consent/owner isolation и сброс устаревшего AI-совета. До него CI выявил реальный регресс: запятая дробной граммовки ошибочно делила продукт (`65,5` превращалось в `5`); исправлено в `fec8a47`, тест не ослаблялся. Этот документальный коммит требует собственного CI на exact HEAD.
 
 **Следующий шаг:** проверить финальный Actions на точном HEAD PR #23, исправить обнаруженные ошибки; затем продолжать пользовательскую приёмку/официальные provider grants отдельно. Merge, deploy и production PostgreSQL без разрешения запрещены.
 
