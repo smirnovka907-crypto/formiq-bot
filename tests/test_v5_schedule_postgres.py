@@ -205,6 +205,32 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(fake.search.call_count,1)
         self.assertEqual(fake.food_by_id.call_count,2)
 
+    def test_fatsecret_link_cannot_override_user_edit_while_provider_responds(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        meal=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'овсянка сухая','grams':70}]})
+        iid=meal['meals'][0]['items'][0]['id']
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        candidate={'food_id':'42','name':'Овсянка','servings':[{
+            'serving_id':'13','grams':100,'per_serving':{
+                'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        def rename_before_response(*_):
+            self.m.food_change(self.chat,{'id':iid,'name':'творог 5%','grams':70})
+            return candidate
+        fake.food_by_id.side_effect=rename_before_response
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            with self.assertRaisesRegex(ValueError,'не найден'):
+                self.m.food_catalog_attach(self.chat,{
+                    'id':iid,'food_id':'42','serving_id':'13'})
+        with self.connect() as conn:
+            row=conn.execute('''SELECT name,grams,source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s''',(iid,)).fetchone()
+        self.assertEqual(row,('творог 5%',70,None,None))
+
     def test_day_kbju_uses_only_owned_verified_portions_and_never_invents_totals(self):
         from unittest.mock import Mock
         self.m.save_onboarding(self.chat,self.body())
