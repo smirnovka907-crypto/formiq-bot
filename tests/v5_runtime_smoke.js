@@ -121,6 +121,13 @@ async function run(){
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
+ const severe=createClient(true,{metrics:{sex:'female'}});await settle();
+ await severe.click({cmd:'mood'});
+ assert.match(severe.root.innerHTML,/Сильная боль или слабость/);
+ await severe.click({cmd:'start-severe'});
+ assert.match(severe.root.innerHTML,/Тренировка не начата/,'Recovery choice must show its outcome');
+ assert.equal(severe.requests.filter(x=>x.action==='start').length,0,
+   'Severe pain must not start a session');
  const restored={storage:new Map(),workout:{id:71,done:1,total:3,finished:false,title:'Зал',
    rest_remaining_seconds:47,current:{name:'Жим ногами',position:0,set_no:2,set_count:3,
      low:10,high:12,unit:'reps',rest_seconds:120,tip:'Плавно'}}};
