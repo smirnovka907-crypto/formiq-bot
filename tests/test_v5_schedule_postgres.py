@@ -130,6 +130,100 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertTrue(all(date(2026, 10, 19) <= date.fromisoformat(x['date'])
                                 < date(2026, 11, 16) for x in calendar))
 
+    def test_v7_personalization_consents_are_optional_owner_scoped_and_revocable(self):
+        body=self.body()
+        self.m.save_onboarding(self.chat,body)
+        self.assertEqual(self.m.personalization_consent(self.chat),
+                         {'profile':False,'health':False,'cycle':False})
+        existing=self.snapshot_history()
+        body['ai_profile_consent']=True
+        body['ai_health_consent']=False
+        self.m.save_onboarding(self.chat,body)
+        self.assertEqual(self.m.personalization_consent(self.chat)['profile'],True)
+        self.assertFalse(self.m.personalization_consent(self.chat)['health'])
+        # Each other user starts with independent default-off consent.
+        self.assertFalse(self.m.personalization_consent(778)['profile'])
+        result=self.m.set_personalization_consent(self.chat,
+                                {'field':'health','enabled':True})
+        self.assertTrue(result['health'])
+        self.assertFalse(result['cycle'])
+        with self.assertRaises(ValueError):
+            self.m.set_personalization_consent(self.chat,{'field':'cycle','enabled':True})
+        with self.assertRaises(ValueError):
+            self.m.set_personalization_consent(self.chat,{'field':'profile','enabled':'true'})
+        self.m.set_personalization_consent(self.chat,{'field':'profile','enabled':False})
+        self.assertFalse(self.m.personalization_consent(self.chat)['profile'])
+        self.assertEqual(self.snapshot_history(),existing)
+
+    def test_v7_female_cycle_consent_never_erases_dates_and_is_private(self):
+        body=self.body()
+        body['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,body)
+        self.m.period_save(self.chat,{'start':'2026-10-01','end':'2026-10-04'})
+        with self.connect() as conn:
+            before=conn.execute('SELECT starts_on,ends_on FROM menstrual_periods WHERE chat_id=%s',
+                                (self.chat,)).fetchall()
+        enabled=self.m.set_personalization_consent(self.chat,{'field':'cycle','enabled':True})
+        self.assertTrue(enabled['cycle'])
+        self.assertFalse(self.m.personalization_consent(778)['cycle'])
+        self.m.set_personalization_consent(self.chat,{'field':'cycle','enabled':False})
+        with self.connect() as conn:
+            after=conn.execute('SELECT starts_on,ends_on FROM menstrual_periods WHERE chat_id=%s',
+                               (self.chat,)).fetchall()
+        self.assertEqual(before,after)
+        self.assertFalse(self.m.personalization_consent(self.chat)['cycle'])
+
+    def test_v7_yandex_guidance_exports_no_identifiers_and_requires_cycle_consent(self):
+        import io,json
+        body=self.body()
+        body['metrics']['sex']='female'
+        body['ai_profile_consent']=True
+        self.m.save_onboarding(self.chat,body)
+        self.m.period_save(self.chat,{'start':'2026-10-10','end':'2026-10-13'})
+        outbound=[]
+        class Reply:
+            def __enter__(self):return self
+            def __exit__(self,*unused):return False
+            def read(self,*unused):return b''
+        def fake_urlopen(req,timeout=None):
+            data=json.loads(req.data)
+            outbound.append(data['messages'][-1]['text'])
+            class Response(Reply):
+                def __iter__(self):return iter([])
+            return io.BytesIO(json.dumps({
+                'result':{'alternatives':[{'message':{'text':'План по самочувствию.'}}]}
+                }).encode())
+        with patch.object(self.m,'YANDEX_KEY','unit-test-secret'),\
+             patch.object(self.m,'FOLDER_ID','unit-test-folder'),\
+             patch.object(self.m.urllib.request,'urlopen',side_effect=fake_urlopen):
+            answer=self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'training','mood':'normal'})
+            self.assertTrue(answer['used_ai'])
+            self.assertFalse(answer['used_cycle'])
+            self.assertNotIn('observed_cycle',outbound[-1])
+            self.m.set_personalization_consent(self.chat,{'field':'cycle','enabled':True})
+            answer=self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'training','mood':'discomfort'})
+            self.assertTrue(answer['used_cycle'])
+            self.assertIn('observed_cycle',outbound[-1])
+            self.assertNotIn('chat_id',outbound[-1])
+            self.assertNotIn('Telegram',outbound[-1])
+            self.assertNotIn('2026-10-10',outbound[-1])
+            self.m.set_personalization_consent(self.chat,{'field':'cycle','enabled':False})
+            self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'training','mood':'normal'})
+            self.assertNotIn('observed_cycle',outbound[-1])
+            self.m.set_personalization_consent(self.chat,{'field':'profile','enabled':False})
+            before=len(outbound)
+            with self.assertRaises(ValueError):
+                self.m.ai_personalized_guidance(self.chat,
+                    {'purpose':'training','mood':'normal'})
+            self.assertEqual(before,len(outbound))
+            severe=self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'training','mood':'severe'})
+            self.assertFalse(severe['used_ai'])
+            self.assertEqual(before,len(outbound))
+
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
         by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
