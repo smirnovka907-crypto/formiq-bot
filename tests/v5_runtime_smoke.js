@@ -97,9 +97,24 @@ function createClient(auth=true,shared={}){
     shared.fatsecretConnected=false;response={ok:true,connected:false};
    }else if(p.action==='fatsecret_diary_day'){
     assert.equal(p.date,shared.expectedFatsecretDate||'2026-10-25');
+    const own=shared.fatsecretOverride||{};
     response={ok:true,date:p.date,complete:true,source:'fatsecret',
       totals:{calories_kcal:370,protein_g:32,fat_g:9,carbs_g:36},
-      entries:[{external_id:'17',meal:'Breakfast',name:'Овсянка',kcal:200,protein:7,fat:4,carbs:32}]};
+      entries:[{external_id:'17',meal:own.meal||'Breakfast',name:own.name||'Овсянка',
+        imported:!!shared.fatsecretImported,user_edited:!!(own.meal||own.name),
+        user_name_override:own.name||null,user_meal_override:own.meal||null,
+        kcal:200,protein:7,fat:4,carbs:32}]};
+   }else if(p.action==='fatsecret_diary_import'){
+    assert.equal(p.date,'2026-10-25');shared.fatsecretImported=true;
+    response={ok:true,date:p.date,imported_ids:['17'],imported_count:1};
+   }else if(p.action==='fatsecret_diary_import_edit'){
+    assert.equal(p.external_id,'17');
+    shared.fatsecretOverride={name:p.name_override,meal:p.meal_override};
+    response={ok:true,date:p.date,external_id:p.external_id,imported:true};
+   }else if(p.action==='fatsecret_diary_import_unlink'){
+    assert.equal(p.external_id,'17');shared.fatsecretImported=false;
+    shared.fatsecretOverride=null;
+    response={ok:true,date:p.date,external_id:p.external_id,imported:false};
    }
    else if(p.action==='food_nutrition_day'){
     const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
@@ -459,6 +474,21 @@ async function run(){
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_day'));
  assert.match(linkedClient.root.innerHTML,/370.*ккал/);
  assert.match(linkedClient.root.innerHTML,/Овсянка/);
+ await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import'));
+ assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({cmd:'fatsecret-entry-edit',id:'17'});
+ assert.match(linkedClient.root.innerHTML,/Исправление импортированной записи/);
+ linkedClient.fields.set('fatsecret-override-name',{id:'fatsecret-override-name',value:'Моя овсянка'});
+ linkedClient.fields.set('fatsecret-override-meal',{id:'fatsecret-override-meal',value:'snack'});
+ await linkedClient.click({cmd:'fatsecret-entry-save'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_edit'&&x.name_override==='Моя овсянка'));
+ assert.match(linkedClient.root.innerHTML,/Моя овсянка/);
+ await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({cmd:'fatsecret-entry-unlink',id:'17'});
+ assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_unlink'));
+ assert.doesNotMatch(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
  await linkedClient.click({cmd:'fatsecret-disconnect-open'});
  assert.match(linkedClient.root.innerHTML,/Отключить FatSecret\?/);
  await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
