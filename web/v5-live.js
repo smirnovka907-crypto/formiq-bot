@@ -15,6 +15,7 @@ const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&state?.metrics?.age&
 const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 let onboardOpen=false,onboard=null,onboardErrors={};
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
+let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false;
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -34,7 +35,9 @@ function initOnboard(){
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
   equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
-  aiConsent:false,aiResult:null,aiReviewed:false,
+  aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
+  profileAiConsent:state?.ai_personalization?.profile===true,
+  healthAiStored:state?.ai_personalization?.health===true,
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
@@ -88,9 +91,15 @@ function onboardForm(){
   (String(d.description).trim()?onboardCheckbox('aiConsent','Отдельно разрешаю передать этот текст в Yandex AI для структурирования')+
     (d.aiConsent?button('Разобрать описание','onboard-ai'): '')+
     (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь результат ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+'</div>'+
+       (d.aiResult.needs_clarification&&d.aiResult.clarification_question?'<label class="field"><span>'+
+        esc(d.aiResult.clarification_question)+'</span><textarea data-onboard="clarification" rows="2" maxlength="220" placeholder="Ответ необязателен"></textarea></label>'+
+        button('Уточнить с ИИ (необязательно)','onboard-ai-clarify'):'')+
        onboardCheckbox('aiReviewed','Подтверждаю проверенные результаты анализа'):''):'')+
   onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
+  onboardCheckbox('profileAiConsent','Разрешаю передачу необходимых данных моей анкеты в Yandex AI для персонализации тренировок и питания')+
+  '<p class="input-note">При согласии: цель, уровень, место, выбранные дни, длительность и факты из истории тренировок. Для питания — советы без вымышленных калорий и подключений. Можно отозвать в профиле. Без согласия анкета и план работают обычно.</p>'+
+  (d.description.trim()?onboardCheckbox('healthAiStored','Отдельно разрешаю ИИ учитывать сохранённое описание ограничений здоровья'):'')+
   onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
@@ -132,6 +141,7 @@ function onboardingPayload(){
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},timezone,
   health_description:description,health_storage_consent:!!d.healthStorageConsent,
+  ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!(description&&d.healthAiStored),
   health_profile:{affected,pain_score:reviewed?Number(d.pain||0):Number(prior.pain_score||0),
    symptom_course:course,danger_signs:reviewed?d.danger:prior.danger_signs===true,
    activity_cleared:reviewed?d.cleared:prior.activity_cleared===true},
@@ -165,7 +175,10 @@ function femaleCalendar(){
   esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
   '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
  return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
-  '<p class="input-note">Необязательный личный дневник. Данные видишь только ты, в ИИ они не отправляются.</p>'+
+  '<p class="input-note">Необязательный приватный дневник. Без отдельного согласия данные не отправляются в Yandex AI.</p>'+
+  '<div class="fq-onboard-check"><input type="checkbox" id="period-ai-consent"'+
+   (state?.ai_personalization?.cycle?' checked':'')+'><span>Разрешаю использовать необходимые сведения о моём менструальном цикле и самочувствии для персонализации тренировок с помощью Yandex AI</span></div>'+
+  '<p class="input-note">Передаётся только приблизительное число дней с последнего отмеченного начала и отметка текущего периода, без Telegram ID и точных дат. Отключение не удаляет историю.</p>'+
   '<div class="fq-live-grid" style="margin-top:15px">'+
   '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
   '<label class="field"><span>Окончание</span><input id="period-end" type="date" value="'+esc(periodDraft.end)+'"></label></div>'+
@@ -176,15 +189,28 @@ function femaleCalendar(){
   estimate+'</section>';
 }
 
-function onboardChanged(e){
- const target=e.target;if(!onboard||!target)return;
+async function onboardChanged(e){
+ const target=e.target;
+ if(target?.id==='period-ai-consent'){
+  const wanted=target.checked===true;
+  try{
+   const result=await request('ai_personalization_set',{field:'cycle',enabled:wanted});
+   state.ai_personalization=result.consents;aiTrainingTip='';
+  }catch(ex){periodError=ex.message||'Не удалось сохранить согласие'}
+  draw();return;
+ }
+ if(!onboard||!target)return;
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
  delete onboardErrors[field];
- if(field==='description'){onboard.aiResult=null;onboard.aiReviewed=false}
+ if(field==='description'){
+  onboard.aiResult=null;onboard.aiReviewed=false;onboard.clarification='';
+  // Show optional consent controls after the user finishes editing free text.
+  if(e.type==='change')draw();
+ }
  if(field==='aiConsent'&&!target.checked){onboard.aiResult=null;onboard.aiReviewed=false}
- if(field==='equipment'||field==='aiConsent')draw();
+ if(field==='equipment'||field==='aiConsent'||field==='profileAiConsent')draw();
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -341,12 +367,16 @@ function training(){
     '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
   '</div><div style="margin-top:15px">'+button('Сохранить кардио','cardio',true)+'</div>'+
   '<p class="input-note" style="margin-top:11px">Запись сохраняется в PostgreSQL. Garmin не подключён.</p></section>';
+ const aiCard='<section class="surface soft"><h2>Персональный совет Yandex AI</h2>'+
+  '<p class="input-note">Только с согласия в анкете. Рекомендация не меняет автоматически твой план и ограничения безопасности.</p>'+
+  button(aiTipBusy?'Подготавливаем...':'Совет для моей тренировки','ai-tip-training',false,aiTipBusy?'disabled':'')+
+  (aiTrainingTip?'<p class="fq-live-banner" role="status">'+esc(aiTrainingTip)+'</p>':'')+'</section>';
  const plan='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 12px">Тренировочный план</h2>'+
   '<p class="subtitle" style="margin-bottom:14px">Расписание и упражнения на четыре недели.</p>'+
   button('Мой план','plan-open')+'</section>';
  return h()+'<span class="kicker">'+esc(dayLabel)+'</span><h1 class="title">Сегодня</h1>'+
   '<p class="intro">Главное на сегодня — без лишнего.</p>'+
-  trainingCard+cardioCard+plan;
+  trainingCard+cardioCard+aiCard+plan;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -543,7 +573,10 @@ function food(){
   button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
   (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report;
+  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report+
+  '<section class="surface soft"><h2>Совет Yandex AI по питанию</h2><p class="input-note">Только по подтверждённой анкете и цели, без фиктивного дневника питания.</p>'+
+  button(aiTipBusy?'Подготавливаем...':'Получить персональный совет','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
+  (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>';
 }
 function profile(){
  const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
@@ -574,6 +607,14 @@ function profile(){
   button('Редактировать анкету','onboard-open',true)+'</div></section>';
  const body='<section class="surface"><h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+
   (profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+measure+'</section>';
+ const aiPermission=state?.ai_personalization||{};
+ const aiConsentCard='<section class="surface"><h2 class="section-label" style="margin-top:0">Yandex AI · разрешения</h2>'+
+  '<p class="input-note">Персонализация анкеты: '+(aiPermission.profile?'разрешена':'выключена')+
+  '. Описание здоровья: '+(aiPermission.health?'разрешено':'выключено')+
+  '. Цикл: '+(aiPermission.cycle?'разрешён':'выключен')+'. Можно отозвать без удаления тренировок и календаря.</p>'+
+  (aiPermission.profile?button('Отозвать доступ к анкете','ai-profile-revoke'):'')+
+  (aiPermission.health?button('Отозвать доступ к описанию здоровья','ai-health-revoke'):'')+
+  (aiPermission.cycle?button('Отозвать доступ к циклу','ai-cycle-revoke'):'')+'</section>';
  const health='<section class="surface"><h2 class="section-label" style="margin-top:0">Самочувствие и ограничения</h2>'+
   '<p class="input-note">Ограничения проверяются сервером. Изменить их и отдельное согласие на Yandex AI можно в анкете.</p></section>';
  const integrations='<section class="surface soft"><h2 class="section-label" style="margin-top:0">Подключения</h2>'+
@@ -583,7 +624,7 @@ function profile(){
   '<p class="connection-hint">Автоматический дневник пока недоступен.</p></div><span class="connection-status">Не подключён</span></div></section>';
  return h()+'<span class="kicker">Настройки</span><h1 class="title">Твой профиль</h1>'+
   '<p class="intro">Одна анкета — редактирование без потери истории.</p>'+
-  questionnaire+body+health+integrations;
+  questionnaire+body+health+aiConsentCard+integrations;
 }
 function modalHTML(){
  if(!modal)return '';
@@ -598,7 +639,9 @@ function modalHTML(){
   '</div><p class="input-note">Пульс необязателен. Garmin пока не подключён.</p>'+
   button('Сохранить кардио','cardio',true)+button('Отмена','close');
  }
- if(modal==='mood')content=`<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
+ if(modal==='mood')content=state?.metrics?.sex==='female'?
+  `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет ИИ при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
+  `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
  if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
  if(modal==='history'){
@@ -650,6 +693,28 @@ app.addEventListener('click',async e=>{
  if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
+  const field={'ai-profile-revoke':'profile','ai-health-revoke':'health','ai-cycle-revoke':'cycle'}[cmd];
+  try{
+   const result=await request('ai_personalization_set',{field,enabled:false});
+   state.ai_personalization=result.consents;
+   aiTrainingTip='';aiNutritionTip='';
+   profileNotice='Согласие отозвано. История тренировок и календарь сохранены.';
+  }catch(ex){profileNotice=ex.message||'Не удалось изменить согласие'}
+  draw();return;
+ }
+ if(cmd==='ai-tip-training'||cmd==='ai-tip-nutrition'||cmd==='ai-tip-discomfort'){
+  if(aiTipBusy)return;
+  aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
+  try{
+   const result=await request('ai_personalized_guidance',{
+      purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal'});
+   if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
+   else aiNutritionTip=result.advice;
+  }catch(ex){error=ex.message||'Не удалось получить совет ИИ'}
+  finally{aiTipBusy=false;draw()}
+  return;
+ }
  if(cmd==='period-edit'){
   const id=Number(element.dataset.periodId),record=periodEntries?.find(x=>x.id===id);
   if(!record)return;
@@ -690,15 +755,19 @@ app.addEventListener('click',async e=>{
  if(cmd==='plan-open'||cmd==='plan-back'){view=cmd==='plan-open'?'plan':'home';error='';draw();window.scrollTo(0,0);return}
   if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
- if(cmd==='onboard-ai'){
+ if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
   if(!onboard?.aiConsent){fail('Для разбора текста нужно отдельное согласие на Yandex AI.');return}
   if(!onboard.adult||!onboard.privacy){fail('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности.');return}
-  const txt=String(onboard.description||'').trim();
+  const original=String(onboard.description||'').trim();
+  const extra=cmd==='onboard-ai-clarify'?String(onboard.clarification||'').trim():'';
+  const txt=extra?original+'\nДополнительное пояснение пользователя: '+extra:original;
   if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
   const analyzedForm=onboard;
   const result=await send('health_analyze',{adult:true,privacy_ack:true,ai_consent:true,text:txt});
   if(result?.analysis){
-   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==txt||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
+   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==original||
+      (cmd==='onboard-ai-clarify'&&String(onboard.clarification||'').trim()!==extra)||
+      !onboard.aiConsent||!onboard.adult||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
    }
    const a=result.analysis;onboard.limitation='yes';
@@ -706,7 +775,7 @@ app.addEventListener('click',async e=>{
    onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
    onboard.course=['stable','recent','worsening'].includes(a.symptom_course)?a.symptom_course:'';
    onboard.danger=a.danger_signs===true;onboard.cleared=false;
-   onboard.aiResult=a;onboard.aiReviewed=false;draw();
+   onboard.aiResult=a;onboard.aiReviewed=false;onboard.clarification='';draw();
   }return;
  }
  if(cmd==='onboard-save'){
@@ -769,6 +838,10 @@ app.addEventListener('click',async e=>{
  if(cmd==='close'){modal='';draw();return}
  if(cmd==='cardio-add'){modal='cardio';typesOpen=false;draw();return}
  if(cmd==='mood'){modal='mood';draw();return}
+ if(cmd==='start-severe'){
+  modal='';aiTrainingTip='При сильной боли или слабости лучше восстановление или пропуск тренировки. При выраженных или усиливающихся симптомах обратись за медицинской помощью.';
+  draw();return;
+ }
  if(cmd==='start-normal'||cmd==='start-tired'){modal='';await send('start',{mood:cmd==='start-normal'?'normal':'tired'});return}
  if(cmd==='record'){
   const val=document.getElementById('reps')?.value.trim()||'',kg=document.getElementById('weight')?.value.trim()||'';

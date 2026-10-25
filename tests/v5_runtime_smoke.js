@@ -338,7 +338,7 @@ async function run(){
   ux.handlers.input({target:{dataset:{onboard:'equipment_description'},type:'textarea',value:'гантели, резинки'}});
   await ux.click({cmd:'onboard-save'});
   const edits=ux.requests.filter(x=>x.action==='onboarding');
-  assert.equal(edits.length,1,'First-run saves directly using chosen weekdays');
+  assert.equal(edits.length,1,'First-run saves directly using chosen weekdays. UI: '+ux.root.innerHTML.slice(0,500));
   assert.equal(edits[0].metrics.weight_kg,82);
   assert.equal(edits[0].metrics.sex,'female');
   assert.equal(edits[0].answers.minutes,'120');

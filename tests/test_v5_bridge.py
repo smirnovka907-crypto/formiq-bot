@@ -161,6 +161,7 @@ class V5StagingContract(unittest.TestCase):
             'db': conn, 'profile': p, 'health_profile': limits, 'ready': None,
             'tier_for': 'max', 'has_agreement': True, 'metrics': {},
             'ai_state': (False, False), 'ai_quota': 10,
+            'personalization_consent': {'profile':False,'health':False,'cycle':False},
             'history_local_zone': timezone.utc,
             'get_cycle': (7, 1), 'scheduled_calendar': [],
             'next_day_in_readonly': 'A', 'get_custom': None, 'user_session': [],

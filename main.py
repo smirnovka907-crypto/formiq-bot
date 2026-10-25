@@ -491,6 +491,12 @@ def init_db():
             description TEXT NOT NULL CHECK(char_length(description)<=800),
             consented_at TIMESTAMPTZ NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE TABLE IF NOT EXISTS ai_personalization_consents(
+            chat_id BIGINT PRIMARY KEY,
+            profile_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            health_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            cycle_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("""CREATE TABLE IF NOT EXISTS menstrual_periods(
             id BIGSERIAL PRIMARY KEY,
             chat_id BIGINT NOT NULL,
@@ -1987,6 +1993,138 @@ def exercise_progress(chat, mid=None):
     send(chat, '\n'.join(lines), [('🏆 Рекорды', 'records'), ('🤖 ИИ', 'coach'), ('🏠 Меню', 'menu')], mid)
 
 
+def personalization_consent(chat):
+    """Independent, owner-scoped and default-off permissions for Yandex AI."""
+    with db() as conn:
+        row=conn.execute("""SELECT profile_allowed,health_allowed,cycle_allowed
+            FROM ai_personalization_consents WHERE chat_id=%s""",(chat,)).fetchone()
+    return dict(zip(('profile','health','cycle'),map(bool,row))) if row else {
+        'profile':False,'health':False,'cycle':False}
+
+
+def set_personalization_consent(chat,body):
+    """Explicit independent toggles. No cycle consent for male accounts."""
+    allowed=('profile','health','cycle')
+    field=body.get('field');enabled=body.get('enabled')
+    if field not in allowed or type(enabled) is not bool:
+        raise ValueError('Некорректное согласие')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        if field=='cycle':
+            row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+            if not row or row[0]!='female':
+                raise ValueError('Согласие цикла доступно только в женском профиле')
+        if field=='profile' and enabled and profile_in(conn,chat).get('age_group')!='adult':
+            raise ValueError('Сначала сохрани анкету 18+')
+        column={'profile':'profile_allowed','health':'health_allowed','cycle':'cycle_allowed'}[field]
+        # SQL identifiers are hard-coded, never taken from request contents.
+        conn.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
+        conn.execute('UPDATE ai_personalization_consents SET '+column+'=%s,changed_at=NOW() WHERE chat_id=%s',
+            (enabled,chat))
+        if field=='profile' and not enabled:
+            # A previously enabled legacy AI chat must not transmit profile/history
+            # after this new personalization consent is revoked.
+            conn.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
+    return personalization_consent(chat)
+
+
+def ai_personalized_guidance(chat,body):
+    """Real Yandex advice, never direct workout writes or unconsented period export.
+
+    This is optional training/nutrition guidance, not a generated clinical
+    prescription or a fake food diary. The authoritative workout safety checks
+    and server-created exercises still apply to actual workout starts.
+    """
+    purpose=body.get('purpose','training')
+    mood=body.get('mood','normal')
+    if purpose not in ('training','nutrition') or mood not in ('normal','tired','discomfort','severe'):
+        raise ValueError('Некорректный запрос персонализации')
+    if purpose=='training' and mood=='severe':
+        return {'advice':'При сильной боли или выраженной слабости лучше пропустить нагрузку и восстановиться. При выраженных, новых или усиливающихся симптомах обратись к врачу.','used_cycle':False,'used_ai':False}
+    if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
+        raise ValueError('Сначала заполни анкету')
+    consent=personalization_consent(chat)
+    if not consent['profile']:
+        raise ValueError('Разреши персонализацию Yandex AI в анкете')
+    if not YANDEX_KEY or not FOLDER_ID:
+        raise ValueError('Yandex AI сейчас недоступен')
+    p=profile(chat)
+    health=health_profile(chat)
+    if purpose=='training' and health_safety_error(health):
+        raise ValueError('Нагрузка ограничена правилами безопасности. При необходимости обратись к специалисту')
+    # Only bounded facts from this authenticated user's PostgreSQL rows.
+    with db() as conn:
+        count,last=conn.execute("""SELECT COUNT(*),MAX(finished_at)
+            FROM workouts WHERE chat_id=%s AND status='finished'""",(chat,)).fetchone()
+        recent=conn.execute("""SELECT difficulty,readiness FROM workouts
+            WHERE chat_id=%s AND status='finished' ORDER BY finished_at DESC,id DESC LIMIT 1""",
+            (chat,)).fetchone()
+        note=conn.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
+            (chat,)).fetchone() if consent['health'] else None
+        cycle=None
+        if purpose=='training' and consent['cycle']:
+            m=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+            if m and m[0]=='female':
+                cycle=conn.execute("""SELECT starts_on,ends_on FROM menstrual_periods
+                    WHERE chat_id=%s ORDER BY starts_on DESC LIMIT 1""",(chat,)).fetchone()
+    facts={'goal':p.get('goal'),'level':p.get('level'),'place':p.get('equipment'),
+           'minutes':p.get('minutes'),'weekdays':p.get('weekdays'),
+           'completed_workouts':count,'last_rating':recent[0] if recent else None,
+           'last_readiness':recent[1] if recent else None,
+           'current_wellbeing':mood if purpose=='training' else None}
+    if consent['health']:
+        facts['health_limits']=health.get('affected',[]) if health else []
+        if note:facts['health_note']=note[0][:600]
+    used_cycle=False
+    if cycle:
+        day=local_today(chat)
+        since=(day-cycle[0]).days
+        if 0<=since<=40:
+            facts['observed_cycle']={'days_since_last_reported_start':since,
+              'currently_in_recorded_period':cycle[0]<=day<=cycle[1]}
+            used_cycle=True
+    # No chat/Telegram ID, dates of birth or precise menstrual dates leave server.
+    system=('Ты FORMIQ, тренер для взрослых. Это данные, добровольно разрешённые '
+            'пользователем. Не ставь диагнозы, не назначай лекарства. '
+            'Не повышай веса автоматически. Тренировка должна соблюдать '
+            'серверные ограничения; не предлагай обходить их. '
+            'Не снижай нагрузку лишь из-за менструальной фазы: ориентируйся '
+            'на самочувствие. При лёгком дискомфорте допускается щадящий вариант '
+            'без боли; при сильной боли или слабости рекомендуй отдых. '
+            'Для питания давай только качественные рекомендации по цели и привычкам, '
+            'не придумывай записей питания, подключений, калорий или анализов. '
+            'Никаких автоматических изменений плана или диагноза. '
+            'Отвечай по-русски до 800 символов, конкретно.')
+    if purpose=='nutrition':
+        system+=' Рекомендация о питании, а не запись в реальном дневнике.'
+    else:
+        system+=' Советы по нагрузке для нынешнего самочувствия.'
+    # Check consent again directly before outbound request, and after.
+    latest=personalization_consent(chat)
+    if not latest['profile'] or (note and not latest['health']) or (used_cycle and not latest['cycle']):
+        raise ValueError('Согласие было отозвано. Повтори запрос')
+    req=urllib.request.Request(AI_URL,data=json.dumps({
+        'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+        'completionOptions':{'stream':False,'temperature':0.2,'maxTokens':'420'},
+        'messages':[{'role':'system','text':system},
+                    {'role':'user','text':json.dumps(facts,ensure_ascii=False,default=str)}]
+    },ensure_ascii=False).encode('utf-8'),
+        headers={'Authorization':'Api-Key '+YANDEX_KEY,'Content-Type':'application/json'},
+        method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=35) as response:
+            output=json.load(response)
+        answer=output['result']['alternatives'][0]['message']['text'].strip()
+        if not answer:raise ValueError('Empty response')
+    except Exception:
+        LOG.warning('Yandex optional personalization temporarily unavailable')
+        raise ValueError('Не получилось получить совет ИИ. Обычная программа остаётся доступна') from None
+    after=personalization_consent(chat)
+    if not after['profile'] or (note and not after['health']) or (used_cycle and not after['cycle']):
+        raise ValueError('Согласие отозвано во время ответа')
+    return {'advice':answer.replace('**','')[:950],'used_cycle':used_cycle,'used_ai':True}
+
+
 def ai_state(chat):
     with db() as c:
         row = c.execute('SELECT consented_at,enabled,provider FROM ai_preferences WHERE chat_id=%s',
@@ -2056,7 +2194,9 @@ AI_SYSTEM = '''Ты FORMIQ, русскоязычный фитнес-помощн
 
 
 def ai_context(chat):
-    p = profile(chat)
+    # Legacy conversational AI must not bypass the new profile-revocation gate.
+    permitted=personalization_consent(chat)
+    p = profile(chat) if permitted['profile'] else {}
     with db() as c:
         total, month = c.execute('''SELECT COUNT(*),COUNT(*) FILTER(
             WHERE finished_at >= NOW()-INTERVAL '30 days')
@@ -2074,16 +2214,17 @@ def ai_context(chat):
             ORDER BY id DESC LIMIT 6''', (chat,)).fetchall()
     basic = '; '.join(f'{f}: {LABELS.get((f, p.get(f)), "неизвестно")}'
                       for f in ('goal', 'level', 'days', 'equipment', 'minutes'))
-    lines = [f'Анкета: {basic}', f'Завершено тренировок: {total}, за 30 дней: {month}.']
+    lines = ([f'Анкета: {basic}', f'Завершено тренировок: {total}, за 30 дней: {month}.']
+             if permitted['profile'] else ['Анкетные данные для ИИ отключены пользователем.'])
     hp=health_profile(chat)
-    if hp:
+    if hp and permitted['profile'] and permitted['health']:
         lines.append('Ограничения движений (со слов пользователя): '+(', '.join(LIMIT_LABELS.get(x,x) for x in hp['affected']) or 'нет')+f"; боль {hp['pain_score']}/10; течение {hp['symptom_course']}.")
-    for dt, day, week, mood, grade in workouts:
+    for dt, day, week, mood, grade in (workouts if permitted['profile'] else []):
         lines.append(f'{dt:%d.%m} день {day}, неделя {week}, готовность {mood or "нет записи"}, нагрузка {grade or "без оценки"}.')
-    for dt, name, reps, kg, unit in sets:
+    for dt, name, reps, kg, unit in (sets if permitted['profile'] else []):
         lines.append(f'{dt:%d.%m} {name}: {reps} {"сек" if unit == "sec" else "повт."}, ' +
                      (f'вес {kg} кг.' if kg is not None else 'вес не записан.'))
-    return '\n'.join(lines), list(reversed(turns)), has_agreement(chat) and not health_safety_error(health_profile(chat))
+    return '\n'.join(lines), list(reversed(turns)) if permitted['profile'] else [], has_agreement(chat) and not health_safety_error(health_profile(chat))
 
 
 def call_ai(chat, question):
@@ -2148,6 +2289,7 @@ def delete_all(chat, mid=None):
         for table in ('feedback_items','feedback_drafts','user_agreements','demo_tiers',
                       'scheduled_sessions','custom_programs','cardio_sessions','profile_metrics',
                       'health_limits','profile_health_notes','menstrual_periods',
+                      'ai_personalization_consents',
                       'profile_equipment','workouts','training_cycles','pending_inputs',
                       'premium_access','rest_timers','profiles','ai_messages',
                       'ai_preferences','ai_usage'):
@@ -2818,6 +2960,18 @@ def save_onboarding(chat,body):
             updated_at=NOW()''',
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
+        if body.get('ai_profile_consent') not in (True,False,None) or \
+           body.get('ai_health_consent') not in (True,False,None):
+            raise ValueError('Некорректное согласие на ИИ')
+        c.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
+        c.execute('''UPDATE ai_personalization_consents SET profile_allowed=%s,
+            health_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
+            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,chat))
+        if body.get('ai_profile_consent') is not True:
+            c.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
+        if sex!='female':
+            c.execute('''UPDATE ai_personalization_consents SET cycle_allowed=FALSE
+                WHERE chat_id=%s''',(chat,))
         if raw_note:
             c.execute("""INSERT INTO profile_health_notes(chat_id,description,consented_at)
                 VALUES(%s,%s,NOW()) ON CONFLICT(chat_id)
@@ -2854,7 +3008,7 @@ DOC_TERMS = """<h1>Условия использования FORMIQ</h1>
 DOC_PRIVACY = """<h1>Политика конфиденциальности FORMIQ</h1>
 <p><b>Версия 21.10.2026 · проект для тестирования.</b></p>
 <p>Для работы сервиса FORMIQ обрабатывает идентификатор Telegram, ответы анкеты, информацию о тренировках, подходах, рабочих весах, показатели роста, веса, пола, пульса и возраста, добровольно отмеченные ограничения движений, области дискомфорта и интенсивность боли, отдельно сохранённое по согласию текстовое описание ограничений здоровья, а также технические события приложения. По желанию владелица женского профиля может записывать даты менструаций в необязательный приватный календарь; эти записи хранятся по её идентификатору Telegram и доступны только ей через подписанную авторизацию. Добровольные пожелания пользователей обрабатываются для улучшения продукта и группировки повторяющихся идей; обезличенные тексты и псевдонимы могут дополнительно синхронизироваться с закрытой Google Таблицей разработчика.</p>
-<p>Данные дневника хранятся в базе PostgreSQL облачного сервиса Render. При отдельном согласии на ИИ в Yandex AI Studio передаются вопросы, последние сообщения и соответствующая часть тренировочных данных. Описание здоровья передаётся для структурирования только после отдельного согласия в момент запроса; даты женского календаря не включаются в автоматические запросы к Yandex AI. Если пользователь отдельно выбирает отчёт питания, его содержимое (CSV либо изображение) передаётся мультимодальной или текстовой модели Яндекса для анализа, без сохранения исходного файла в дневнике FORMIQ. Пользователь может отказаться от ИИ и удалить его локальную историю.</p>
+<p>Данные дневника хранятся в базе PostgreSQL облачного сервиса Render. При отдельном согласии на ИИ в Yandex AI Studio передаются вопросы, последние сообщения и соответствующая часть тренировочных данных. Описание здоровья передаётся для структурирования только после отдельного согласия в момент запроса; даты женского календаря не включаются в автоматические запросы к Yandex AI. Отдельное необязательное согласие позволяет передавать в Yandex AI только относительное число дней с последнего самостоятельно отмеченного начала менструации и факт попадания текущего дня в отмеченный период, без Telegram ID и точных дат. Это используется лишь по запросу персонального совета по тренировке, не для диагностики; согласие можно отозвать в профиле или женском календаре без удаления дат. Отдельное согласие на персонализацию анкеты позволяет использовать цель, опыт, место, дни и длительность занятий, а также сводную историю тренировок для советов по тренировкам и питанию. Без согласия обычная анкета и тренировки доступны. Если пользователь отдельно выбирает отчёт питания, его содержимое (CSV либо изображение) передаётся мультимодальной или текстовой модели Яндекса для анализа, без сохранения исходного файла в дневнике FORMIQ. Пользователь может отказаться от ИИ и удалить его локальную историю.</p>
 <p>Доступ к данным предоставляется только для предоставления возможностей FORMIQ и необходимых технических операций. Обращения, сроки хранения, меры защиты, место хранения и права субъекта данных должны быть уточнены и опубликованы до публичного запуска.</p>
 <p>При удалении учётной записи записи пожеланий в основной базе удаляются; внешнюю Google Таблицу потребуется очистить отдельно по запросу пользователя. Для реализации прав на доступ, исправление и удаление данных в тестовой версии предусмотрены команды профиля и удаления. <b>До запуска подписок нужно указать юридическое лицо/ИП, адрес и контакт оператора персональных данных.</b></p>"""
 
@@ -3298,6 +3452,7 @@ def mini_state(chat, just_finished=False):
         'equipment_description': p.get('equipment_description',''),
         'needs_health_profile': not bool(h),
         'agreed': has_agreement(chat),
+        'ai_personalization': personalization_consent(chat),
         'agreement_version': AGREEMENT_VERSION,
         'error': error,
         'workout': None,
@@ -4189,6 +4344,10 @@ def mini_api():
             payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
+        elif action == 'ai_personalized_guidance':
+            payload = {'ok':True, **ai_personalized_guidance(chat,data)}
+        elif action == 'ai_personalization_set':
+            payload = {'ok':True, 'consents':set_personalization_consent(chat,data)}
         elif action == 'equipment_analyze':
             payload = {'ok':True, 'equipment':analyze_equipment_description(data)}
         elif action in ('detail','ai_ask','feedback'):
