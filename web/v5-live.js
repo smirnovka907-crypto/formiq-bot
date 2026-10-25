@@ -26,7 +26,7 @@ let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
-let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
+let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,foodRevision=0,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
  level:[['Новичок','beginner'],['Иногда тренируюсь','some'],['Регулярно тренируюсь','experienced']],
@@ -688,7 +688,7 @@ const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',
 async function loadFoodHistory(){
  if(!foodDate)foodDate=localClock().date;
  const requested=foodDate;
- aiNutritionTip='';
+ ++foodRevision;aiNutritionTip='';
  foodLoading=true;draw();
  try{
   const result=await request('food_history',{date:requested});
@@ -698,7 +698,7 @@ async function loadFoodHistory(){
 }
 async function requestFoodDaily(){
  // Any edit or re-fetch invalidates guidance for the previous food snapshot.
- aiNutritionTip='';
+ ++foodRevision;aiNutritionTip='';
  const expected=foodDate,seq=++foodDailySeq;
  const hasLinked=(foodHistory?.meals||[]).some(m=>(m.items||[]).some(x=>x.nutrition_source==='fatsecret'));
  foodDaily=null;foodDailyError='';
@@ -995,12 +995,14 @@ app.addEventListener('click',async e=>{
   if(aiTipBusy)return;
   aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
   const expectedFoodDate=purpose==='nutrition'?foodDate:null;
+  const expectedFoodRevision=foodRevision;
   try{
    const result=await request('ai_personalized_guidance',{
       purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal',
       ...(purpose==='nutrition'?{date:foodDate}:{})});
    if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
-   else if(expectedFoodDate===foodDate)aiNutritionTip=result.advice;
+   else if(expectedFoodDate===foodDate&&expectedFoodRevision===foodRevision)
+    aiNutritionTip=result.advice;
   }catch(ex){error=ex.message||'Не удалось получить совет Yandex AI'}
   finally{aiTipBusy=false;draw()}
   return;
