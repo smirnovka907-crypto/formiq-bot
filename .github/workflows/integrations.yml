@@ -8,6 +8,8 @@ on:
       - main
       - feature/formiq-tz2-nutrition-integrations-20261025
       - fix/telegram-approved-branding-20261025
+      - fix/telegram-branding-owner-approved-20261026
+      - fix/telegram-branding-owner-approved-20261026
       - fix/onboarding-atomic-plan-20261025
       - feature/assignment-8-ui-profile-fitdays-20261025
       - feature/assignment-7-profile-training-20261025
