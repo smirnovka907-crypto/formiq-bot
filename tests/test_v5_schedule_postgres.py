@@ -709,6 +709,44 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM workouts WHERE chat_id=%s',
                 (self.chat,)).fetchone()[0],0,'Preview never starts or completes a workout')
 
+    def test_recent_consent_bound_garmin_activity_reduces_load_no_duplicates(self):
+        p,cycle,calendar=self.save((0,2,4))
+        self.m.save_onboarding(999,self.body((0,2,4)))
+        baseline=self.m.make_session(p,1,'A',adapt='normal',cycle_id=cycle)
+        # Unconnected and other-owner data never affect this user's training.
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+                (chat_id,provider_user_id,health_consent_at)
+                VALUES(%s,'GARMIN_TEST_999',NOW()),(%s,'GARMIN_TEST_777',NOW())""",
+                (999,self.chat))
+            conn.execute("""INSERT INTO garmin_metric_events
+                (chat_id,provider_user_id,category,external_id,event_at_utc,metrics_json)
+                VALUES(%s,'GARMIN_TEST_999','activities','a-1',
+                   NOW()-INTERVAL '3 hours','{"duration_seconds":7200}'::jsonb)""",(999,))
+        before=self.m.adjustment(self.chat,'A')
+        self.assertEqual(before[0],'normal')
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_metric_events
+                (chat_id,provider_user_id,category,external_id,event_at_utc,metrics_json)
+                VALUES(%s,'GARMIN_TEST_777','activities','a-1',
+                   NOW()-INTERVAL '3 hours','{"duration_seconds":5400,"activity_type":"cycling"}'::jsonb)""",
+                (self.chat,))
+        adapt,reason=self.m.adjustment(self.chat,'A')
+        self.assertEqual(adapt,'lighter')
+        self.assertIn('Garmin',reason)
+        reduced=self.m.make_session(p,1,'A',adapt=adapt,cycle_id=cycle)
+        self.assertLess(sum(x[1] for x in reduced),sum(x[1] for x in baseline))
+        with self.connect() as conn:
+            conn.execute("""UPDATE garmin_authorized_identities SET disconnected_at=NOW()
+                WHERE chat_id=%s""",(self.chat,))
+        self.assertEqual(self.m.adjustment(self.chat,'A')[0],'normal',
+            'After revocation, preserved Garmin history cannot affect adaptation')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM garmin_metric_events WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],1)
+            self.assertEqual(conn.execute('SELECT count(*) FROM workouts WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0)
+
     def test_manual_weight_does_not_replace_imported_measurements(self):
         self.m.save_onboarding(self.chat,self.body())
         from datetime import datetime,timezone
