@@ -185,9 +185,9 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchall.return_value = [
-            (35, dt, 'workout', 'A', 'Зал', None, None),
-            (-12, dt, 'cardio', None, None, 60, 'cycling'),
-            (34, dt, 'workout', 'B', 'Другая тренировка', None, None),
+            (35, dt, 'workout', 'A', 'Зал', None, None, None, None),
+            (-12, dt, 'cardio', None, None, 60, 'cycling', None, 571),
+            (34, dt, 'workout', 'B', 'Другая тренировка', None, None, None, None),
         ]
         with patch.object(self.mod, 'db', return_value=conn), \
              patch.object(self.mod, 'profile', return_value={'goal':'general'}):
@@ -199,7 +199,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertEqual(query.count('chat_id=%s'), 2)
         self.assertEqual(result['next_offset'], 2)
         self.assertEqual([row['id'] for row in result['history']], [35, -12])
-        self.assertEqual(result['history'][1]['title'], 'Велосипед · 60 мин')
+        self.assertEqual(result['history'][1]['title'], 'Дополнительная тренировка · Велосипед · 60 мин · ≈ 571 ккал')
 
     def test_history_month_uses_owner_and_month_boundaries(self):
         from datetime import date
@@ -247,7 +247,9 @@ class V5StagingContract(unittest.TestCase):
         sql, params = conn.execute.call_args.args
         self.assertIn('cardio_sessions', sql)
         self.assertIn('equipment', sql)
-        self.assertEqual(params, (777, 60, 120, 'cycling'))
+        self.assertEqual(params[:4], (777, 60, 120, 'cycling'))
+        self.assertEqual(len(params), 8)
+        self.assertEqual(params[5], 6.8)
         with patch.object(self.mod, 'require_tier'), \
              patch.object(self.mod, 'db', return_value=conn):
             with self.assertRaises(ValueError):
