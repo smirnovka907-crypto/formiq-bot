@@ -1455,6 +1455,18 @@ def additional_recovery_advice(chat, conn=None):
       FROM cardio_sessions WHERE chat_id=%s
       AND performed_at>=NOW()-INTERVAL '36 hours'
       ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
+    # Only actually imported, consented Garmin activities may influence
+    # future workload. Do not use steps, estimated calories or fake readiness.
+    garmin_activities=c.execute("""SELECT e.metrics_json->>'duration_seconds',
+             e.metrics_json->>'activity_type'
+        FROM garmin_metric_events e
+        JOIN garmin_authorized_identities g
+          ON g.chat_id=e.chat_id AND g.provider_user_id=e.provider_user_id
+        WHERE e.chat_id=%s AND e.category='activities'
+          AND g.health_consent_at IS NOT NULL AND g.disconnected_at IS NULL
+          AND e.event_at_utc>=NOW()-INTERVAL '36 hours'
+          AND e.event_at_utc<=NOW()+INTERVAL '5 minutes'
+        ORDER BY e.event_at_utc DESC,e.id DESC LIMIT 20""",(chat,)).fetchall()
     manual=c.execute("""SELECT w.id,w.difficulty,COUNT(s.*) FILTER(WHERE s.state='done'),
         COUNT(DISTINCT i.exercise_key) FILTER(WHERE s.state='done')
       FROM workouts w LEFT JOIN workout_items i ON i.workout_id=w.id
@@ -1468,6 +1480,19 @@ def additional_recovery_advice(chat, conn=None):
     hard_manual=any(difficulty=='hard' or (done or 0)>=10
         for _,difficulty,done,_ in manual)
     muscle_groups=sum(int(groups or 0) for _,_,_,groups in manual)
+    garmin_minutes=0.0
+    garmin_running=False
+    for raw_seconds,activity in garmin_activities:
+        try:
+            seconds=Decimal(str(raw_seconds))
+            if not seconds.is_finite() or not 0<seconds<=86400:
+                continue
+        except (InvalidOperation,TypeError,ValueError):
+            continue
+        duration=float(seconds/60)
+        garmin_minutes+=duration
+        if str(activity or '').strip().casefold() in ('running','trail_running') and duration>=45:
+            garmin_running=True
     if hard_manual or muscle_groups>=4:
         return ('lighter','Недавно была объёмная дополнительная силовая тренировка. '
                 'Снизим подходы; при усталости выбери отдых или перенеси ближайшее занятие.')
@@ -1477,6 +1502,10 @@ def additional_recovery_advice(chat, conn=None):
         return ('lighter',f'За последние 36 часов записано {minutes} мин дополнительного кардио. '
                 'Снизим подходы; при тяжести в ногах или выраженной усталости '
                 'лучше восстановиться или перенести занятие.')
+    if garmin_minutes>=80 or garmin_running:
+        return ('lighter','Garmin за последние 36 часов передал продолжительные активности. '
+                'Снизим подходы; при усталости лучше восстановиться или перенести тренировку. '
+                'Активности Garmin не суммируются с вручную записанным кардио.')
     return None
 
 
