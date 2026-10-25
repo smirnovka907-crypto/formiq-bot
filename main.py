@@ -436,6 +436,23 @@ def init_db():
             chat_id BIGINT NOT NULL,day_code TEXT NOT NULL,
             exercise_keys JSONB NOT NULL,updated_at TIMESTAMPTZ DEFAULT NOW(),
             PRIMARY KEY(chat_id,day_code))""")
+        # Manual nutrition is independent of AI providers and contains no
+        # inferred nutrients. Both tables are additive and owner-scoped.
+        c.execute("""CREATE TABLE IF NOT EXISTS manual_food_meals (
+            id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL,
+            eaten_on DATE NOT NULL, meal_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
+            ON manual_food_meals(chat_id,eaten_on,id)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
+            id BIGSERIAL PRIMARY KEY, meal_id BIGINT NOT NULL
+                REFERENCES manual_food_meals(id) ON DELETE CASCADE,
+            chat_id BIGINT NOT NULL, name TEXT NOT NULL,
+            grams NUMERIC(8,2) NOT NULL CHECK (grams>0 AND grams<=5000),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE INDEX IF NOT EXISTS manual_food_items_owner_meal
+            ON manual_food_items(chat_id,meal_id,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS cardio_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             performed_at TIMESTAMPTZ DEFAULT NOW(),
@@ -1326,8 +1343,50 @@ def next_day_in(c, chat, cycle_id, count):
     return next_slot[0] if next_slot else None
 
 
+def additional_recovery_advice(chat, conn=None):
+    """Conservative, explainable adjustment from real additional sessions.
+
+    No changes to historical data or automatically moved calendar slots.
+    Use the last 36h; volume/intensity are heuristics, not wearable metrics.
+    """
+    if conn is None:
+        with db() as connection:
+            return additional_recovery_advice(chat,connection)
+    c=conn
+    cardio=c.execute("""SELECT minutes,intensity,equipment,activity_label,performed_at
+      FROM cardio_sessions WHERE chat_id=%s
+      AND performed_at>=NOW()-INTERVAL '36 hours'
+      ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
+    manual=c.execute("""SELECT w.id,w.difficulty,COUNT(s.*) FILTER(WHERE s.state='done'),
+        COUNT(DISTINCT i.exercise_key) FILTER(WHERE s.state='done')
+      FROM workouts w LEFT JOIN workout_items i ON i.workout_id=w.id
+      LEFT JOIN workout_sets s ON s.workout_id=i.workout_id AND s.position=i.position
+      WHERE w.chat_id=%s AND w.status='finished' AND w.source='manual'
+        AND w.finished_at>=NOW()-INTERVAL '36 hours'
+      GROUP BY w.id,w.difficulty ORDER BY w.id DESC LIMIT 10""",
+      (chat,)).fetchall()
+    minutes=sum(int(row[0]) for row in cardio)
+    high=sum(int(row[0]) for row in cardio if row[1]=='vigorous')
+    hard_manual=any(difficulty=='hard' or (done or 0)>=10
+        for _,difficulty,done,_ in manual)
+    muscle_groups=sum(int(groups or 0) for _,_,_,groups in manual)
+    if hard_manual or muscle_groups>=4:
+        return ('lighter','Недавно была объёмная дополнительная силовая тренировка. '
+                'Снизим подходы; при усталости выбери отдых или перенеси ближайшее занятие.')
+    if high>=30 or minutes>=80 or any(
+        int(row[0])>=45 and (row[1]=='vigorous' or row[2]=='Бег')
+        for row in cardio):
+        return ('lighter',f'За последние 36 часов записано {minutes} мин дополнительного кардио. '
+                'Снизим подходы; при тяжести в ногах или выраженной усталости '
+                'лучше восстановиться или перенести занятие.')
+    return None
+
+
 def adjustment(chat, day):
     with db() as c:
+        extra=additional_recovery_advice(chat,c)
+        if extra is not None:
+            return extra
         rows = c.execute('''SELECT id,difficulty FROM workouts WHERE chat_id=%s
                             AND plan_day=%s AND status='finished'
                             ORDER BY finished_at DESC,id DESC LIMIT 2''',
@@ -3037,6 +3096,15 @@ def save_onboarding(chat,body):
                     reconcile_existing=True)
                 c.execute('''UPDATE training_cycles SET profile_fingerprint=%s
                     WHERE id=%s AND chat_id=%s''',(fingerprint(current),cycle[0],chat))
+            else:
+                # Create the first four-week schedule in the same transaction
+                # as the validated profile. A failed state refresh must not
+                # leave a saved onboarding with no training cycle.
+                new_cycle=c.execute('''INSERT INTO training_cycles(chat_id,starts_on,profile_fingerprint)
+                    VALUES(%s,%s,%s) RETURNING id''',
+                    (chat,new_today,fingerprint(current))).fetchone()[0]
+                reconcile_schedule_in(c,chat,new_cycle,new_today,current,new_today,
+                    reconcile_existing=True)
 
 
 # Проектные шаблоны документов: до публичного запуска необходимо заполнить
@@ -3146,6 +3214,222 @@ def scheduled_calendar(chat,p,cycle):
           'date_ru':dt.strftime('%d.%m.%Y'),'title':day_title(p,day),
           'status':'done' if count_done>0 else ('past' if dt<today else 'planned')})
     return items
+
+
+
+def food_day(raw):
+    if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
+        raise ValueError('Укажи дату питания')
+    try:
+        value=date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError('Дата питания не распознана') from None
+    if not 2000<=value.year<=2100:
+        raise ValueError('Дата вне допустимого диапазона')
+    return value
+
+
+def food_item(name,grams):
+    if not isinstance(name,str) or not 2<=len(name.strip())<=120:
+        raise ValueError('Название продукта: от 2 до 120 символов')
+    name=' '.join(name.strip().split())
+    try:
+        amount=Decimal(str(grams).replace(',','.'))
+    except (ValueError,TypeError,InvalidOperation):
+        raise ValueError('Проверь граммовку') from None
+    if not amount.is_finite() or not Decimal('0.1')<=amount<=Decimal('5000') or amount.as_tuple().exponent < -2:
+        raise ValueError('Укажи вес от 0,1 до 5000 г, не более двух знаков после запятой')
+    return name,amount
+
+
+def food_parse(body):
+    text=body.get('text')
+    if not isinstance(text,str) or not 2<=len(text.strip())<=2000:
+        raise ValueError('Опиши продукты обычным текстом (до 2000 символов)')
+    parts=[part.strip(' .\t') for part in re.split(r'[,;\n]+',text) if part.strip()]
+    if len(parts)>30:
+        raise ValueError('Максимум 30 продуктов за один ввод')
+    recognized,manual=[],[]
+    pattern=r'(.+?)\s+(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:г|гр|грамм(?:а|ов)?|g)\.?'
+    for part in parts:
+        found=re.fullmatch(pattern,part,re.IGNORECASE)
+        if found:
+            try:
+                name,grams=food_item(found.group(1),found.group(2))
+                recognized.append({'name':name,'grams':float(grams)})
+                continue
+            except ValueError:
+                pass
+        manual.append({'text':part,'reason':'Укажи название и вес в граммах'})
+    return {'items':recognized,'unparsed':manual,'nutrition_source':'not_available'}
+
+
+def food_history(chat,body):
+    day=food_day(body.get('date'))
+    with db() as conn:
+        rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams
+            FROM manual_food_meals m LEFT JOIN manual_food_items i
+              ON i.meal_id=m.id AND i.chat_id=%s
+            WHERE m.chat_id=%s AND m.eaten_on=%s
+            ORDER BY m.id,i.id""",(chat,chat,day)).fetchall()
+    meals={}
+    for mid,meal_type,iid,name,grams in rows:
+        entry=meals.setdefault(mid,{'id':mid,'type':meal_type,'items':[]})
+        if iid is not None:
+            entry['items'].append({'id':iid,'name':name,'grams':float(grams),
+                'kcal':None,'protein':None,'fat':None,'carbs':None})
+    return {'date':day.isoformat(),'meals':list(meals.values()),
+        'nutrients_available':False}
+
+
+def food_add(chat,body):
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    meal_type=body.get('meal_type')
+    if meal_type not in ('breakfast','lunch','dinner','snack'):
+        raise ValueError('Выбери приём пищи')
+    raw=body.get('items')
+    if not isinstance(raw,list) or not 1<=len(raw)<=30:
+        raise ValueError('Добавь от 1 до 30 продуктов')
+    items=[]
+    for row in raw:
+        if not isinstance(row,dict):
+            raise ValueError('Некорректная строка продукта')
+        items.append(food_item(row.get('name'),row.get('grams')))
+    with db() as conn:
+        meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
+            VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
+        for name,grams in items:
+            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+    return food_history(chat,{'date':day.isoformat()})
+
+
+def food_change(chat,body,delete=False):
+    iid=body.get('id')
+    if type(iid) is not int or iid<=0:
+        raise ValueError('Выбери продукт')
+    if not delete:
+        name,grams=food_item(body.get('name'),body.get('grams'))
+    with db() as conn:
+        if delete:
+            changed=conn.execute("""DELETE FROM manual_food_items i
+                USING manual_food_meals m
+                WHERE i.id=%s AND i.chat_id=%s AND m.id=i.meal_id
+                  AND m.chat_id=%s RETURNING m.id,m.eaten_on""",
+                (iid,chat,chat)).fetchone()
+            if changed:
+                conn.execute("""DELETE FROM manual_food_meals m WHERE id=%s
+                    AND chat_id=%s AND NOT EXISTS (
+                    SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
+                    (changed[0],chat))
+        else:
+            changed=conn.execute("""UPDATE manual_food_items i
+                SET name=%s,grams=%s,updated_at=NOW()
+                FROM manual_food_meals m WHERE i.id=%s AND i.chat_id=%s
+                AND m.id=i.meal_id AND m.chat_id=%s
+                RETURNING m.id,m.eaten_on""",
+                (name,grams,iid,chat,chat)).fetchone()
+    if not changed:
+        raise ValueError('Продукт не найден')
+    return food_history(chat,{'date':changed[1].isoformat()})
+
+
+def mini_training_preview(chat, body):
+    """Read-only preview of a saved, owner-scoped calendar slot.
+
+    Never creates a workout, changes scheduling, or marks results complete.
+    Clinical safety restrictions can suppress prescriptions while still showing
+    the date and saved slot.
+    """
+    slot_id=body.get('id')
+    if type(slot_id) is not int or slot_id<=0:
+        raise ValueError('Выбери тренировку в календаре')
+    p=profile(chat)
+    with db() as conn:
+        slot=conn.execute("""SELECT s.id,s.cycle_id,s.week_no,s.day_code,s.planned_date
+            FROM scheduled_sessions s JOIN training_cycles c ON c.id=s.cycle_id
+            WHERE s.id=%s AND s.chat_id=%s AND c.chat_id=%s
+              AND s.schedule_state IS DISTINCT FROM 'retired'""",
+            (slot_id,chat,chat)).fetchone()
+        if not slot:
+            raise ValueError('Тренировка не найдена')
+        sid,cycle,week,day,planned=slot
+        completed=bool(conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s
+            AND cycle_id=%s AND week_no=%s AND plan_day=%s
+            AND source='template' AND status='finished' LIMIT 1""",
+            (chat,cycle,week,day)).fetchone())
+        next_slot=conn.execute("""SELECT s.id FROM scheduled_sessions s
+            WHERE s.chat_id=%s AND s.cycle_id=%s
+              AND s.schedule_state IS DISTINCT FROM 'retired'
+              AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
+                AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
+                AND w.plan_day=s.day_code AND w.source='template'
+                AND w.status='finished')
+            ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
+            (chat,cycle,chat)).fetchone()
+    warning=ready(p,chat)
+    plan=[]
+    if not warning and not completed:
+        adapt,reason=adjustment(chat,day)
+        plan=user_session(chat,p,week,day,adapt=adapt,cycle_id=cycle)
+    else:
+        reason=warning or ''
+    # Suggested load uses only actual completed repetitions/weights by owner;
+    # absence of a comparable completed set means no invented weight.
+    keys=[x[0] for x in plan]
+    weights={}
+    if keys:
+        with db() as conn:
+            rows=conn.execute("""SELECT DISTINCT ON (i.exercise_key)
+              i.exercise_key,s.weight_kg
+              FROM workout_sets s JOIN workout_items i
+                ON i.workout_id=s.workout_id AND i.position=s.position
+              JOIN workouts w ON w.id=s.workout_id
+              WHERE w.chat_id=%s AND w.status='finished' AND s.state='done'
+                AND s.weight_kg IS NOT NULL AND s.weight_kg>0
+                AND i.exercise_key=ANY(%s)
+              ORDER BY i.exercise_key,s.completed_at DESC NULLS LAST,w.id DESC""",
+              (chat,keys)).fetchall()
+        weights={key:float(value) for key,value in rows}
+    def group(key):
+        if key.startswith(('leg_','seated_leg','smith','db_goblet','chair_squat','partial_squat','calf','step')):
+            return 'Ноги'
+        if key.startswith(('lat_','seated_row','cable_row','db_row','machine_row','band_row')):
+            return 'Спина'
+        if key.startswith(('chest_','wall_push','incline_push','db_press','db_floor_press','band_chest')):
+            return 'Грудь и плечи'
+        if key in ('bird','dead_bug','wall_plank','knee_plank','side_plank_knee'):
+            return 'Мышцы корпуса'
+        if 'bridge' in key or key.startswith(('hip_','hinge')):
+            return 'Ягодицы и задняя поверхность бедра'
+        return 'Смешанная нагрузка'
+    exercises=[]
+    for key,sets,lo,hi,unit in plan:
+        name,technique,mistake=EX[key]
+        substitutions=[alt for alt in GYM_SWAPS.get(key,())
+            if alt in EX and exercise_for_equipment(p.get('equipment'),alt)
+            and eligible_exercise(alt,health_profile(chat))]
+        exercises.append({'key':key,'name':name,'sets':sets,'low':lo,'high':hi,
+            'unit':unit,'weight_kg':weights.get(key),
+            'start_position':'Прими устойчивое положение и проверь опору/тренажёр.',
+            'steps':['Подготовь положение и оборудование.',technique,
+                     'Вернись в исходную позицию плавно, без рывка.'],
+            'muscles':group(key),'mistakes':mistake,
+            'substitutions':[{'key':alt,'name':EX[alt][0]} for alt in substitutions],
+            'image_url':None})
+    duration=max(20,min(120,int(p.get('minutes') or 40)))
+    return {'preview':{'id':sid,'week':week,'day':day,
+        'date':planned.isoformat(),'name':day_title(p,day),
+        'finished':completed,'can_start':not warning and not completed and
+          bool(next_slot and next_slot[0]==sid),
+        'warning':warning,'recovery_advice':reason,'duration_minutes':duration,
+        'warmup_minutes':min(7,max(3,duration//10)),
+        'cooldown_minutes':min(5,max(2,duration//12)),
+        'cardio_note':'Кардио указано в упражнениях, если входит в программу.',
+        'exercises':exercises}}
+
 
 
 def metrics(chat):
@@ -3684,7 +3968,13 @@ def mini_state(chat, just_finished=False):
        'monthly':MONTH_PRICES_RUB,'quarter':{'start':1470,'comfort':2970,'max':4170},'trial_days':TRIAL_DAYS}
     if just_finished:
         result['workout'] = {'finished':True}
-    if error is None:
+    # A safety restriction must not erase the calendar or send the owner
+    # back to onboarding. Keep unsafe exercise generation disabled, however.
+    complete = (p.get('age_group')=='adult' and
+        all(p.get(k) for k in ('goal','level','days','equipment','minutes')) and
+        result['agreed'] and h is not None and
+        all(result['metrics'].get(k) for k in ('age','height_cm','weight_kg')))
+    if complete:
         cycle, week = get_cycle(chat,p)
         result['week'] = week
         result['calendar']=scheduled_calendar(chat,p,cycle)
@@ -3702,11 +3992,20 @@ def mini_state(chat, just_finished=False):
         # PostgreSQL connections for every exercise in the library.
         result['library']=[{'key':k,'name':v[0]} for k,v in EX.items()
             if exercise_for_equipment(p.get('equipment'),k) and eligible_exercise(k,h)]
-        result['plan'] = [[{
-                'key':key,'name':EX[key][0], 'sets':n,
-                'low':lo, 'high':hi, 'unit':unit
-            } for key,n,lo,hi,unit in user_session(chat,p,week,day,cycle_id=cycle)]
-            for day in TRAINING_DAYS[:count]]
+        if error is None:
+            adaptation,explanation=adjustment(chat,result['next_day']) if result.get('next_day') else ('normal','')
+            result['recovery_advice']=explanation if adaptation=='lighter' else ''
+            result['plan'] = [[{
+                    'key':key,'name':EX[key][0], 'sets':n,
+                    'low':lo, 'high':hi, 'unit':unit
+                } for key,n,lo,hi,unit in user_session(chat,p,week,day,
+                    adapt=adaptation if day==result.get('next_day') else 'normal',
+                    cycle_id=cycle)]
+                for day in TRAINING_DAYS[:count]]
+        else:
+            # Persist/show the calendar, but never offer potentially unsafe
+            # exercises or a start button without a valid health clearance.
+            result['plan_warning'] = error
     return result
 
 
@@ -4103,8 +4402,8 @@ def analyze_nutrition_report(chat, data_bytes, filename, mime):
     require_tier(chat,'comfort')
     if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
         raise ValueError('Сначала пройди анкету')
-    if not all(ai_state(chat)):
-        raise ValueError('Сначала включи Yandex AI и согласись на передачу данных Яндексу')
+    if not personalization_consent(chat).get('profile'):
+        raise ValueError('Разреши Yandex AI в анкете для анализа выбранного отчёта')
     if not (YANDEX_KEY and FOLDER_ID):
         raise ValueError('Yandex AI временно недоступен')
     # Accept content only by validated type and signature, not by untrusted filename.
@@ -4209,6 +4508,24 @@ def mini_body_weight_report():
     except Exception:
         LOG.exception('Local body-weight report failed')
         return jsonify(ok=False,error='Не удалось прочитать отчёт весов'),500
+
+
+def mini_manual_measurement(chat,body):
+    """Owner-only manual body-weight entry; never overwrites imported sources."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала пройди анкету')
+    day=food_day(body.get('date'))
+    value=onboarding_number(body.get('weight_kg'),'массу тела',20,400)
+    tz=metrics(chat).get('timezone') or 'Europe/Moscow'
+    local_noon=datetime(day.year,day.month,day.day,12,0,tzinfo=ZoneInfo(tz))
+    measured_at=local_noon.astimezone(timezone.utc)
+    with db() as conn:
+        conn.execute("""INSERT INTO body_measurements(chat_id,measured_at,source,weight_kg)
+            VALUES(%s,%s,'manual',%s)
+            ON CONFLICT(chat_id,measured_at,source)
+            DO UPDATE SET weight_kg=EXCLUDED.weight_kg""",
+            (chat,measured_at,value))
+    return {'measurements':mini_body_weight_history(chat)}
 
 
 def mini_body_weight_history(chat):
@@ -4552,8 +4869,22 @@ def mini_api():
             payload = {'ok': True, **mini_history_month(chat, data)}
         elif action == 'progress_series':
             payload = {'ok': True, **mini_progress_series(chat)}
+        elif action == 'training_preview':
+            payload = {'ok': True, **mini_training_preview(chat,data)}
+        elif action == 'food_parse':
+            payload = {'ok': True, **food_parse(data)}
+        elif action == 'food_history':
+            payload = {'ok': True, **food_history(chat,data)}
+        elif action == 'food_add':
+            payload = {'ok': True, **food_add(chat,data)}
+        elif action == 'food_update':
+            payload = {'ok': True, **food_change(chat,data)}
+        elif action == 'food_delete':
+            payload = {'ok': True, **food_change(chat,data,delete=True)}
         elif action == 'body_weight_history':
             payload = {'ok': True, 'measurements':mini_body_weight_history(chat)}
+        elif action == 'body_measurement_manual':
+            payload = {'ok': True, **mini_manual_measurement(chat,data)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
         elif action == 'ai_personalized_guidance':

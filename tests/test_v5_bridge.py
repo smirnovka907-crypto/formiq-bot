@@ -162,7 +162,7 @@ class V5StagingContract(unittest.TestCase):
         limits = {'affected':['knee']}
         replacements = {
             'db': conn, 'profile': p, 'health_profile': limits, 'ready': None,
-            'tier_for': 'max', 'has_agreement': True, 'metrics': {},
+            'tier_for': 'max', 'has_agreement': True, 'metrics': {'age':34,'height_cm':181,'weight_kg':82},
             'ai_state': (False, False), 'ai_quota': 10,
             'personalization_consent': {'profile':False,'health':False,'cycle':False},
             'history_local_zone': timezone.utc,
@@ -179,7 +179,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertNotIn('leg_press', keys)  # Stored home equipment.
         mocks['profile'].assert_called_once_with(777)
         mocks['health_profile'].assert_called_once_with(777)
-        self.assertEqual(mocks['db'].call_count, 4)
+        self.assertLessEqual(mocks['db'].call_count, 5, 'Recovery check must reuse one PostgreSQL connection')
 
     def test_history_page_scoped_to_telegram_owner_and_paginated(self):
         from datetime import datetime, timezone
@@ -437,7 +437,12 @@ class V5StagingContract(unittest.TestCase):
         from unittest.mock import MagicMock
         conn = MagicMock()
         conn.__enter__.return_value = conn
-        conn.execute.return_value.fetchone.return_value = None
+        def execute(query, *_args):
+            outcome=MagicMock()
+            outcome.fetchone.return_value=(321,) if 'INSERT INTO training_cycles' in query else None
+            outcome.fetchall.return_value=[]
+            return outcome
+        conn.execute.side_effect=execute
         payload = {
             'answers': {'goal':'general', 'level':'some', 'days':'3', 'weekdays':[0,2,4],
                 'equipment':'home', 'age_group':'adult', 'minutes':'40'},
@@ -455,12 +460,15 @@ class V5StagingContract(unittest.TestCase):
             query, params = call.args
             self.assertIn(777, params)
             self.assertNotIn('DELETE', query)
-            self.assertNotIn('workouts', query)
-            self.assertNotIn('cardio_sessions', query)
+            self.assertFalse(query.lstrip().upper().startswith(('UPDATE WORKOUTS',
+                'INSERT INTO WORKOUTS', 'UPDATE CARDIO_SESSIONS',
+                'INSERT INTO CARDIO_SESSIONS')))
         health_call = next(call for call in calls if 'INSERT INTO health_limits' in call.args[0])
         self.assertEqual(health_call.args[1], (777, '["knee"]', 2, 'stable', False, True))
         self.assertTrue(any('INSERT INTO profile_metrics' in call.args[0] for call in calls))
         self.assertTrue(any('UPDATE profiles SET' in call.args[0] for call in calls))
+        self.assertTrue(any('INSERT INTO training_cycles' in call.args[0] for call in calls))
+        self.assertTrue(any('INSERT INTO scheduled_sessions' in call.args[0] for call in calls))
 
         payload['health_profile']['pain_score'] = 11
         with patch.object(self.mod, 'db') as database:

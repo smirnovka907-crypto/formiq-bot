@@ -18,6 +18,8 @@ function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
 let onboardOpen=false,onboard=null,onboardErrors={};
+let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
+let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -93,7 +95,7 @@ function onboardForm(){
   '<label class="field"><span>Есть ли заболевания, травмы или ограничения, которые нужно учитывать при тренировках?</span>'+
   '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
   '<p class="input-note">Описание необязательно. При нажатии «Сохранить» оно сохраняется в приватном профиле. При симптомах или травмах уточни допустимую нагрузку у специалиста.</p>'+
-  (String(d.description).trim()?button('Разобрать описание','onboard-ai'):'')+
+  (String(d.description).trim()?button('Уточнить с Yandex AI','onboard-ai'):'')+
   (d.aiResult?'<div class="fq-ai-result">'+
    (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
      '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
@@ -108,7 +110,7 @@ function onboardForm(){
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?femaleCalendar():'';
- const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
+ const connections=''; // Inactive integrations are not displayed in the app.
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
   (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
 }
@@ -124,8 +126,8 @@ function onboardingPayload(){
   else mm[key]=value;
  }
  const description=String(d.description||'').trim();
- if(d.aiResult?.needs_clarification)errs.clarification='Ответь на уточняющий вопрос Yandex AI перед сохранением анкеты.';
- else if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI перед сохранением.';
+ // An unreviewed Yandex AI analysis is optional; its structured fields are
+ // applied only after confirmation. Saving can proceed with conservative limits.
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
@@ -136,8 +138,19 @@ function onboardingPayload(){
  // professional or a separately authorized + confirmed AI analysis is available.
  const previousAreas=Array.isArray(prior.affected)?prior.affected:[];
  const noteChanged=!!description&&description!==(state?.health_description||'');
+ // Literal body-region mentions only; this is not a clinical interpretation.
+ // Unknown/high-risk texts remain conservatively blocked until clarified.
+ const regions=[
+  ['knee',/колен|коленк|надколенн/iu],['back',/поясниц|спин|позвоночн/iu],
+  ['shoulder',/плеч|лопатк/iu],['ankle',/голеностоп|лодыжк|стоп[аыуе]/iu],
+  ['hip',/тазобедрен|бедр|тазов/iu],['wrist',/запяст|кист[ьи]/iu],
+  ['neck',/ше[еяюй]|шейн/iu],['heart',/сердц|кардио/iu],
+  ['breathing',/дыхани|астм|одышк/iu]];
+ const located=regions.filter(([_,regex])=>regex.test(description)).map(([key])=>key);
+ const unclear=/перелом|операци|обморок|потер[яию]|боль.{0,12}груд|груд.{0,12}боль|сильн.{0,12}боль|онколог|инфаркт|инсульт|неизвестн/iu.test(description);
+ const inferred=located.length&&!unclear?located:['other'];
  const affected=reviewed?d.areas:
-  (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
+  (noteChanged?[...new Set([...previousAreas,...inferred])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=deviceZone();
@@ -323,7 +336,7 @@ function workout(){
      '<div class="metric"><span>Выполняй упражнение по плану</span></div>')+
    input(c.unit==='reps'?'Повторений':'Время','reps','number','min="1" max="300" inputmode="numeric"')+
    '</div><p class="input-note" style="margin:13px 0 0">Отдых после подхода: '+esc(c.rest_seconds||0)+' сек. При боли прекрати упражнение.</p>'+
-   '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div></section>';
+   '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div>'+button('Техника упражнения','exercise-live')+'</section>';
  }
  const exercises=Array.isArray(w.exercises)?w.exercises:[];
  const overview=exercises.length?'<section class="surface soft workout-plan-list">'+
@@ -351,7 +364,9 @@ function training(){
  const trainingCard='<section class="surface"><div class="heading-row"><span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span></div>'+
   '<div class="heading-row"><h2>'+esc(title)+'</h2></div>'+
   '<p class="subtitle">'+esc(next?.date_ru||'Дата уточняется по плану')+'</p><div class="divider"></div>'+
-  (exercises||'<p class="empty">План упражнений пока не сформирован.</p>')+
+  (state.plan_warning?'<p class="fq-form-error" role="alert">'+esc(state.plan_warning)+'</p>':'')+
+  (state.recovery_advice?'<p class="input-note" role="status">'+esc(state.recovery_advice)+'</p>':'')+
+  (exercises||'<p class="empty">'+(state.plan_warning?'Упражнения станут доступны после уточнения безопасной нагрузки.':'План упражнений пока не сформирован.')+'</p>')+
   (items.length?'<div class="workout-cta">'+button('Начать тренировку','mood',true)+'</div>':'')+
   '</section>';
  const selected=cardioType||'Выбрать упражнение';
@@ -379,7 +394,7 @@ function training(){
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard;
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard();
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -480,9 +495,9 @@ function trainingPlanCard(){
   const toggle='<button type="button" class="'+(week===i?'on':'')+'" data-cmd="week" data-week="'+i+'" aria-label="'+esc(periodLabel(i))+'" aria-expanded="'+(week===i)+'">'+
    '<span><span class="week-range">'+esc(periodShortLabel(i))+'</span><small class="week-meta">'+
    dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
-  const entries=dates.map(r=>'<div class="plan-entry"><span><strong>'+esc(r.title)+'</strong><small>'+
+  const entries=dates.map(r=>'<button type="button" class="plan-entry fq-plan-preview" data-cmd="training-preview" data-id="'+esc(r.id)+'" aria-label="Просмотр: '+esc(r.title)+' '+esc(r.date_ru||prettyDate(r.date))+'"><span><strong>'+esc(r.title)+'</strong><small>'+
     esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
-    '</small></span><span class="plan-chevron" aria-hidden="true">›</span></div>').join('');
+    '</small></span><span class="plan-chevron" aria-hidden="true">›</span></button>').join('');
   return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
    (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
  }).join('');
@@ -543,7 +558,7 @@ async function loadBodyWeight(){
  if(view==='progress'&&!onboardOpen)draw();
 }
 async function uploadBodyWeight(mode){
- if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл Fitdays (CSV, XLSX или XLS).';draw();return}
+ if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл измерений (CSV, XLSX или XLS).';draw();return}
  if(weightFile.size>2000000){weightImportError='Отчёт не должен превышать 2 МБ';draw();return}
  weightImportBusy=true;weightImportError='';draw();
  const fd=new FormData();fd.append('report',weightFile);fd.append('mode',mode);
@@ -589,8 +604,12 @@ function progress(){
   '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong></div>'+
   (lastWeight?'<div class="metric" style="margin-top:10px"><span>Последний импорт: '+esc(showMeasure(lastWeight))+'</span><strong>'+esc(lastWeight.weight_kg)+' кг</strong>'+
    '<span>'+additions+'</span></div>'+weightChart(weightPoints,'Масса тела'):'<p class="input-note">Истории измерений пока нет.</p>')+
+  '<h3 class="section-label">Внести измерение вручную</h3>'+
+  '<div class="fq-food-draft"><label class="field"><span>Дата</span><input type="date" id="manual-weight-date" value="'+esc(localClock().date)+'"></label>'+
+  '<label class="field"><span>Вес, кг</span><input type="number" id="manual-weight-value" min="20" max="400" step="0.1" placeholder="75.5"></label></div>'+
+  button('Сохранить измерение','manual-weight-save')+
   '<h3 class="section-label">Загрузить отчёт умных весов</h3>'+
-  '<p class="input-note">Fitdays и совместимые CSV, XLSX, XLS. Без отправки в Yandex AI и без сохранения исходного файла.</p>'+
+  '<p class="input-note">Совместимые CSV, XLSX, XLS. Без отправки в Yandex AI и без сохранения исходного файла.</p>'+
   '<label class="field"><span>Файл с измерениями</span><input id="weight-report-file" type="file" accept=".csv,.xlsx,.xls"></label>'+
   (weightFile?'<p class="input-note">Выбрано: '+esc(weightFile.name)+'</p>':'')+
   (weightImportError?'<p role="alert" class="fq-form-error">'+esc(weightImportError)+'</p>':'')+
@@ -601,32 +620,118 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+trainingPlanCard()+history();
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+history();
+}
+const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
+async function loadFoodHistory(){
+ if(!foodDate)foodDate=localClock().date;
+ const requested=foodDate;
+ foodLoading=true;draw();
+ try{
+  const result=await request('food_history',{date:requested});
+  if(requested===foodDate){foodHistory=result;foodNotice=''}
+ }catch(ex){if(requested===foodDate)foodNotice=ex.message||'Не удалось загрузить записи'}
+ finally{foodLoading=false;draw()}
+}
+function syncFoodDraft(){
+ const rows=document.querySelectorAll?.('[data-food-draft]')||[];
+ for(const el of rows){
+  const index=Number(el.dataset.foodDraft);
+  if(Number.isInteger(index)&&foodDraft[index])foodDraft[index][el.dataset.field]=el.value;
+ }
 }
 function food(){
- const today='<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПИТАНИЕ</span>'+
-  '<div class="nutrition-today" style="margin-top:15px"><div class="nutrition-ring"><b>—</b><span>ккал</span></div>'+
-  '<div><h3>Нет данных</h3><p>Автоматический дневник пока не подключён. Калории и норму не придумываем.</p></div></div></section>';
- const macros='<section class="surface"><h2 style="font-size:21px;margin:0 0 18px">Белки, жиры, углеводы</h2>'+
-  ['Белки','Жиры','Углеводы'].map(label=>'<div class="macro"><strong>'+label+'</strong><span>— г · нет данных</span></div>').join('')+'</section>';
- const meals='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 10px">Приёмы пищи</h2>'+
-  '<p class="empty">Записей пока нет. Автоматический дневник не подключён.</p></section>';
- const report='<section class="surface"><h2 style="font-size:21px;margin:0 0 10px">Анализ отчёта</h2>'+
-  '<p class="input-note" style="margin:0 0 17px">Выбери настоящий CSV или изображение отчёта. Покажем только то, что есть в отчёте.</p>'+
-  '<label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
-  '<label class="checkbox-line" style="margin-top:15px"><input id="nutrition-consent" type="checkbox">'+
-  '<span>Разрешаю отправить отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>'+
-  '<p class="input-note" style="margin:11px 0">Отдельное согласие на Yandex AI можно изменить в анкете.</p>'+
-  '<p id="nutrition-error" class="fq-live-error" role="alert"></p>'+
-  button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
-  (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
+ if(!foodDate)foodDate=localClock().date;
+ const saved=(foodHistory?.meals||[]);
+ const dateField='<label class="field"><span>Дата дневника</span><input type="date" id="food-date" value="'+esc(foodDate)+'"></label>';
+ const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
+  '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
+  'Сохраняем только введённые продукты и вес. Калории и БЖУ не подставляем без достоверного источника.</p>'+
+  (foodLoading?'<p role="status">Загружаем записи…</p>':'')+
+  dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+'</section>';
+ const cards=saved.map(meal=>'<section class="surface"><div class="heading-row"><h2>'+
+  esc(mealLabels[meal.type]||meal.type)+'</h2><small>'+esc(meal.items.length)+' продуктов</small></div>'+
+  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · КБЖУ нет данных</small></div>'+
+  '<button type="button" class="button-subtle" data-cmd="food-edit" data-id="'+row.id+'">Изменить</button>'+
+  '<button type="button" class="button-subtle" data-cmd="food-delete" data-id="'+row.id+'">Удалить</button></div>').join('')+'</section>').join('');
+ const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
+  '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
+  button('Убрать строку','food-draft-remove',false,'data-index="'+i+'"')+'</div>').join('');
+ const editor='<section class="surface"><h2>Добавить приём пищи</h2>'+
+  '<label class="field"><span>Приём пищи</span><select id="food-meal">'+
+  Object.entries(mealLabels).map(([key,label])=>'<option value="'+key+'"'+(foodMeal===key?' selected':'')+'>'+esc(label)+'</option>').join('')+
+  '</select></label>'+
+  '<label class="field"><span>Продукты и количество</span><textarea id="food-text" rows="3" maxlength="2000" placeholder="Овсянка 70 грамм, творог 5% 200 грамм">'+esc(foodText)+'</textarea></label>'+
+  '<p class="input-note">Для продуктов, которые готовятся, указывайте вес до приготовления. Для готовых продуктов — фактический вес.</p>'+
+  button('Разобрать список','food-parse',true)+
+  (foodUnparsed.length?'<p role="alert" class="input-note">Не распознано: '+esc(foodUnparsed.map(x=>x.text).join('; '))+'. Добавь вручную ниже.</p>':'')+
+  (foodDraft.length?'<h3>Проверь перед сохранением</h3>'+editRows+
+    button('Добавить строку вручную','food-draft-add')+
+    button('Сохранить приём пищи','food-save',true):
+    button('Добавить продукт вручную','food-draft-add'))+
+  '</section>';
+ const reportAllowed=state?.ai_personalization?.profile===true;
+ const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
+  '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
+  (reportAllowed?'<label class="field"><span>Выбранный отчёт</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
+    button('Отправить выбранный отчёт в Yandex AI','nutrition-analyze',true):
+    '<p class="input-note">Для анализа отчёта Yandex AI разрешение можно включить в анкете. Ручной дневник работает без Yandex AI.</p>')+
+  '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
+  (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+report;
 }
 function profile(){return onboardForm();}
+function previewPanel(){
+ const p=trainingPreview;
+ if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
+ if(!p)return '<h2>Просмотр недоступен</h2>';
+ const unit=x=>x.unit==='min'?'мин':x.unit==='sec'?'сек':'повт.';
+ return '<h2>'+esc(p.name)+'</h2><p class="subtitle">'+esc(prettyDate(p.date))+
+  ' · '+esc(p.duration_minutes)+' мин · неделя '+esc(p.week)+'</p>'+
+  '<div class="fq-live-row"><span>Разминка</span><strong>'+esc(p.warmup_minutes)+' мин</strong></div>'+
+  '<div class="fq-live-row"><span>Заминка</span><strong>'+esc(p.cooldown_minutes)+' мин</strong></div>'+
+  '<p class="input-note">'+esc(p.cardio_note||'')+'</p>'+
+  (p.warning?'<p role="alert" class="fq-form-error">'+esc(p.warning)+'</p>':'')+
+  (p.recovery_advice?'<p class="input-note" role="status">'+esc(p.recovery_advice)+'</p>':'')+
+  (p.exercises||[]).map((x,i)=>'<button type="button" data-cmd="exercise-card" data-index="'+i+'" class="fq-preview-exercise"><span class="fq-exercise-fallback" aria-hidden="true">◎</span><span><strong>'+
+   esc(x.name)+'</strong><small>'+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
+   ' '+unit(x)+(x.weight_kg!=null?' · последний рабочий вес '+esc(x.weight_kg)+' кг':' · вес не задан')+
+   '</small></span><span>›</span></button>').join('')+
+  (p.finished?'<p class="input-note">Эта тренировка уже выполнена.</p>':
+    p.can_start?button('Начать тренировку','preview-start',true):
+    '<p class="input-note">Начать можно ближайшую доступную тренировку из расписания.</p>')+
+  button('Закрыть','close');
+}
+function exerciseCardPanel(){
+ const x=exerciseDetails;
+ if(!x)return '';
+ return '<h2>'+esc(x.name)+'</h2>'+
+  '<div class="fq-exercise-illustration" role="img" aria-label="Иллюстрация пока недоступна">Иллюстрация техники появится после проверки прав</div>'+
+  '<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>'+
+  '<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>'+
+  '<h3>Техника выполнения</h3><ol>'+x.steps.map(step=>'<li>'+esc(step)+'</li>').join('')+'</ol>'+
+  '<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>'+
+  '<h3>Безопасные замены</h3><p>'+esc(x.substitutions?.map(y=>y.name).join(', ')||'Подбираются с учётом ограничений')+'</p>'+
+  '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
+  (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
+  button('Вернуться к тренировке','exercise-back',true);
+}
 function modalHTML(){
  if(!modal)return '';
  let content='';
+ if(modal==='food-edit'&&foodEdit){
+  content='<h2>Изменить продукт</h2>'+
+   '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
+   '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
+   button('Сохранить изменения','food-edit-save',true)+button('Отмена','close');
+ }
+ if(modal==='food-delete'&&foodEdit){
+  content='<h2>Удалить продукт?</h2><p>'+esc(foodEdit.name)+' · '+esc(foodEdit.grams)+' г</p>'+
+   button('Удалить продукт','food-delete-confirm',true)+button('Отмена','close');
+ }
+ if(modal==='training-preview')content=previewPanel();
+ if(modal==='exercise-card')content=exerciseCardPanel();
  if(modal==='feedback')content='<h2>Отзывы и предложения</h2>'+(feedbackError?'<p role="alert" class="fq-form-error">'+esc(feedbackError)+'</p>':'')+
   '<label class="field"><span>Отзыв, ошибка или идея</span><textarea id="feedback-text" rows="5" maxlength="800" placeholder="8–800 символов">'+esc(drafts['feedback-text']||'')+'</textarea></label>'+
   button('Отправить','feedback-send',true)+button('Отмена','close');
@@ -675,10 +780,13 @@ app.addEventListener('input',e=>{
  if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
+ if(e.target.id==='food-text')foodText=e.target.value;
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
+ if(e.target.id==='food-date'){foodDate=e.target.value;foodHistory=null;foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
 });
@@ -697,7 +805,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food')loadFoodHistory();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -763,6 +871,15 @@ app.addEventListener('click',async e=>{
   if(!['goal','equipment','sex'].includes(key))return;
   onboard[key]=value;delete onboardErrors[key];
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
+  draw();return;
+ }
+ if(cmd==='manual-weight-save'){
+  const measured=document.getElementById('manual-weight-date')?.value||localClock().date;
+  const kg=document.getElementById('manual-weight-value')?.value;
+  try{
+   const response=await request('body_measurement_manual',{date:measured,weight_kg:kg});
+   weightHistory=response.measurements||[];weightImportNotice='Ручное измерение сохранено.';error='';
+  }catch(ex){weightImportError=ex.message||'Не удалось сохранить измерение'}
   draw();return;
  }
  if(cmd==='weight-preview'||cmd==='weight-import'){await uploadBodyWeight(cmd==='weight-import'?'import':'preview');return}
@@ -842,11 +959,11 @@ app.addEventListener('click',async e=>{
  if(cmd==='nutrition-analyze'){
   if(nutritionBusy)return;
   const file=document.getElementById('nutrition-file')?.files?.[0];
-  const consent=document.getElementById('nutrition-consent')?.checked===true;
+  const consent=state?.ai_personalization?.profile===true;
   const alert=document.getElementById('nutrition-error');
   if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
   if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
-  if(!consent){if(alert)alert.textContent='Подтверди согласие на отправку выбранного отчёта в Yandex AI.';return}
+  if(!consent){if(alert)alert.textContent='Включи Yandex AI в анкете. Без него ручной дневник доступен.';return}
   nutritionBusy=true;error='';draw();
   const data=new FormData();data.append('report',file);data.append('consent','yes');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
@@ -860,6 +977,89 @@ app.addEventListener('click',async e=>{
    error=ex.name==='AbortError'?'Анализ занимает слишком много времени. Попробуй позже.':ex.message;
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
+ }
+ if(cmd==='food-parse'){
+  foodText=String(document.getElementById('food-text')?.value??foodText).trim();
+  foodMeal=document.getElementById('food-meal')?.value||foodMeal;
+  try{
+   const result=await request('food_parse',{text:foodText});
+   foodDraft=result.items||[];foodUnparsed=result.unparsed||[];
+   foodNotice=foodUnparsed.length?'Проверь строки и дополни нераспознанные продукты вручную.':'Проверь названия и граммовку перед сохранением.';
+   error='';
+  }catch(ex){foodNotice=ex.message||'Не удалось разобрать продукты'}
+  draw();return;
+ }
+ if(cmd==='food-draft-add'){
+  syncFoodDraft();foodDraft.push({name:foodUnparsed.shift()?.text||'',grams:''});draw();return;
+ }
+ if(cmd==='food-draft-remove'){
+  syncFoodDraft();const index=Number(element.dataset.index);
+  if(Number.isInteger(index)&&index>=0&&index<foodDraft.length)foodDraft.splice(index,1);
+  draw();return;
+ }
+ if(cmd==='food-save'){
+  syncFoodDraft();
+  if(!foodDraft.length){fail('Добавь продукт и граммовку');return}
+  try{
+   const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items:foodDraft});
+   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';
+   foodNotice='Приём пищи сохранён в дневнике.';error='';
+  }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
+  draw();return;
+ }
+ if(cmd==='food-edit'||cmd==='food-delete'){
+  const id=Number(element.dataset.id);
+  const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
+  if(!item)return;
+  foodEdit={...item};modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='food-edit-save'){
+  if(!foodEdit)return;
+  try{
+   foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
+   foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
+   const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
+   foodHistory=result;foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
+  }catch(ex){error=ex.message||'Ошибка изменения продукта'}
+  draw();return;
+ }
+ if(cmd==='food-delete-confirm'){
+  if(!foodEdit)return;
+  try{
+   const result=await request('food_delete',{id:foodEdit.id});
+   foodHistory=result;foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';
+  }catch(ex){error=ex.message||'Не удалось удалить продукт'}
+  draw();return;
+ }
+ if(cmd==='training-preview'){
+  const id=Number(element.dataset.id);
+  if(!Number.isSafeInteger(id)||id<=0)return;
+  trainingPreview=null;trainingPreviewBusy=true;modal='training-preview';draw();
+  try{const result=await request('training_preview',{id});trainingPreview=result.preview;error=''}
+  catch(ex){error=ex.message||'Не удалось загрузить тренировку';modal='';}
+  finally{trainingPreviewBusy=false;draw()}return;
+ }
+ if(cmd==='exercise-live'){
+  const c=state?.workout?.current;
+  if(!c)return;
+  exerciseOrigin='live';
+  exerciseDetails={key:c.key,name:c.name,sets:c.set_count,low:c.low,high:c.high,unit:c.unit,
+   weight_kg:null,muscles:'Подробности зависят от движения',
+   start_position:'Проверь устойчивость, положение тела и настройку оборудования.',
+   steps:['Прими исходное положение.',c.tip||'Двигайся плавно и контролируемо.','Вернись к началу движения без рывка.'],
+   mistakes:c.caution||'Не выполняй через боль.',substitutions:[]};
+  modal='exercise-card';draw();return;
+ }
+ if(cmd==='exercise-card'){
+  const index=Number(element.dataset.index);
+  if(!Number.isSafeInteger(index)||index<0)return;
+  exerciseDetails=trainingPreview?.exercises?.[index]||null;
+  if(exerciseDetails){exerciseOrigin='preview';modal='exercise-card';draw()}return;
+ }
+ if(cmd==='exercise-back'){modal=exerciseOrigin==='live'?'':'training-preview';draw();return}
+ if(cmd==='preview-start'){
+  if(!trainingPreview?.can_start)return;
+  modal='mood';draw();return;
  }
  if(cmd==='feedback-open'){feedbackError='';modal='feedback';draw();return}
  if(cmd==='feedback-send'){const msg=String(document.getElementById('feedback-text')?.value||drafts['feedback-text']||'').trim();

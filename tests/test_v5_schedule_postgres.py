@@ -83,6 +83,111 @@ class SchedulePostgresTests(unittest.TestCase):
         cycle, _ = self.m.get_cycle(self.chat, profile)
         return profile, cycle, self.m.scheduled_calendar(self.chat, profile, cycle)
 
+    def test_initial_onboarding_persists_four_weeks_before_first_state_read(self):
+        # The first save must produce a durable calendar even if the next
+        # network request fails; no lazy creation in state/get_cycle required.
+        self.m.save_onboarding(self.chat, self.body())
+        with self.connect() as conn:
+            cycles=conn.execute('''SELECT id,starts_on FROM training_cycles
+                WHERE chat_id=%s''',(self.chat,)).fetchall()
+            self.assertEqual(len(cycles),1)
+            slots=conn.execute('''SELECT week_no,planned_date,schedule_state
+                FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s''',
+                (self.chat,cycles[0][0])).fetchall()
+        self.assertEqual(len(slots),12)
+        self.assertEqual({week for week,_,_ in slots},{1,2,3,4})
+        self.assertTrue(all(status=='auto' for _,_,status in slots))
+
+    def test_health_safety_hold_retains_calendar_but_never_offers_exercises(self):
+        body=self.body()
+        body['health_profile']=dict(affected=['other'],pain_score=0,
+            symptom_course='unspecified',danger_signs=False,activity_cleared=False)
+        self.m.save_onboarding(self.chat,body)
+        result=self.m.mini_state(self.chat)
+        self.assertTrue(result['agreed'])
+        self.assertEqual(len(result['calendar']),12)
+        self.assertEqual(result['plan'],[])
+        self.assertIn('Другое',result['plan_warning'])
+        self.assertIsNotNone(result['cycle_start'])
+
+    def test_manual_food_parse_history_edits_and_owner_isolation(self):
+        parsed=self.m.food_parse({'text':'овсянка 70 грамм, творог 5% 200 грамм, яблоко'})
+        self.assertEqual([(x['name'],x['grams']) for x in parsed['items']],
+                         [('овсянка',70),('творог 5%',200)])
+        self.assertEqual(len(parsed['unparsed']),1)
+        self.m.save_onboarding(self.chat,self.body())
+        data=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':parsed['items']})
+        self.assertEqual(len(data['meals']),1)
+        self.assertEqual(len(data['meals'][0]['items']),2)
+        self.assertIsNone(data['meals'][0]['items'][0]['kcal'])
+        item_id=data['meals'][0]['items'][0]['id']
+        another=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'банан','grams':110}]})
+        self.assertEqual(len(another['meals']),2,'Multiple meals of same type on same day')
+        self.m.food_add(self.chat,{'date':'2026-10-17','meal_type':'dinner',
+            'items':[{'name':'рис сухой','grams':90}]})
+        updated=self.m.food_change(self.chat,{'id':item_id,'name':'овсянка сухая','grams':75})
+        self.assertEqual(updated['meals'][0]['items'][0]['name'],'овсянка сухая')
+        self.assertEqual(updated['meals'][0]['items'][0]['grams'],75)
+        self.assertEqual(self.m.food_history(self.chat+1,{'date':'2026-10-18'})['meals'],[])
+        with self.assertRaises(ValueError):
+            self.m.food_change(self.chat+1,{'id':item_id,'name':'чужой','grams':12})
+        after=self.m.food_change(self.chat,{'id':item_id},delete=True)
+        self.assertEqual(len(after['meals'][0]['items']),1)
+        self.assertEqual(len(self.m.food_history(self.chat,{'date':'2026-10-17'})['meals']),1)
+        with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
+
+    def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
+        p,cycle,calendar=self.save((0,2,4))
+        slot=calendar[0]
+        before=self.snapshot_history()
+        preview=self.m.mini_training_preview(self.chat,{'id':slot['id']})['preview']
+        self.assertEqual(preview['id'],slot['id'])
+        self.assertEqual(preview['week'],slot['week'])
+        self.assertTrue(preview['exercises'])
+        self.assertIsNone(preview['exercises'][0]['weight_kg'])
+        self.assertTrue(preview['can_start'])
+        self.assertEqual(self.snapshot_history(),before)
+        with self.assertRaises(ValueError):
+            self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
+
+    def test_recent_additional_cardio_reduces_future_volume_explainably(self):
+        profile,cycle,calendar=self.save((0,2,4))
+        baseline=self.m.make_session(profile,1,'A',adapt='normal',cycle_id=cycle)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO cardio_sessions(chat_id,minutes,equipment,intensity)
+                VALUES(%s,100,'Бег','vigorous')""",(self.chat,))
+        adapt,reason=self.m.adjustment(self.chat,'A')
+        self.assertEqual(adapt,'lighter')
+        self.assertIn('кардио',reason)
+        lighter=self.m.make_session(profile,1,'A',adapt=adapt,cycle_id=cycle)
+        self.assertLess(sum(x[1] for x in lighter),sum(x[1] for x in baseline))
+        preview=self.m.mini_training_preview(self.chat,{'id':calendar[0]['id']})['preview']
+        self.assertIn('восстановиться',preview['recovery_advice'])
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM workouts WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0,'Preview never starts or completes a workout')
+
+    def test_manual_weight_does_not_replace_imported_measurements(self):
+        self.m.save_onboarding(self.chat,self.body())
+        from datetime import datetime,timezone
+        existing=datetime(2026,10,20,8,tzinfo=timezone.utc)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO body_measurements
+                (chat_id,measured_at,source,weight_kg) VALUES(%s,%s,'fitdays',%s)""",
+                (self.chat,existing,81))
+        self.m.mini_manual_measurement(self.chat,{'date':'2026-10-20','weight_kg':80.5})
+        self.m.mini_manual_measurement(self.chat,{'date':'2026-10-20','weight_kg':80.2})
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT source,weight_kg FROM body_measurements
+                WHERE chat_id=%s ORDER BY source""",(self.chat,)).fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual({source:float(weight) for source,weight in rows},
+                         {'fitdays':81,'manual':80.2})
+        self.assertEqual(self.m.mini_body_weight_history(self.chat+1),[])
+
     def rows(self, cycle):
         with self.connect() as conn:
             return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state

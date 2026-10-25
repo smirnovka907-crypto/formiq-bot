@@ -69,6 +69,23 @@ function createClient(auth=true,shared={}){
     workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
+   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='food_add'){
+    shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
+    response={ok:true,date:p.date,meals:shared.foodMeals,nutrients_available:false};
+   }else if(p.action==='food_update'){
+    for(const meal of shared.foodMeals||[])for(const item of meal.items)if(item.id===p.id){item.name=p.name;item.grams=p.grams}
+    response={ok:true,date:p.date,meals:shared.foodMeals||[]};
+   }else if(p.action==='food_delete'){
+    for(const meal of shared.foodMeals||[])meal.items=meal.items.filter(x=>x.id!==p.id);
+    response={ok:true,date:p.date,meals:shared.foodMeals||[]};
+   }else if(p.action==='training_preview'){
+    response={ok:true,preview:{id:p.id,week:1,day:'A',date:'2026-10-23',name:'Ноги и пресс',
+      duration_minutes:45,warmup_minutes:5,cooldown_minutes:3,cardio_note:'По программе',
+      can_start:true,exercises:[{name:'Жим ногами',key:'leg_press',sets:3,low:10,high:12,unit:'reps',
+      weight_kg:60,muscles:'Ноги',steps:['Настрой тренажёр','Двигай платформу плавно'],
+      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[]}]}};
    }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
    else if(p.action==='body_weight_history')response={ok:true,measurements:[]};
    else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
@@ -231,23 +248,23 @@ async function run(){
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
  await app.click({cmd:'close'});
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
- assert.doesNotMatch(app.root.innerHTML,/Тренировочный план/,'Today no longer contains training plan');
+ assert.match(app.root.innerHTML,/Тренировочный план/,'Workouts contain the four-week plan');
+ assert.ok(app.root.innerHTML.indexOf('id="cardio-entry"')<app.root.innerHTML.indexOf('id="training-plan"'),'Plan follows additional training');
  assert.match(app.root.innerHTML,/Начать тренировку/,'Workout start remains on Today');
  await app.click({nav:'progress'});
  await settle();
  assert.ok(app.requests.some(x=>x.action==='progress_series'),'Progress loads owner-scoped history separately');
  const progressHtml=app.root.innerHTML;
- assert.ok(progressHtml.indexOf('id="training-plan"')<progressHtml.indexOf('id="history-root"'),
-           'Existing plan precedes history in Progress');
+ assert.doesNotMatch(progressHtml,/id="training-plan"/,'Progress shows history, not training plan');
  assert.doesNotMatch(progressHtml,/Garmin Connect|Женский календарь/);
- assert.equal((progressHtml.match(/data-cmd="week" data-week="[1-4]"/g)||[]).length,4,
-              'Progress shows exactly four week buttons');
- assert.match(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Real cycle provides seven-day label');
+ assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
+ assert.doesNotMatch(progressHtml,/19\.10\.2026 — 25\.10\.2026/,'Progress no longer includes plan dates');
+ await app.click({nav:'home'});
  await app.click({cmd:'week',week:'1'});
- assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains genuine owner calendar session');
- assert.match(app.root.innerHTML,/week-details/,'Existing week details open inside Progress');
+ assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains owner calendar session');
+ assert.match(app.root.innerHTML,/data-cmd="training-preview"/,'Every scheduled workout opens read-only preview');
  await app.click({cmd:'week',week:'1'});
- assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button closes the existing detail panel');
+ assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button collapses details');
 
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
@@ -291,23 +308,38 @@ async function run(){
  await app.click({cmd:'detail',id:'8'});
  assert.ok(app.requests.some(x=>x.action==='detail'&&x.id===8));
  assert.match(app.root.innerHTML,/12 повт/);
- await app.click({nav:'food'});
- assert.match(app.root.innerHTML,/nutrition-file/);
- assert.match(app.root.innerHTML,/nutrition-consent/);
- const reportCount=()=>app.requests.filter(x=>x.action==='nutrition-report').length;
- app.fields.set('nutrition-error',{id:'nutrition-error',textContent:''});
- await app.click({cmd:'nutrition-analyze'});
- assert.equal(reportCount(),0,'No file means no API call');
- assert.match(app.fields.get('nutrition-error').textContent,/Выбери/);
- app.fields.set('nutrition-file',{id:'nutrition-file',files:[{name:'report.csv',size:500,type:'text/csv'}]});
- app.fields.set('nutrition-consent',{id:'nutrition-consent',checked:false});
- await app.click({cmd:'nutrition-analyze'});
- assert.equal(reportCount(),0,'No consent means no API call');
- assert.match(app.fields.get('nutrition-error').textContent,/Подтверди согласие/);
- app.fields.get('nutrition-consent').checked=true;
- await app.click({cmd:'nutrition-analyze'});
- assert.equal(reportCount(),1,'One report uploaded with consent');
- assert.match(app.root.innerHTML,/1900 ккал/);
+ await app.click({nav:'food'});await settle();
+ assert.match(app.root.innerHTML,/id="food-text"/,'Manual products can be recorded without Yandex AI');
+ assert.match(app.root.innerHTML,/Для продуктов, которые готовятся/);
+ assert.doesNotMatch(app.root.innerHTML,/nutrition-consent/,'No duplicate Yandex consent in nutrition');
+ assert.doesNotMatch(app.root.innerHTML,/id="nutrition-file"/,'Optional AI upload hidden without stored consent');
+ app.handlers.input({target:{id:'food-text',value:'овсянка 70 грамм, творог 5% 200 грамм'}});
+ await app.click({cmd:'food-parse'});
+ assert.match(app.root.innerHTML,/Проверь перед сохранением/);
+ await app.click({cmd:'food-save'});
+ assert.match(app.root.innerHTML,/овсянка/,'Confirmed meal is visible after save');
+ assert.ok(app.requests.some(x=>x.action==='food_add'&&x.items.length===2),'Real product weights submitted to server');
+ const first=app.requests.find(x=>x.action==='food_add');
+ assert.equal(first.items[0].grams,70);
+ await app.click({cmd:'food-edit',id:'100'});
+ app.fields.set('food-edit-name',{id:'food-edit-name',value:'овсянка сухая'});
+ app.fields.set('food-edit-grams',{id:'food-edit-grams',value:'75'});
+ await app.click({cmd:'food-edit-save'});
+ assert.ok(app.requests.some(x=>x.action==='food_update'&&x.grams==='75'));
+ await app.click({cmd:'food-delete',id:'100'});
+ await app.click({cmd:'food-delete-confirm'});
+ assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
+ const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
+ await settle();await reportClient.click({nav:'food'});await settle();
+ assert.match(reportClient.root.innerHTML,/nutrition-file/);
+ assert.doesNotMatch(reportClient.root.innerHTML,/nutrition-consent/);
+ reportClient.fields.set('nutrition-error',{id:'nutrition-error',textContent:''});
+ await reportClient.click({cmd:'nutrition-analyze'});
+ assert.match(reportClient.fields.get('nutrition-error').textContent,/Выбери/);
+ reportClient.fields.set('nutrition-file',{id:'nutrition-file',files:[{name:'report.csv',size:500,type:'text/csv'}]});
+ await reportClient.click({cmd:'nutrition-analyze'});
+ assert.equal(reportClient.requests.filter(x=>x.action==='nutrition-report').length,1);
+ assert.match(reportClient.root.innerHTML,/1900 ккал/);
  const weighted=createClient(true,{progressSeries:[{
   key:'leg_press',name:'Жим ногами',points:[
    {date:'2026-10-19',weight:55},{date:'2026-10-21',weight:60}
@@ -334,10 +366,10 @@ async function run(){
    await localCalendar.click({nav:'progress'});await localCalendar.click({cmd:'calendar'});
    assert.equal(localCalendar.requests.find(x=>x.action==='history_month').month,expected,'Calendar starts in the saved user timezone');
   }
-  assert.doesNotMatch(ux.root.innerHTML,/Тренировочный план/);
-  await ux.click({nav:'progress'});
   assert.match(ux.root.innerHTML,/Тренировочный план/);
   assert.match(ux.root.innerHTML,/week-range/);
+  await ux.click({nav:'progress'});
+  assert.doesNotMatch(ux.root.innerHTML,/Тренировочный план/);
   await ux.click({nav:'profile'});
   
   assert.equal((ux.root.innerHTML.match(/data-onboard-weekday="[0-6]"/g)||[]).length,7);
@@ -410,13 +442,26 @@ async function run(){
     .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
   assert.match(ai.root.innerHTML,/Применить результат/);
   await ai.click({cmd:'onboard-save'});
-  assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
-  await ai.click({cmd:'onboard-ai-apply'});
-  await ai.click({cmd:'onboard-save'});
-  const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
-  assert.equal(aiSaves.length,1);
-  assert.equal(aiSaves[0].health_profile.pain_score,3);
-  assert.equal(aiSaves[0].timezone_confirmed,true);
+  const optionalSaves=ai.requests.filter(x=>x.action==='onboarding');
+  assert.equal(optionalSaves.length,1,'Unreviewed optional Yandex AI must not block saving');
+  assert.ok(optionalSaves[0].health_profile.affected.includes('knee'),
+    'Explicit knee mention receives conservative region restriction without Yandex AI');
+  assert.equal(optionalSaves[0].timezone_confirmed,true);
+
+  const reviewed=createClient(true,{storage:new Map(),
+    aiPermissions:{profile:true,health:true,cycle:false}});await settle();
+  await reviewed.click({nav:'profile'});
+  await reviewed.click({onboardWeekday:'1'});await reviewed.click({onboardWeekday:'4'});
+  await reviewed.click({onboardPick:'sex',value:'male'});
+  reviewed.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',
+    value:'Беспокоит колено после пробежки'}});
+  await reviewed.click({cmd:'onboard-ai'});
+  await reviewed.click({cmd:'onboard-ai-apply'});
+  await reviewed.click({cmd:'onboard-save'});
+  const reviewedSaves=reviewed.requests.filter(x=>x.action==='onboarding');
+  assert.equal(reviewedSaves.length,1);
+  assert.equal(reviewedSaves[0].health_profile.pain_score,3,
+    'Confirmed Yandex result is used only after explicit acceptance');
    const diary=createClient(true,{trackHistory:true});await settle();
    await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
