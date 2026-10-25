@@ -3490,8 +3490,10 @@ def fatsecret_user_diary(chat,body):
     with db() as conn:
         conn.execute("""UPDATE fatsecret_user_connections SET last_sync_at=NOW()
             WHERE chat_id=%s AND access_token_enc=%s""",(chat,row[0]))
+    if len(normalized['entries'])>150:
+        raise ValueError('Слишком много записей FatSecret за один день')
     entries=[]
-    for value in normalized['entries'][:150]:
+    for value in normalized['entries']:
         entries.append({'external_id':value['external_id'],
             'meal':value['meal'],'name':value['name'],
             'kcal':float(value['calories_kcal']) if value['calories_kcal'] is not None else None,
@@ -4364,6 +4366,7 @@ def mini_state(chat, just_finished=False):
         'tier_demo': not PREMIUM_ENFORCED,
         'tier_name': TIER_LABEL[tier],
         'food_catalog_available': bool(FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET),
+        'fatsecret_diary_configured':fatsecret_user_oauth_ready(),
     }
     with db() as c:
         total, last7, last30 = c.execute('''
