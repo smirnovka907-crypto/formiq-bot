@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import hashlib
 from PIL import Image
 
 
@@ -24,9 +25,16 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
         from welcome_art import welcome_jpeg, avatar_jpeg
         self.assertEqual(welcome_jpeg(), WELCOME_JPEG)
         self.assertEqual(avatar_jpeg(), AVATAR_JPEG)
-        for jpeg in (WELCOME_JPEG, AVATAR_JPEG):
-            with Image.open(io.BytesIO(jpeg)) as pic:
-                self.assertEqual(pic.format, 'JPEG')
+        from approved_assets import AVATAR_PNG, WELCOME_PNG
+        self.assertEqual(WELCOME_JPEG, WELCOME_PNG)
+        self.assertEqual(hashlib.sha256(AVATAR_PNG).hexdigest(),
+                         '690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd')
+        self.assertEqual(hashlib.sha256(WELCOME_PNG).hexdigest(),
+                         '8a485bae6e08b0027a8a9f30a9a578e9990ddceabd0d626e6ba082fa184d9bae')
+        for artwork, format_name in ((AVATAR_PNG,'PNG'),(WELCOME_PNG,'PNG'),
+                                      (AVATAR_JPEG,'JPEG')):
+            with Image.open(io.BytesIO(artwork)) as pic:
+                self.assertEqual(pic.format, format_name)
                 self.assertGreaterEqual(min(pic.size), 200)
         self.assertLess(len(self.m.FORMIQ_BOT_ABOUT), 121)
         self.assertLess(len(self.m.FORMIQ_BOT_DESCRIPTION), 513)
@@ -148,10 +156,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
 
     def test_start_photo_has_the_exact_approved_caption_and_only_two_buttons(self):
         m=self.m
-        expected=('Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. '
-                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом. '
-                  'Веди дневник самостоятельно или доверь персональные рекомендации '
-                  'Yandex AI. FORMIQ — Твоя форма. Наш интеллект.')
+        expected=('Добро пожаловать в FORMIQ!\\n\\n'
+                  'Твоя форма заслуживает умного подхода.\\n\\n'
+                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\\n\\n'
+                  'Веди дневник самостоятельно или доверь Yandex AI создание персонального '
+                  'плана, анализ результатов и адаптацию тренировок.')
         with patch.object(m.BOT,'set_chat_menu_button'), \
              patch.object(m.BOT,'get_chat_menu_button',
                           return_value=SimpleNamespace(type='commands')), \
