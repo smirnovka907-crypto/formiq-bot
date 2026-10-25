@@ -19,6 +19,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null;
+let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -605,25 +606,64 @@ function progress(){
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
   '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+history();
 }
+const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
+async function loadFoodHistory(){
+ if(!foodDate)foodDate=localClock().date;
+ const requested=foodDate;
+ foodLoading=true;draw();
+ try{
+  const result=await request('food_history',{date:requested});
+  if(requested===foodDate){foodHistory=result;foodNotice=''}
+ }catch(ex){if(requested===foodDate)foodNotice=ex.message||'Не удалось загрузить записи'}
+ finally{foodLoading=false;draw()}
+}
+function syncFoodDraft(){
+ const rows=document.querySelectorAll?.('[data-food-draft]')||[];
+ for(const el of rows){
+  const index=Number(el.dataset.foodDraft);
+  if(Number.isInteger(index)&&foodDraft[index])foodDraft[index][el.dataset.field]=el.value;
+ }
+}
 function food(){
- const today='<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПИТАНИЕ</span>'+
-  '<div class="nutrition-today" style="margin-top:15px"><div class="nutrition-ring"><b>—</b><span>ккал</span></div>'+
-  '<div><h3>Нет данных</h3><p>Автоматический дневник пока не подключён. Калории и норму не придумываем.</p></div></div></section>';
- const macros='<section class="surface"><h2 style="font-size:21px;margin:0 0 18px">Белки, жиры, углеводы</h2>'+
-  ['Белки','Жиры','Углеводы'].map(label=>'<div class="macro"><strong>'+label+'</strong><span>— г · нет данных</span></div>').join('')+'</section>';
- const meals='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 10px">Приёмы пищи</h2>'+
-  '<p class="empty">Записей пока нет. Автоматический дневник не подключён.</p></section>';
- const report='<section class="surface"><h2 style="font-size:21px;margin:0 0 10px">Анализ отчёта</h2>'+
-  '<p class="input-note" style="margin:0 0 17px">Выбери настоящий CSV или изображение отчёта. Покажем только то, что есть в отчёте.</p>'+
-  '<label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
-  '<label class="checkbox-line" style="margin-top:15px"><input id="nutrition-consent" type="checkbox">'+
-  '<span>Разрешаю отправить отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>'+
-  '<p class="input-note" style="margin:11px 0">Отдельное согласие на Yandex AI можно изменить в анкете.</p>'+
-  '<p id="nutrition-error" class="fq-live-error" role="alert"></p>'+
-  button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
-  (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
+ if(!foodDate)foodDate=localClock().date;
+ const saved=(foodHistory?.meals||[]);
+ const dateField='<label class="field"><span>Дата дневника</span><input type="date" id="food-date" value="'+esc(foodDate)+'"></label>';
+ const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
+  '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
+  'Сохраняем только введённые продукты и вес. Калории и БЖУ не подставляем без достоверного источника.</p>'+
+  (foodLoading?'<p role="status">Загружаем записи…</p>':'')+
+  dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+'</section>';
+ const cards=saved.map(meal=>'<section class="surface"><div class="heading-row"><h2>'+
+  esc(mealLabels[meal.type]||meal.type)+'</h2><small>'+esc(meal.items.length)+' продуктов</small></div>'+
+  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · КБЖУ нет данных</small></div>'+
+  '<button type="button" class="button-subtle" data-cmd="food-edit" data-id="'+row.id+'">Изменить</button>'+
+  '<button type="button" class="button-subtle" data-cmd="food-delete" data-id="'+row.id+'">Удалить</button></div>').join('')+'</section>').join('');
+ const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
+  '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
+  button('Убрать строку','food-draft-remove',false,'data-index="'+i+'"')+'</div>').join('');
+ const editor='<section class="surface"><h2>Добавить приём пищи</h2>'+
+  '<label class="field"><span>Приём пищи</span><select id="food-meal">'+
+  Object.entries(mealLabels).map(([key,label])=>'<option value="'+key+'"'+(foodMeal===key?' selected':'')+'>'+esc(label)+'</option>').join('')+
+  '</select></label>'+
+  '<label class="field"><span>Продукты и количество</span><textarea id="food-text" rows="3" maxlength="2000" placeholder="Овсянка 70 грамм, творог 5% 200 грамм">'+esc(foodText)+'</textarea></label>'+
+  '<p class="input-note">Для продуктов, которые готовятся, указывайте вес до приготовления. Для готовых продуктов — фактический вес.</p>'+
+  button('Разобрать список','food-parse',true)+
+  (foodUnparsed.length?'<p role="alert" class="input-note">Не распознано: '+esc(foodUnparsed.map(x=>x.text).join('; '))+'. Добавь вручную ниже.</p>':'')+
+  (foodDraft.length?'<h3>Проверь перед сохранением</h3>'+editRows+
+    button('Добавить строку вручную','food-draft-add')+
+    button('Сохранить приём пищи','food-save',true):
+    button('Добавить продукт вручную','food-draft-add'))+
+  '</section>';
+ const reportAllowed=state?.ai_personalization?.profile===true;
+ const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
+  '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
+  (reportAllowed?'<label class="field"><span>Выбранный отчёт</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
+    button('Отправить выбранный отчёт в Yandex AI','nutrition-analyze',true):
+    '<p class="input-note">Для анализа отчёта Yandex AI разрешение можно включить в анкете. Ручной дневник работает без Yandex AI.</p>')+
+  '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
+  (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+report;
 }
 function profile(){return onboardForm();}
 function previewPanel(){
