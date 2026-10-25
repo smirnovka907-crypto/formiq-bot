@@ -6,6 +6,7 @@ on:
       - release/formiq-38.1.2
       - release/formiq-38.1.3
       - main
+      - feature/v7-ai-consent-cycle-coaching-20261025
       - fix/v6-telegram-header-wake-20261025
       - feature/onboarding-v6-fix-20261025
       - fix/v5-native-onboarding-fullscreen-20261023
