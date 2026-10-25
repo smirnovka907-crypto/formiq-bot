@@ -1343,7 +1343,46 @@ def next_day_in(c, chat, cycle_id, count):
     return next_slot[0] if next_slot else None
 
 
+def additional_recovery_advice(chat):
+    """Conservative, explainable adjustment from real additional sessions.
+
+    No changes to historical data or automatically moved calendar slots.
+    Use the last 36h; volume/intensity are heuristics, not wearable metrics.
+    """
+    with db() as c:
+        cardio=c.execute("""SELECT minutes,intensity,equipment,activity_label,performed_at
+          FROM cardio_sessions WHERE chat_id=%s
+          AND performed_at>=NOW()-INTERVAL '36 hours'
+          ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
+        manual=c.execute("""SELECT w.id,w.difficulty,COUNT(s.*) FILTER(WHERE s.state='done'),
+            COUNT(DISTINCT i.exercise_key) FILTER(WHERE s.state='done')
+          FROM workouts w LEFT JOIN workout_items i ON i.workout_id=w.id
+          LEFT JOIN workout_sets s ON s.workout_id=i.workout_id AND s.position=i.position
+          WHERE w.chat_id=%s AND w.status='finished' AND w.source='manual'
+            AND w.finished_at>=NOW()-INTERVAL '36 hours'
+          GROUP BY w.id,w.difficulty ORDER BY w.id DESC LIMIT 10""",
+          (chat,)).fetchall()
+    minutes=sum(int(row[0]) for row in cardio)
+    high=sum(int(row[0]) for row in cardio if row[1]=='vigorous')
+    hard_manual=any(difficulty=='hard' or (done or 0)>=10
+        for _,difficulty,done,_ in manual)
+    muscle_groups=sum(int(groups or 0) for _,_,_,groups in manual)
+    if hard_manual or muscle_groups>=4:
+        return ('lighter','Недавно была объёмная дополнительная силовая тренировка. '
+                'Снизим подходы; при усталости выбери отдых или перенеси ближайшее занятие.')
+    if high>=30 or minutes>=80 or any(
+        int(row[0])>=45 and (row[1]=='vigorous' or row[2]=='Бег')
+        for row in cardio):
+        return ('lighter',f'За последние 36 часов записано {minutes} мин дополнительного кардио. '
+                'Снизим подходы; при тяжести в ногах или выраженной усталости '
+                'лучше восстановиться или перенести занятие.')
+    return None
+
+
 def adjustment(chat, day):
+    extra=additional_recovery_advice(chat)
+    if extra is not None:
+        return extra
     with db() as c:
         rows = c.execute('''SELECT id,difficulty FROM workouts WHERE chat_id=%s
                             AND plan_day=%s AND status='finished'
@@ -3330,7 +3369,10 @@ def mini_training_preview(chat, body):
     warning=ready(p,chat)
     plan=[]
     if not warning and not completed:
-        plan=user_session(chat,p,week,day,cycle_id=cycle)
+        adapt,reason=adjustment(chat,day)
+        plan=user_session(chat,p,week,day,adapt=adapt,cycle_id=cycle)
+    else:
+        reason=warning or ''
     # Suggested load uses only actual completed repetitions/weights by owner;
     # absence of a comparable completed set means no invented weight.
     keys=[x[0] for x in plan]
@@ -3379,7 +3421,7 @@ def mini_training_preview(chat, body):
         'date':planned.isoformat(),'name':day_title(p,day),
         'finished':completed,'can_start':not warning and not completed and
           bool(next_slot and next_slot[0]==sid),
-        'warning':warning,'duration_minutes':duration,
+        'warning':warning,'recovery_advice':reason,'duration_minutes':duration,
         'warmup_minutes':min(7,max(3,duration//10)),
         'cooldown_minutes':min(5,max(2,duration//12)),
         'cardio_note':'Кардио указано в упражнениях, если входит в программу.',
@@ -3948,10 +3990,14 @@ def mini_state(chat, just_finished=False):
         result['library']=[{'key':k,'name':v[0]} for k,v in EX.items()
             if exercise_for_equipment(p.get('equipment'),k) and eligible_exercise(k,h)]
         if error is None:
+            adaptation,explanation=adjustment(chat,result['next_day']) if result.get('next_day') else ('normal','')
+            result['recovery_advice']=explanation if adaptation=='lighter' else ''
             result['plan'] = [[{
                     'key':key,'name':EX[key][0], 'sets':n,
                     'low':lo, 'high':hi, 'unit':unit
-                } for key,n,lo,hi,unit in user_session(chat,p,week,day,cycle_id=cycle)]
+                } for key,n,lo,hi,unit in user_session(chat,p,week,day,
+                    adapt=adaptation if day==result.get('next_day') else 'normal',
+                    cycle_id=cycle)]
                 for day in TRAINING_DAYS[:count]]
         else:
             # Persist/show the calendar, but never offer potentially unsafe
