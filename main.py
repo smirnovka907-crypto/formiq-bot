@@ -71,7 +71,7 @@ QUESTIONS = [
     ('days', 'Сколько тренировок в неделю?', [(f'{n} дн.', str(n)) for n in range(1, 8)]),
     ('equipment', 'Где тренируешься?', [('Дома', 'home'), ('Дома с инвентарём', 'homegear'), ('В зале', 'gym')]),
     ('age_group', 'Тебе исполнилось 18 лет?', [('Да, 18+', 'adult'), ('Нет', 'minor')]),
-    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in range(20, 91, 5)]),
+    ('minutes', 'Сколько минут на занятие?', [(f'{n} минут', str(n)) for n in sorted(set(range(20, 121, 10)) | {45})]),
     ('clearance', 'Есть боль, травмы или ограничения?', [('Нет известных ограничений', 'none'), ('Да', 'yes'), ('Не уверен(а)', 'unsure')])
 ]
 FIELDS = [q[0] for q in QUESTIONS]
@@ -485,6 +485,23 @@ def init_db():
             activity_cleared BOOLEAN NOT NULL DEFAULT FALSE,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )""")
+        # Only additive tables: historic profiles, workouts and schedules remain untouched.
+        c.execute("""CREATE TABLE IF NOT EXISTS profile_health_notes(
+            chat_id BIGINT PRIMARY KEY,
+            description TEXT NOT NULL CHECK(char_length(description)<=800),
+            consented_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE TABLE IF NOT EXISTS menstrual_periods(
+            id BIGSERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            starts_on DATE NOT NULL,
+            ends_on DATE NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK(ends_on>=starts_on),
+            CHECK(ends_on<=starts_on+14),
+            UNIQUE(chat_id,starts_on))""")
+        c.execute("""CREATE INDEX IF NOT EXISTS menstrual_periods_owner_date
+            ON menstrual_periods(chat_id,starts_on DESC)""")
         c.execute("ALTER TABLE workouts ADD COLUMN IF NOT EXISTS manual_title TEXT")
         c.execute("ALTER TABLE workouts ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'template'")
         c.execute('CREATE INDEX IF NOT EXISTS ai_history_idx ON ai_messages(chat_id,id DESC)')
@@ -1321,7 +1338,7 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
     # remain usable by every caller, including callers outside user_session.
     count = max(sessions(p),TRAINING_DAYS.index(day)+1 if day in TRAINING_DAYS else 0)
     goal = p['goal'] if p.get('goal') in ROUTINES[kind] else 'general'
-    mins = max(20, min(90, int(p['minutes'])))
+    mins = max(20, min(120, int(p['minutes'])))
     # 5–7 ACTIVE days are NOT 5–7 intense strength workouts.
     # Recovery sessions are gentle; never force a user to fill all seven days.
     if not custom_keys and count >= 5 and day in 'BDFG':
@@ -1380,7 +1397,7 @@ def make_session(p, week, day, mood='normal', adapt='normal', cycle_id=1, custom
         new_keys.append(selected)
 
     # More time unlocks more exercises/sets rather than just saving the slider.
-    max_exercises = 3 if mins <= 25 else 4 if mins <= 45 else 5 if mins <= 65 else 6
+    max_exercises = 3 if mins <= 25 else 4 if mins <= 45 else 5 if mins <= 65 else 6 if mins < 100 else 7
     if custom_keys:
         max_exercises = min(6, len(new_keys))
     elif len(new_keys) < max_exercises:
@@ -2128,8 +2145,12 @@ def confirm_delete(chat, mid=None):
 
 def delete_all(chat, mid=None):
     with db() as c:
-        for table in ('feedback_items','feedback_drafts','user_agreements','demo_tiers','scheduled_sessions','custom_programs','cardio_sessions','profile_metrics','health_limits','workouts', 'training_cycles', 'pending_inputs', 'premium_access', 'rest_timers', 'profiles',
-                      'ai_messages', 'ai_preferences', 'ai_usage'):
+        for table in ('feedback_items','feedback_drafts','user_agreements','demo_tiers',
+                      'scheduled_sessions','custom_programs','cardio_sessions','profile_metrics',
+                      'health_limits','profile_health_notes','menstrual_periods',
+                      'profile_equipment','workouts','training_cycles','pending_inputs',
+                      'premium_access','rest_timers','profiles','ai_messages',
+                      'ai_preferences','ai_usage'):
             c.execute(f'DELETE FROM {table} WHERE chat_id=%s', (chat,))
     send(chat, 'Локальные данные удалены; сообщения Telegram и внешние копии не затронуты.',
          [('🏠 Меню', 'menu')], mid)
@@ -2574,8 +2595,8 @@ def validate_health(raw):
         raise ValueError('Выбери ограничения из списка')
     score=onboarding_number(raw.get('pain_score'), 'интенсивность боли',0,10,whole=True)
     course=raw.get('symptom_course')
-    if course not in ('none','stable','recent','worsening'):
-        raise ValueError('Укажи, как давно беспокоят симптомы')
+    if course not in ('none','stable','recent','worsening','unspecified'):
+        raise ValueError('Проверь описание ограничений')
     danger=raw.get('danger_signs')
     cleared=raw.get('activity_cleared')
     if type(danger) is not bool or type(cleared) is not bool:
@@ -2597,8 +2618,12 @@ def analyze_health_description(chat, body):
     Never save raw health text; the user reviews fields before saving.
     Failure must never disable the deterministic health safety rules.
     """
+    # Server-side, per-request opt-in: a forged authenticated Mini App
+    # action must not send health notes to Yandex without separate consent.
+    if body.get('ai_consent') is not True:
+        raise ValueError('Для передачи описания в Yandex AI нужно отдельное согласие')
     if body.get('adult') is not True or body.get('privacy_ack') is not True:
-        raise ValueError('Перед анализом подтверди возраст 18+ и согласие на отправку описания в Яндекс ИИ')
+        raise ValueError('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности')
     raw=body.get('text')
     if not isinstance(raw,str) or not 8<=len(raw.strip())<=800:
         raise ValueError('Опиши особенности своими словами (8–800 символов)')
@@ -2704,11 +2729,19 @@ def save_onboarding(chat,body):
     if not isinstance(user_tz,str) or len(user_tz)>64:raise ValueError('Проверь часовой пояс')
     try:ZoneInfo(user_tz)
     except Exception:raise ValueError('Часовой пояс не распознан')
+    selected_weekdays = None
+    if 'weekdays' in vals:
+        if not isinstance(vals['weekdays'],list) or not 1<=len(vals['weekdays'])<=7:
+            raise ValueError('Выбери хотя бы один день тренировок')
+        # Validate first and DERIVE the frequency before validating the
+        # profile fields. A legacy/stale days selector must never prevent a
+        # correct explicit weekday selection from completing onboarding.
+        selected_weekdays = validate_weekdays(vals['weekdays'],len(vals['weekdays']))
+        vals={**vals,'days':str(len(selected_weekdays))}
     allowed_fields=('goal','level','days','equipment','age_group','minutes')
     for field in allowed_fields:
         choices={v for _,v in QUESTIONS[FIELDS.index(field)][2]}
         if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
-    selected_weekdays = validate_weekdays(vals['weekdays'],int(vals['days'])) if 'weekdays' in vals else None
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
     age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
@@ -2716,13 +2749,26 @@ def save_onboarding(chat,body):
     weight=onboarding_number(raw.get('weight_kg'),'вес',25,300)
     hr=onboarding_number(raw.get('resting_hr'),'пульс в покое',35,120,required=False,whole=True)
     sex=raw.get('sex') or None
-    if sex not in (None,'male','female','other'):
-        raise ValueError('Проверь пол')
+    if sex not in ('male','female'):
+        raise ValueError('Выбери пол: Мужской или Женский')
     health=validate_health(body.get('health_profile'))
     equipment_description=body.get('equipment_description','')
     if not isinstance(equipment_description,str) or len(equipment_description)>400:
         raise ValueError('Описание инвентаря: не более 400 символов')
-    equipment_description=equipment_description.strip() if vals['equipment']=='homegear' else ''
+    equipment_description=equipment_description.strip()
+    # Two visible choices, retain legacy homegear storage for home inventory.
+    if vals['equipment']=='home' and equipment_description:
+        vals={**vals,'equipment':'homegear'}
+    if vals['equipment']!='homegear':
+        equipment_description=''
+    raw_note=body.get('health_description','')
+    if not isinstance(raw_note,str) or len(raw_note)>800:
+        raise ValueError('Описание здоровья: не более 800 символов')
+    raw_note=raw_note.strip()
+    if raw_note and body.get('health_storage_consent') is not True:
+        raise ValueError('Подтверди сохранение описания здоровья')
+    # No automatic diagnosis: text alone cannot override existing health limits.
+    # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         previous = profile_in(c,chat)
@@ -2754,7 +2800,8 @@ def save_onboarding(chat,body):
         c.execute('''INSERT INTO profile_metrics(chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone)
             VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
             age=EXCLUDED.age,height_cm=EXCLUDED.height_cm,weight_kg=EXCLUDED.weight_kg,
-            resting_hr=EXCLUDED.resting_hr,sex=EXCLUDED.sex,
+            resting_hr=COALESCE(EXCLUDED.resting_hr,profile_metrics.resting_hr),
+            sex=EXCLUDED.sex,
             timezone=EXCLUDED.timezone,updated_at=NOW()''',
             (chat,age,height,weight,hr,sex,user_tz))
         c.execute('''INSERT INTO health_limits(chat_id,affected,pain_score,symptom_course,
@@ -2765,6 +2812,12 @@ def save_onboarding(chat,body):
             updated_at=NOW()''',
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
+        if raw_note:
+            c.execute("""INSERT INTO profile_health_notes(chat_id,description,consented_at)
+                VALUES(%s,%s,NOW()) ON CONFLICT(chat_id)
+                DO UPDATE SET description=EXCLUDED.description,
+                consented_at=NOW(),updated_at=NOW()""",(chat,raw_note))
+        # Blank optional text does not delete existing sensitive history.
         if selected_weekdays is not None:
             cycle = c.execute('''SELECT id,starts_on,profile_fingerprint FROM training_cycles
                 WHERE chat_id=%s ORDER BY id DESC LIMIT 1''',(chat,)).fetchone()
@@ -2794,8 +2847,8 @@ DOC_TERMS = """<h1>Условия использования FORMIQ</h1>
 
 DOC_PRIVACY = """<h1>Политика конфиденциальности FORMIQ</h1>
 <p><b>Версия 21.10.2026 · проект для тестирования.</b></p>
-<p>Для работы сервиса FORMIQ обрабатывает идентификатор Telegram, ответы анкеты, информацию о тренировках, подходах, рабочих весах, показатели роста, веса, пола, пульса и возраста, добровольно отмеченные ограничения движений, области дискомфорта и интенсивность боли, а также технические события приложения. Добровольные пожелания пользователей обрабатываются для улучшения продукта и группировки повторяющихся идей; обезличенные тексты и псевдонимы могут дополнительно синхронизироваться с закрытой Google Таблицей разработчика.</p>
-<p>Данные дневника хранятся в базе PostgreSQL облачного сервиса Render. При отдельном согласии на ИИ в Yandex AI Studio передаются вопросы, последние сообщения и соответствующая часть тренировочных данных. Если пользователь отдельно выбирает отчёт питания, его содержимое (CSV либо изображение) передаётся мультимодальной или текстовой модели Яндекса для анализа, без сохранения исходного файла в дневнике FORMIQ. Пользователь может отказаться от ИИ и удалить его локальную историю.</p>
+<p>Для работы сервиса FORMIQ обрабатывает идентификатор Telegram, ответы анкеты, информацию о тренировках, подходах, рабочих весах, показатели роста, веса, пола, пульса и возраста, добровольно отмеченные ограничения движений, области дискомфорта и интенсивность боли, отдельно сохранённое по согласию текстовое описание ограничений здоровья, а также технические события приложения. По желанию владелица женского профиля может записывать даты менструаций в необязательный приватный календарь; эти записи хранятся по её идентификатору Telegram и доступны только ей через подписанную авторизацию. Добровольные пожелания пользователей обрабатываются для улучшения продукта и группировки повторяющихся идей; обезличенные тексты и псевдонимы могут дополнительно синхронизироваться с закрытой Google Таблицей разработчика.</p>
+<p>Данные дневника хранятся в базе PostgreSQL облачного сервиса Render. При отдельном согласии на ИИ в Yandex AI Studio передаются вопросы, последние сообщения и соответствующая часть тренировочных данных. Описание здоровья передаётся для структурирования только после отдельного согласия в момент запроса; даты женского календаря не включаются в автоматические запросы к Yandex AI. Если пользователь отдельно выбирает отчёт питания, его содержимое (CSV либо изображение) передаётся мультимодальной или текстовой модели Яндекса для анализа, без сохранения исходного файла в дневнике FORMIQ. Пользователь может отказаться от ИИ и удалить его локальную историю.</p>
 <p>Доступ к данным предоставляется только для предоставления возможностей FORMIQ и необходимых технических операций. Обращения, сроки хранения, меры защиты, место хранения и права субъекта данных должны быть уточнены и опубликованы до публичного запуска.</p>
 <p>При удалении учётной записи записи пожеланий в основной базе удаляются; внешнюю Google Таблицу потребуется очистить отдельно по запросу пользователя. Для реализации прав на доступ, исправление и удаление данных в тестовой версии предусмотрены команды профиля и удаления. <b>До запуска подписок нужно указать юридическое лицо/ИП, адрес и контакт оператора персональных данных.</b></p>"""
 
@@ -3342,6 +3395,10 @@ def mini_state(chat, just_finished=False):
     result['history']=combined[:20]
     result['stats']['cardio7']=cardio
     result['metrics']=metrics(chat)
+    with db() as c:
+        private_note=c.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
+                               (chat,)).fetchone()
+    result['health_description']=private_note[0] if private_note else ''
     result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(result['metrics']))
     result['ai']={'consent':ai_state(chat)[0], 'left':ai_quota(chat)}
     result['prices']={'start':START_PRICE_RUB,'comfort':COMFORT_PRICE_RUB,'max':MAX_PRICE_RUB,
@@ -3389,6 +3446,81 @@ def mini_current(conn, chat):
     w = conn.execute('''SELECT id FROM workouts WHERE chat_id=%s
        AND status='active' ORDER BY id DESC LIMIT 1 FOR UPDATE''', (chat,)).fetchone()
     return w[0] if w else None
+
+
+def period_history(chat):
+    """Only the authenticated owner's optional private period data."""
+    if metrics(chat).get('sex')!='female':
+        raise ValueError('Женский календарь доступен только в женском профиле')
+    with db() as conn:
+        rows=conn.execute("""SELECT id,starts_on,ends_on FROM menstrual_periods
+            WHERE chat_id=%s ORDER BY starts_on DESC LIMIT 60""",(chat,)).fetchall()
+    periods=[{'id':rid,'start':start.isoformat(),'end':end.isoformat()}
+             for rid,start,end in rows]
+    # No predictions without three historical starts and plausible intervals.
+    prediction=None
+    if len(rows)>=3:
+        last=sorted((row[1] for row in rows))[-3:]
+        gaps=[(last[index+1]-last[index]).days for index in range(2)]
+        if all(21<=gap<=35 for gap in gaps) and abs(gaps[1]-gaps[0])<=7:
+            next_on=last[-1]+timedelta(days=round(sum(gaps)/2))
+            today=datetime.now(timezone.utc).date()
+            # A past estimate is NOT a "next" period. A stale history is not
+            # sufficient for a current prediction; never repeatedly project
+            # old averages into an assumed diagnosis or future certainty.
+            if today<=next_on<=today+timedelta(days=70):
+                prediction={'date':next_on.isoformat(),
+                            'note':'Только приблизительная оценка по истории. Не медицинский прогноз.'}
+    return {'periods':periods,'next_period':prediction}
+
+
+def period_save(chat,body):
+    """Store only actual periods, serialize with profile edits, never share with AI."""
+    first,last=body.get('start'),body.get('end')
+    if not isinstance(first,str) or not isinstance(last,str) or len(first)!=10 or len(last)!=10:
+        raise ValueError('Выбери даты начала и окончания')
+    try:
+        start,end=date.fromisoformat(first),date.fromisoformat(last)
+    except ValueError:
+        raise ValueError('Проверь даты календаря') from None
+    if end<start or (end-start).days>14:
+        raise ValueError('Дата окончания должна быть не раньше начала, период до 15 дней')
+    # These are *observed* entries, not predictions. Disallow absurd/future
+    # dates, which also prevents out-of-range forecast arithmetic near year 9999.
+    if start>datetime.now(timezone.utc).date() + timedelta(days=1) or \
+       end>datetime.now(timezone.utc).date() + timedelta(days=1):
+        raise ValueError('Указывай только уже начавшиеся периоды')
+    record=body.get('id')
+    if record is not None and (type(record) is not int or record<1):
+        raise ValueError('Неверная запись календаря')
+    try:
+        with db() as conn:
+            # Onboarding uses the same advisory lock for this identity.
+            # The female access check and write must be atomic relative to
+            # changing profile sex, and two simultaneous writes must serialize.
+            conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+            sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',
+                                 (chat,)).fetchone()
+            if not sex_row or sex_row[0]!='female':
+                raise ValueError('Женский календарь доступен только в женском профиле')
+            overlap=conn.execute("""SELECT EXISTS(
+                SELECT 1 FROM menstrual_periods WHERE chat_id=%s
+                AND starts_on<=%s AND ends_on>=%s
+                AND (%s::bigint IS NULL OR id<>%s::bigint))""",
+                (chat,end,start,record,record)).fetchone()[0]
+            if overlap:
+                raise ValueError('Эти даты пересекаются с уже сохранённым периодом')
+            if record is None:
+                conn.execute("""INSERT INTO menstrual_periods(chat_id,starts_on,ends_on)
+                    VALUES(%s,%s,%s)""",(chat,start,end))
+            else:
+                result=conn.execute("""UPDATE menstrual_periods SET starts_on=%s,ends_on=%s
+                    WHERE chat_id=%s AND id=%s""",(start,end,chat,record))
+                if result.rowcount!=1:
+                    raise ValueError('Запись календаря не найдена')
+    except psycopg.errors.UniqueViolation:
+        raise ValueError('Запись на эту дату уже существует') from None
+    return period_history(chat)
 
 
 def mini_aux(chat,action,body):
@@ -4039,6 +4171,10 @@ def mini_api():
     try:
         if action == 'state':
             payload = {'ok':True, 'data':mini_state(chat)}
+        elif action == 'period_list':
+            payload = {'ok':True, **period_history(chat)}
+        elif action == 'period_save':
+            payload = {'ok':True, **period_save(chat,data)}
         elif action == 'history_page':
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':

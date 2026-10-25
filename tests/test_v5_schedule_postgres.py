@@ -321,7 +321,7 @@ class SchedulePostgresTests(unittest.TestCase):
         _, cycle, _ = self.save()
         before = self.rows(cycle)
         old_profile = self.m.profile(self.chat)
-        for weekdays in ([0, 0, 2], [0, 1], [True, 2, 4], [-1, 2, 4],
+        for weekdays in ([0, 0, 2], [True, 2, 4], [-1, 2, 4],
                          [0, 2, 7], ['0', 2, 4]):
             payload = self.body((0, 2, 4))
             payload['answers']['weekdays'] = weekdays
@@ -592,6 +592,265 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(before_cycles, after_cycles)
         self.assertEqual(self.rows(cycle), original_slots)
         self.assertEqual(self.snapshot_history(), original_history)
+
+
+    def test_extended_120_minute_gym_session_is_not_clamped_to_90(self):
+        profile=dict(goal='general',level='experienced',days='3',
+                     equipment='gym',minutes='90')
+        standard=self.m.make_session(profile,1,'A',cycle_id=1)
+        extended=self.m.make_session({**profile,'minutes':'120'},1,'A',cycle_id=1)
+        self.assertLessEqual(len(standard),6)
+        self.assertGreaterEqual(len(extended),len(standard))
+        self.assertEqual(len(extended),7)
+
+    def test_new_onboarding_uses_weekday_count_and_postgres_roundtrip(self):
+        """Actual authenticated API (identity mocked) -> database -> state/reopen."""
+        data=self.body((0, 2, 4), days=2)
+        data['answers']['minutes']='120'
+        data['answers']['equipment']='home'
+        data['metrics']['sex']='female'
+        data['equipment_description']='гантели, коврик, резинки'
+        data['health_description']=''
+        data['health_storage_consent']=False
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            response=self.m.APP.test_client().post('/mini/api',
+                          json={'action':'onboarding',**data})
+        self.assertEqual(response.status_code,200,response.get_json())
+        state=response.get_json()['data']
+        self.assertEqual(state['metrics']['sex'],'female')
+        self.assertEqual(state['profile_raw']['days'],'3')
+        self.assertEqual(state['profile_raw']['weekdays'],[0,2,4])
+        self.assertEqual(state['profile_raw']['minutes'],'120')
+        self.assertEqual(state['profile_raw']['equipment'],'homegear')
+        self.assertEqual(state['equipment_description'],'гантели, коврик, резинки')
+        self.assertTrue(state['agreed'])
+        self.assertIsNone(state['error'])
+        self.assertEqual(len(state['calendar']),12)
+        # Reopen without creating a duplicate cycle or losing the profile.
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            reloaded=self.m.APP.test_client().post('/mini/api',json={'action':'state'})
+        self.assertEqual(reloaded.status_code,200,reloaded.get_json())
+        self.assertEqual(reloaded.json['data']['profile_raw']['weekdays'],[0,2,4])
+        self.assertEqual(reloaded.json['data']['metrics']['sex'],'female')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM training_cycles WHERE chat_id=%s',
+                                          (self.chat,)).fetchone()[0],1)
+
+    def test_v6_additive_migration_from_existing_v5_rows_is_idempotent(self):
+        """Model a populated V5 schema in disposable PG18, not production."""
+        _, cycle, _ = self.save((0,2,4))
+        tables=('profiles','profile_metrics','health_limits','profile_equipment',
+                'user_agreements','training_cycles','scheduled_sessions')
+        def snapshot():
+            with self.connect() as conn:
+                return {name: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1')
+                                     .format(sql.Identifier(name))).fetchall()
+                        for name in tables}
+        before=snapshot()
+        self.assertTrue(before['profiles'])
+        self.assertTrue(before['training_cycles'])
+        self.assertTrue(before['scheduled_sessions'])
+        # V5 production predates these two V6-only tables. Drop them only
+        # inside this test's uniquely named ephemeral schema.
+        self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
+        with self.connect() as conn:
+            conn.execute('DROP TABLE profile_health_notes')
+            conn.execute('DROP TABLE menstrual_periods')
+        self.m.init_db()
+        self.m.init_db()
+        self.assertEqual(snapshot(),before)
+        with self.connect() as conn:
+            for table in ('profile_health_notes','menstrual_periods'):
+                self.assertIsNotNone(conn.execute(
+                    'SELECT to_regclass(%s)',(table,)).fetchone()[0])
+        self.assertEqual(self.m.get_cycle(self.chat,self.m.profile(self.chat))[0],cycle)
+
+    def test_v6_profile_edit_preserves_legacy_resting_heart_rate(self):
+        """V6 no longer asks for resting HR; an edit must not erase old data."""
+        original=self.body((0,2))
+        self.m.save_onboarding(self.chat,original)
+        with self.connect() as conn:
+            before=conn.execute('SELECT resting_hr FROM profile_metrics WHERE chat_id=%s',
+                                (self.chat,)).fetchone()[0]
+        self.assertEqual(before,60)
+        updated=self.body((0,2,4))
+        updated['metrics'].pop('resting_hr')
+        updated['metrics']['sex']='female'
+        updated['answers']['minutes']='120'
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            response=self.m.APP.test_client().post('/mini/api',
+                json={'action':'onboarding',**updated})
+        self.assertEqual(response.status_code,200,response.get_json())
+        self.assertEqual(response.json['data']['metrics']['resting_hr'],60)
+        self.assertEqual(response.json['data']['metrics']['sex'],'female')
+        self.assertEqual(response.json['data']['profile_raw']['weekdays'],[0,2,4])
+        with self.connect() as conn:
+            persisted=conn.execute('SELECT resting_hr FROM profile_metrics WHERE chat_id=%s',
+                                   (self.chat,)).fetchone()[0]
+        self.assertEqual(persisted,60)
+
+    def test_weekday_selection_ignores_invalid_or_missing_legacy_frequency(self):
+        """Only selected weekdays are authoritative in V6, even if days is stale."""
+        client=self.m.APP.test_client()
+        saved=self.body((0,2,4))
+        saved['answers']['days']='99'  # old UI value must NOT block V6.
+        saved['metrics']['sex']='female'
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            first=client.post('/mini/api',json={'action':'onboarding',**saved})
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.json['data']['profile_raw']['days'],'3')
+        self.assertEqual(first.json['data']['profile_raw']['weekdays'],[0,2,4])
+        first_cycle=self.m.get_cycle(self.chat,self.m.profile(self.chat))[0]
+        # V6 is allowed to omit days entirely; the server derives it.
+        saved['answers'].pop('days')
+        saved['answers']['weekdays']=[1,3]
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            second=client.post('/mini/api',json={'action':'onboarding',**saved})
+        self.assertEqual(second.status_code,200,second.get_json())
+        self.assertEqual(second.json['data']['profile_raw']['days'],'2')
+        self.assertEqual(second.json['data']['profile_raw']['weekdays'],[1,3])
+        self.assertEqual(self.m.get_cycle(self.chat,self.m.profile(self.chat))[0],first_cycle)
+        bad=self.body((0,2))
+        bad['answers']['weekdays']=[1,1]
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            duplicate=client.post('/mini/api',json={'action':'onboarding',**bad})
+        self.assertEqual(duplicate.status_code,400)
+        self.assertEqual(self.m.profile(self.chat)['weekdays'],[1,3])
+
+    def test_health_description_needs_explicit_storage_consent(self):
+        data=self.body((0,2))
+        data['health_description']='Есть травма колена, пока не знаю нагрузку'
+        data['health_storage_consent']=False
+        with self.assertRaisesRegex(ValueError,'Подтверди сохранение'):
+            self.m.save_onboarding(self.chat,data)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM profiles').fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT count(*) FROM profile_health_notes').fetchone()[0],0)
+        data['health_storage_consent']=True
+        self.m.save_onboarding(self.chat,data)
+        self.assertEqual(self.m.mini_state(self.chat)['health_description'],data['health_description'])
+        data['health_description']=''
+        self.m.save_onboarding(self.chat,data)
+        # Editing an unrelated answer must not erase stored sensitive notes.
+        self.assertEqual(self.m.mini_state(self.chat)['health_description'],
+                         'Есть травма колена, пока не знаю нагрузку')
+
+    def test_v6_confirmed_account_deletion_erases_private_records_only_for_owner(self):
+        """Delete user-owned sensitive V6 rows in disposable PG18, not production."""
+        for owner in (self.chat, 999):
+            data=self.body((0,2))
+            data['metrics']['sex']='female'
+            data['answers']['equipment']='home'
+            data['equipment_description']='коврик и резинки'
+            data['health_description']='Индивидуальное ограничение нагрузки'
+            data['health_storage_consent']=True
+            self.m.save_onboarding(owner,data)
+            self.m.period_save(owner,{'start':'2026-10-01','end':'2026-10-05'})
+        with patch.object(self.m,'send') as send:
+            self.m.delete_all(self.chat)
+            send.assert_called_once()
+        with self.connect() as conn:
+            for table in ('profile_health_notes','menstrual_periods',
+                          'profile_equipment','profile_metrics','profiles'):
+                self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                    .format(sql.Identifier(table)),(self.chat,)).fetchone()[0],0,table)
+                self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                    .format(sql.Identifier(table)),(999,)).fetchone()[0],1,table)
+
+    def test_private_female_period_dates_prediction_and_edit(self):
+        # A historical 3-cycle series can estimate a *future* date but must
+        # not continue showing it as "next" after that date has passed.
+        Clock.instant=datetime(2026,8,31,12,tzinfo=timezone.utc)
+        data=self.body((0,2))
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        client=self.m.APP.test_client()
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).json['periods'],[])
+            saved=[]
+            for day in ('2026-07-01','2026-07-29','2026-08-26'):
+                start=date.fromisoformat(day)
+                end=(start+timedelta(days=4)).isoformat()
+                response=client.post('/mini/api',
+                          json={'action':'period_save','start':day,'end':end})
+                self.assertEqual(response.status_code,200,response.get_json())
+                saved.append(response.json['periods'][0])
+            self.assertEqual(response.json['next_period']['date'],'2026-09-23')
+            Clock.instant=datetime(2026,10,19,12,tzinfo=timezone.utc)
+            expired=client.post('/mini/api',json={'action':'period_list'})
+            self.assertIsNone(expired.json['next_period'],
+                'A past estimate cannot be presented as the next period')
+            ident=saved[1]['id']
+            revised=client.post('/mini/api',json={'action':'period_save','id':ident,
+                           'start':'2026-07-30','end':'2026-08-02'})
+            self.assertEqual(revised.status_code,200,revised.get_json())
+            self.assertTrue(any(x['start']=='2026-07-30' for x in revised.json['periods']))
+            invalid=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2026-10-01','end':'2026-09-30'})
+            self.assertEqual(invalid.status_code,400)
+            # A mistaken overlapping date must not alter real private history.
+            before=client.post('/mini/api',json={'action':'period_list'}).json['periods']
+            collision=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2026-07-02','end':'2026-07-04'})
+            self.assertEqual(collision.status_code,400)
+            self.assertIn('пересекаются',collision.json['error'])
+            bad_edit=client.post('/mini/api',json={'action':'period_save',
+                    'id':ident,'start':'2026-07-04','end':'2026-07-07'})
+            self.assertEqual(bad_edit.status_code,400)
+            future=client.post('/mini/api',json={'action':'period_save',
+                    'start':'2099-05-10','end':'2099-05-13'})
+            self.assertEqual(future.status_code,400)
+            self.assertEqual(client.post('/mini/api',
+                             json={'action':'period_list'}).json['periods'],before)
+        # Switching to the male Aluminium profile hides private female data,
+        # but must NOT delete it or allow further calendar writes.
+        data['metrics']['sex']='male'
+        self.m.save_onboarding(self.chat,data)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,400)
+            denied=client.post('/mini/api',json={'action':'period_save',
+                'start':'2026-10-04','end':'2026-10-07'})
+            self.assertEqual(denied.status_code,400)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM menstrual_periods WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],3)
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            restored=client.post('/mini/api',json={'action':'period_list'})
+            self.assertEqual(restored.status_code,200)
+            self.assertEqual(restored.json['periods'],before)
+        # Different Telegram identity cannot read or update another person's entries.
+        self.chat=999
+        other=self.body((0,2));other['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,other)
+        with patch.object(self.m,'mini_auth',return_value=999):
+            listing=client.post('/mini/api',json={'action':'period_list'})
+            self.assertEqual(listing.status_code,200)
+            self.assertEqual(listing.json['periods'],[])
+            stolen=client.post('/mini/api',json={'action':'period_save',
+                'id':ident,'start':'2026-07-01','end':'2026-07-05'})
+            self.assertEqual(stolen.status_code,400)
+        with patch.object(self.m,'mini_auth',return_value=None):
+            self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,401)
+
+    def test_v6_onboarding_frontend_contract(self):
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[1]
+        js=(root/'web'/'v5-live.js').read_text('utf-8')
+        html=(root/'web'/'v5-live.html').read_text('utf-8')
+        self.assertIn("String(count),weekdays:",js)
+        self.assertIn("onboardChoices.minutes",js)
+        self.assertIn("function femaleCalendar()",js)
+        self.assertIn("period_list",js)
+        self.assertIn("body?.classList?.toggle('theme-female'",js)
+        self.assertIn("data-onboard-pick",js)
+        self.assertNotIn("onboardChoice('days'",js)
+        self.assertNotIn('type="range" min="20" max="90"',js)
+        self.assertNotIn("['Не указывать','']",js)
+        self.assertNotIn("window.location.assign('/mini/legacy'",js)
+        self.assertIn("body.theme-female .app",html)
 
 
 if __name__ == '__main__':

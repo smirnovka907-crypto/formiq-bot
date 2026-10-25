@@ -32,7 +32,7 @@ async function run(){
  ].find(p=>fs.existsSync(p));
  assert.ok(chrome,'Chromium/Chrome executable not installed on runner');
  fs.mkdirSync(OUT,{recursive:true});
- let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false;
+ let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false,periodHistory=[];
  const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   if(req.method==='GET'&&req.url==='/approved-reference'){
@@ -69,6 +69,16 @@ async function run(){
     response={ok:true,dates:['2026-10-23']};
    }else if(data.action==='progress_series'){
     response={ok:true,exercises:profileState.finishedWeightHistory||[]};
+   }else if(data.action==='period_list'){
+    assert.equal(profileState.metrics.sex,'female','Female calendar only after consented sex selection');
+    response={ok:true,periods:periodHistory,next_period:null};
+   }else if(data.action==='period_save'){
+    assert.equal(profileState.metrics.sex,'female');
+    if(data.id){
+     const record=periodHistory.find(x=>x.id===data.id);
+     assert.ok(record);record.start=data.start;record.end=data.end;
+    }else periodHistory.unshift({id:periodHistory.length+1,start:data.start,end:data.end});
+    response={ok:true,periods:periodHistory,next_period:null};
    }else if(data.action==='detail'){
     const item=profileState.history.find(x=>x.id===data.id);
     response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
@@ -319,7 +329,7 @@ async function run(){
     'Profile shortcut must not cover editable questionnaire fields');
    await page.locator('[data-onboard-pick="goal"]').first().waitFor();
    assert.equal(await page.locator('a[href="/mini/legacy"]').count(),0,'No 38.2 redirect');
-   assert.equal(await page.locator('input#onboard-duration').count(),1,'Approved duration slider');
+   assert.equal(await page.locator('select[data-onboard="minutes"]').count(),1,'Approved 20–120 minute dropdown');
    assert.equal(await page.locator('[data-onboard-weekday]').count(),7,'Seven weekday controls');
    const weekdayRects=await page.locator('[data-onboard-weekday]').evaluateAll(buttons=>buttons.map(b=>b.getBoundingClientRect().toJSON()));
    assert.ok(weekdayRects.every(r=>r.height>=44),'Weekday controls have accessible touch height');
@@ -327,12 +337,12 @@ async function run(){
    await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').click();
    assert.equal(await page.locator('[data-onboard-pick="goal"][data-value="muscle"]').getAttribute('aria-pressed'),'true');
    const sexButtons=await page.locator('.fq-sex-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
-   assert.equal(sexButtons.length,3,'Optional unspecified sex stays available');
+   assert.equal(sexButtons.length,2,'Exactly two gender choices');
    assert.ok(sexButtons.every(b=>Math.abs(b.top-sexButtons[0].top)<1),'All sex choices align in a single row');
    assert.ok(sexButtons.every(b=>Math.abs(b.width-sexButtons[0].width)<2&&Math.abs(b.height-sexButtons[0].height)<2),
      'All sex choices have symmetric geometry');
    const equipmentButtons=await page.locator('.fq-equipment-options .choice').evaluateAll(els=>els.map(x=>x.getBoundingClientRect().toJSON()));
-   assert.equal(equipmentButtons.length,3,'All supported training locations remain available');
+   assert.equal(equipmentButtons.length,2,'Only home and gym choices');
    assert.ok(equipmentButtons.every(b=>Math.abs(b.top-equipmentButtons[0].top)<1),
      'Training locations do not leave a dangling third button');
    assert.ok(equipmentButtons.every(b=>Math.abs(b.width-equipmentButtons[0].width)<2&&Math.abs(b.height-equipmentButtons[0].height)<2),
@@ -495,9 +505,11 @@ async function run(){
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
   for(const field of ['adult','terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
-  await onboarding.locator('[data-onboard="days"]').selectOption('3');
+  await onboarding.locator('[data-onboard-pick="sex"][data-value="female"]').click();
+  await onboarding.locator('body.theme-female').waitFor();
+  await onboarding.locator('[data-onboard="minutes"]').selectOption('120');
   await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
-  await onboarding.getByRole('alert').filter({hasText:'Выбери конкретные дни тренировок'}).waitFor();
+  await onboarding.getByRole('alert').filter({hasText:'Выбери хотя бы один день недели'}).first().waitFor();
   assert.equal(posts.filter(p=>p.action==='onboarding').length,0,'Legacy/new blank weekdays must not be submitted');
   for(const day of [0,2,4])await onboarding.locator('[data-onboard-weekday="'+day+'"]').click();
   await onboarding.locator('[data-onboard-weekday="0"]').focus();
@@ -508,12 +520,29 @@ async function run(){
   await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
   await onboarding.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
+  assert.equal(posts.find(p=>p.action==='onboarding').answers.days,'3');
+  assert.equal(posts.find(p=>p.action==='onboarding').metrics.sex,'female');
+  assert.equal(posts.find(p=>p.action==='onboarding').answers.minutes,'120');
+  assert.equal(await onboarding.locator('body.theme-female').count(),1,'Pink theme persists after save');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
   await onboarding.getByRole('button',{name:'Профиль',exact:true}).click();
   await onboarding.getByText('Пн, Ср, Пт',{exact:true}).waitFor();
   await onboarding.getByRole('button',{name:'Редактировать анкету',exact:true}).click();
   for(const day of [0,2,4])assert.equal(await onboarding.locator('[data-onboard-weekday="'+day+'"]').getAttribute('aria-pressed'),'true','Saved weekday restored');
   await onboarding.screenshot({path:path.join(OUT,'saved-weekdays.png')});
+  await onboarding.getByRole('button',{name:'Отмена',exact:true}).click();
+  await onboarding.locator('.bottom-nav [data-nav="progress"]').click();
+  await onboarding.getByText('Женский календарь',{exact:true}).waitFor();
+  await onboarding.locator('#period-start').fill('2026-09-01');
+  await onboarding.locator('#period-end').fill('2026-09-05');
+  await onboarding.getByRole('button',{name:'Добавить период'}).click();
+  await onboarding.getByText('01.09.2026 — 05.09.2026',{exact:true}).waitFor();
+  assert.equal(await onboarding.locator('#period-month').inputValue(),'2026-09','Monthly private history selector');
+  await onboarding.getByRole('button',{name:'Изменить',exact:true}).click();
+  await onboarding.locator('#period-end').fill('2026-09-06');
+  await onboarding.getByRole('button',{name:'Сохранить исправление'}).click();
+  await onboarding.getByText('01.09.2026 — 06.09.2026',{exact:true}).waitFor();
+  await onboarding.screenshot({path:path.join(OUT,'female-period-calendar.png')});
   await onboarding.close();
   process.stdout.write('PASS browser: 3 tabs, nested plan, screen layout, fullscreen stub, profile, first launch (2 mobile sizes)\n');
  }finally{

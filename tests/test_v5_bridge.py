@@ -51,6 +51,12 @@ class V5StagingContract(unittest.TestCase):
         self.assertIn("role=\"status\"", js)
         self.assertNotIn("formiq_preview_cardio_v1", js)
 
+    def test_v6_privacy_policy_discloses_private_health_and_period_storage(self):
+        text=self.client.get('/mini/privacy').data.decode('utf-8')
+        self.assertIn('текстовое описание ограничений здоровья',text)
+        self.assertIn('даты менструаций',text)
+        self.assertIn('даты женского календаря не включаются',text)
+
     def test_nutrition_report_requires_telegram_and_explicit_consent(self):
         from unittest.mock import patch
         client = self.mod.APP.test_client()
@@ -107,7 +113,7 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchone.side_effect = [
-            (0, 0, 0), (0,), None, None, (0,), (date(2026, 10, 23),),
+            (0, 0, 0), (0,), None, None, (0,), None, (date(2026, 10, 23),),
         ]
         conn.execute.return_value.fetchall.return_value = []
         p = {'goal':'general', 'level':'some', 'days':'2', 'equipment':'home',
@@ -131,7 +137,7 @@ class V5StagingContract(unittest.TestCase):
         self.assertNotIn('leg_press', keys)  # Stored home equipment.
         mocks['profile'].assert_called_once_with(777)
         mocks['health_profile'].assert_called_once_with(777)
-        self.assertEqual(mocks['db'].call_count, 3)
+        self.assertEqual(mocks['db'].call_count, 4)
 
     def test_history_page_scoped_to_telegram_owner_and_paginated(self):
         from datetime import datetime, timezone
@@ -298,6 +304,31 @@ class V5StagingContract(unittest.TestCase):
                     self.mod.save_metrics(777, {'metrics': metrics})
                 conn.assert_not_called()
 
+    def test_health_ai_requires_explicit_server_side_consent(self):
+        """A signed session alone cannot authorize external health-data transfer."""
+        from urllib.error import URLError
+        import urllib.request
+        client=self.mod.APP.test_client()
+        payload={'action':'health_analyze','adult':True,'privacy_ack':True,
+                 'text':'Болит колено после пробежки в течение месяца'}
+        with patch.object(self.mod,'mini_auth',return_value=777), \
+             patch.object(self.mod,'YANDEX_KEY','test-key'), \
+             patch.object(self.mod,'FOLDER_ID','test-folder'), \
+             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound:
+            for value in (None,False,'yes'):
+                body={**payload}
+                if value is not None:
+                    body['ai_consent']=value
+                rejected=client.post('/mini/api',json=body)
+                self.assertEqual(rejected.status_code,400,rejected.get_json())
+                self.assertIn('отдельное согласие',rejected.json['error'])
+            outbound.assert_not_called()
+            # Explicit opt-in allows the separate AI path to reach the
+            # outbound request, here deliberately intercepted offline.
+            allowed=client.post('/mini/api',json={**payload,'ai_consent':True})
+            self.assertEqual(allowed.status_code,400,allowed.get_json())
+            outbound.assert_called_once()
+
     def test_onboarding_saves_health_and_profile_together_without_touching_history(self):
         from unittest.mock import MagicMock
         conn = MagicMock()
@@ -306,7 +337,7 @@ class V5StagingContract(unittest.TestCase):
         payload = {
             'answers': {'goal':'general', 'level':'some', 'days':'3', 'weekdays':[0,2,4],
                 'equipment':'home', 'age_group':'adult', 'minutes':'40'},
-            'metrics': {'age':34, 'height_cm':181, 'weight_kg':84.5},
+            'metrics': {'age':34, 'height_cm':181, 'weight_kg':84.5, 'sex':'male'},
             'health_profile': {'affected':['knee'], 'pain_score':2,
                 'symptom_course':'stable', 'danger_signs':False,
                 'activity_cleared':True},
