@@ -98,6 +98,25 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual({week for week,_,_ in slots},{1,2,3,4})
         self.assertTrue(all(status=='auto' for _,_,status in slots))
 
+    def test_fourteen_day_onboarding_trial_not_reset_by_profile_edit(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            begun=conn.execute('SELECT trial_started_at FROM premium_access WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0]
+        self.assertIsNotNone(begun)
+        self.assertEqual(self.m.premium_state(self.chat)[0],'trial')
+        self.assertEqual(self.m.tier_for(self.chat),'max')
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            again=conn.execute('SELECT trial_started_at FROM premium_access WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0]
+        self.assertEqual(again,begun,'Editing onboarding must not restart the trial')
+        Clock.instant=begun+timedelta(days=15)
+        self.assertEqual(self.m.premium_state(self.chat)[0],'free')
+        self.assertEqual(self.m.tier_for(self.chat),'start')
+        self.m.select_demo_tier(self.chat,'max')
+        self.assertEqual(self.m.tier_for(self.chat),'max','Explicit demo tier still works')
+
     def test_health_safety_hold_retains_calendar_but_never_offers_exercises(self):
         body=self.body()
         body['health_profile']=dict(affected=['other'],pain_score=0,
