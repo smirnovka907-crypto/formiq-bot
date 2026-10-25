@@ -3524,7 +3524,7 @@ def food_catalog_attach(chat,body):
     if not isinstance(sid,str) or not sid.isdecimal() or len(sid)>20:
         raise ValueError('Неизвестная порция FatSecret')
     with db() as conn:
-        old=conn.execute("""SELECT i.grams,m.eaten_on
+        old=conn.execute("""SELECT i.name,i.grams,m.eaten_on
             FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
             WHERE i.id=%s AND i.chat_id=%s AND m.chat_id=%s""",
             (item_id,chat,chat)).fetchone()
@@ -3541,18 +3541,18 @@ def food_catalog_attach(chat,body):
         raise ValueError('У этой порции нет подтверждённых данных на граммы')
     # The result from FatSecret was normalized by the provider adapter. Numeric
     # values are used solely in this response, never persisted.
-    ratio=Decimal(str(old[0]))/Decimal(str(portion['grams']))
+    ratio=Decimal(str(old[1]))/Decimal(str(portion['grams']))
     nutrients={key:float((Decimal(str(value))*ratio).quantize(Decimal('0.01')))
                for key,value in portion['per_serving'].items()}
     with db() as conn:
         result=conn.execute("""UPDATE manual_food_items SET
             source_food_id=%s,source_serving_id=%s,updated_at=NOW()
-            WHERE id=%s AND chat_id=%s AND grams=%s RETURNING id""",
-            (fid,sid,item_id,chat,old[0])).fetchone()
+            WHERE id=%s AND chat_id=%s AND name=%s AND grams=%s RETURNING id""",
+            (fid,sid,item_id,chat,old[0],old[1])).fetchone()
         if not result:
             raise ValueError('Продукт не найден')
     return {'item_id':item_id,'source':'fatsecret','nutrients':nutrients,
-        'date':old[1].isoformat(),
+        'date':old[2].isoformat(),
         'notice':'Расчёт по выбранной проверенной порции FatSecret. Пищевая ценность не хранится в базе.'}
 
 
