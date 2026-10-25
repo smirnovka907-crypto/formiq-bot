@@ -505,7 +505,7 @@ async function run(){
    await page.getByRole('button',{name:'Закрыть историю'}).click();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    const cardioTypes=page.locator('.cardio-inline [data-cmd="cardio-types"]');
-   assert.equal(await cardioTypes.textContent(),'Выбрать вид кардио','New cardio entries start without a selected type');
+   assert.equal(await cardioTypes.textContent(),'Выбрать упражнение','New additional training starts without a selected type');
    await cardioTypes.click();
    await page.locator('.cardio-inline [data-cmd="cardio-type"][data-type="Велосипед"]').click();
    await page.locator('#cardio-min').fill('60');await page.locator('#cardio-hr').fill('120');
@@ -553,7 +553,7 @@ async function run(){
   await onboarding.locator('[data-onboard="age"]').fill('34');
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
-  for(const field of ['adult','terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
+  for(const field of ['terms','privacy','health']await onboarding.locator('[data-onboard="'+field+'"]').check();
   await onboarding.locator('[data-onboard-pick="sex"][data-value="female"]').click();
   await onboarding.locator('body.theme-female').waitFor();
   await onboarding.locator('[data-onboard="minutes"]').selectOption('120');
@@ -566,7 +566,6 @@ async function run(){
   assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'false');
   await onboarding.keyboard.press('Space');
   assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'true','Keyboard focus survives weekday toggle');
-  await onboarding.locator('[data-onboard="timezoneConfirmed"]').check();
    await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
    await onboarding.waitForFunction(()=>/Доброе утро|Добрый день|Добрый вечер|Доброй ночи/.test(document.querySelector('h1')?.textContent||''));
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
