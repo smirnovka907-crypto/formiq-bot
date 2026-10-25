@@ -62,7 +62,7 @@ function createClient(auth=true,shared={}){
    if(p.action==='state')response={ok:true,data:state()};
    else if(p.action==='start'){
     assert.ok(['normal','tired'].includes(p.mood));
-    workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно'}};
+    workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',current:{name:'Жим ногами',key:'leg_press',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно',steps:['Настрой сиденье','Не блокируй колени'],start_position:'Сядь в тренажёр',muscles:'Бедра и ягодицы',mistakes:'Не блокируй колени',image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/'}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='record'){
@@ -156,7 +156,11 @@ function createClient(auth=true,shared={}){
       duration_minutes:45,warmup_minutes:5,cooldown_minutes:3,cardio_note:'По программе',
       can_start:true,exercises:[{name:'Жим ногами',key:'leg_press',sets:3,low:10,high:12,unit:'reps',
       weight_kg:60,muscles:'Ноги',steps:['Настрой тренажёр','Двигай платформу плавно'],
-      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[]}]}};
+      mistakes:'Не блокируй колени',start_position:'Сядь в тренажёр',substitutions:[],
+      image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/'},
+      {name:'Приседания к стулу',key:'chair_squat',sets:2,low:8,high:10,unit:'reps',
+       weight_kg:null,steps:['Коснись стула','Встань плавно'],start_position:'Встань перед стулом',
+       mistakes:'Не падай на стул',image_url:null,image_credit:null,image_license_url:null,substitutions:[]}]}};
    }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
    else if(p.action==='body_weight_history')response={ok:true,measurements:[]};
    else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
@@ -267,6 +271,11 @@ async function run(){
  assert.match(app.root.innerHTML,/Жим ногами/);
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Active sets retain three approved bottom tabs');
  assert.match(app.root.innerHTML,/id="reps"[^>]*value=""/);
+ await app.click({cmd:'exercise-live'});
+ assert.match(app.root.innerHTML,/fq-exercise-photo/,'Live card has vetted photo');
+ assert.match(app.root.innerHTML,/CC BY-SA 4[.]0/,'Live card credits images');
+ assert.match(app.root.innerHTML,/Не блокируй колени/,'Live card shows real cues');
+ await app.click({cmd:'exercise-back'});
  app.input('reps','12');app.input('weight','60');
  await app.click({nav:'profile'});
  await app.click({nav:'home'});
@@ -354,6 +363,17 @@ async function run(){
  await app.click({cmd:'week',week:'1'});
  assert.match(app.root.innerHTML,/23\.10\.2026/,'Expanded week contains owner calendar session');
  assert.match(app.root.innerHTML,/data-cmd="training-preview"/,'Every scheduled workout opens read-only preview');
+ await app.click({cmd:'training-preview',id:'2'});await settle();
+ await app.click({cmd:'exercise-card',index:'0'});
+ assert.match(app.root.innerHTML,/fq-exercise-photo/,'A matching photo appears in Mini App');
+ assert.match(app.root.innerHTML,/CC BY-SA 4[.]0/,'Source and license visible');
+ assert.match(app.root.innerHTML,/Настрой тренажёр/,'Specific motion cue shown');
+ await app.click({cmd:'exercise-back'});
+ await app.click({cmd:'exercise-card',index:'1'});
+ assert.doesNotMatch(app.root.innerHTML,/<img src=/,'Do not show Smith squat for chair squat');
+ assert.match(app.root.innerHTML,/Подтверждённого изображения/);
+ await app.click({cmd:'exercise-back'});
+ await app.click({cmd:'close'});
  await app.click({cmd:'week',week:'1'});
  assert.doesNotMatch(app.root.innerHTML,/class="week-details"/,'Week button collapses details');
 
