@@ -2028,6 +2028,103 @@ def set_personalization_consent(chat,body):
     return personalization_consent(chat)
 
 
+def ai_personalized_guidance(chat,body):
+    """Real Yandex advice, never direct workout writes or unconsented period export.
+
+    This is optional training/nutrition guidance, not a generated clinical
+    prescription or a fake food diary. The authoritative workout safety checks
+    and server-created exercises still apply to actual workout starts.
+    """
+    purpose=body.get('purpose','training')
+    mood=body.get('mood','normal')
+    if purpose not in ('training','nutrition') or mood not in ('normal','tired','discomfort','severe'):
+        raise ValueError('Некорректный запрос персонализации')
+    if purpose=='training' and mood=='severe':
+        return {'advice':'При сильной боли или выраженной слабости лучше пропустить нагрузку и восстановиться. При выраженных, новых или усиливающихся симптомах обратись к врачу.','used_cycle':False,'used_ai':False}
+    if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
+        raise ValueError('Сначала заполни анкету')
+    consent=personalization_consent(chat)
+    if not consent['profile']:
+        raise ValueError('Разреши персонализацию Yandex AI в анкете')
+    if not YANDEX_KEY or not FOLDER_ID:
+        raise ValueError('Yandex AI сейчас недоступен')
+    p=profile(chat)
+    health=health_profile(chat)
+    if purpose=='training' and health_safety_error(health):
+        raise ValueError('Нагрузка ограничена правилами безопасности. При необходимости обратись к специалисту')
+    # Only bounded facts from this authenticated user's PostgreSQL rows.
+    with db() as conn:
+        count,last=conn.execute("""SELECT COUNT(*),MAX(finished_at)
+            FROM workouts WHERE chat_id=%s AND status='finished'""",(chat,)).fetchone()
+        recent=conn.execute("""SELECT difficulty,readiness FROM workouts
+            WHERE chat_id=%s AND status='finished' ORDER BY finished_at DESC,id DESC LIMIT 1""",
+            (chat,)).fetchone()
+        note=conn.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
+            (chat,)).fetchone() if consent['health'] else None
+        cycle=None
+        if purpose=='training' and consent['cycle']:
+            m=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+            if m and m[0]=='female':
+                cycle=conn.execute("""SELECT starts_on,ends_on FROM menstrual_periods
+                    WHERE chat_id=%s ORDER BY starts_on DESC LIMIT 1""",(chat,)).fetchone()
+    facts={'goal':p.get('goal'),'level':p.get('level'),'place':p.get('equipment'),
+           'minutes':p.get('minutes'),'weekdays':p.get('weekdays'),
+           'completed_workouts':count,'last_rating':recent[0] if recent else None,
+           'last_readiness':recent[1] if recent else None,
+           'current_wellbeing':mood if purpose=='training' else None}
+    if consent['health']:
+        facts['health_limits']=health.get('affected',[]) if health else []
+        if note:facts['health_note']=note[0][:600]
+    used_cycle=False
+    if cycle:
+        day=local_today(chat)
+        since=(day-cycle[0]).days
+        if 0<=since<=40:
+            facts['observed_cycle']={'days_since_last_reported_start':since,
+              'currently_in_recorded_period':cycle[0]<=day<=cycle[1]}
+            used_cycle=True
+    # No chat/Telegram ID, dates of birth or precise menstrual dates leave server.
+    system=('Ты FORMIQ, тренер для взрослых. Это данные, добровольно разрешённые '
+            'пользователем. Не ставь диагнозы, не назначай лекарства. '
+            'Не повышай веса автоматически. Тренировка должна соблюдать '
+            'серверные ограничения; не предлагай обходить их. '
+            'Не снижай нагрузку лишь из-за менструальной фазы: ориентируйся '
+            'на самочувствие. При лёгком дискомфорте допускается щадящий вариант '
+            'без боли; при сильной боли или слабости рекомендуй отдых. '
+            'Для питания давай только качественные рекомендации по цели и привычкам, '
+            'не придумывай записей питания, подключений, калорий или анализов. '
+            'Никаких автоматических изменений плана или диагноза. '
+            'Отвечай по-русски до 800 символов, конкретно.')
+    if purpose=='nutrition':
+        system+=' Рекомендация о питании, а не запись в реальном дневнике.'
+    else:
+        system+=' Советы по нагрузке для нынешнего самочувствия.'
+    # Check consent again directly before outbound request, and after.
+    latest=personalization_consent(chat)
+    if not latest['profile'] or (note and not latest['health']) or (used_cycle and not latest['cycle']):
+        raise ValueError('Согласие было отозвано. Повтори запрос')
+    req=urllib.request.Request(AI_URL,data=json.dumps({
+        'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+        'completionOptions':{'stream':False,'temperature':0.2,'maxTokens':'420'},
+        'messages':[{'role':'system','text':system},
+                    {'role':'user','text':json.dumps(facts,ensure_ascii=False,default=str)}]
+    },ensure_ascii=False).encode('utf-8'),
+        headers={'Authorization':'Api-Key '+YANDEX_KEY,'Content-Type':'application/json'},
+        method='POST')
+    try:
+        with urllib.request.urlopen(req,timeout=35) as response:
+            output=json.load(response)
+        answer=output['result']['alternatives'][0]['message']['text'].strip()
+        if not answer:raise ValueError('Empty response')
+    except Exception:
+        LOG.warning('Yandex optional personalization temporarily unavailable')
+        raise ValueError('Не получилось получить совет ИИ. Обычная программа остаётся доступна') from None
+    after=personalization_consent(chat)
+    if not after['profile'] or (note and not after['health']) or (used_cycle and not after['cycle']):
+        raise ValueError('Согласие отозвано во время ответа')
+    return {'advice':answer.replace('**','')[:950],'used_cycle':used_cycle,'used_ai':True}
+
+
 def ai_state(chat):
     with db() as c:
         row = c.execute('SELECT consented_at,enabled,provider FROM ai_preferences WHERE chat_id=%s',
@@ -2117,7 +2214,8 @@ def ai_context(chat):
             ORDER BY id DESC LIMIT 6''', (chat,)).fetchall()
     basic = '; '.join(f'{f}: {LABELS.get((f, p.get(f)), "неизвестно")}'
                       for f in ('goal', 'level', 'days', 'equipment', 'minutes'))
-    lines = [f'Анкета: {basic}', f'Завершено тренировок: {total}, за 30 дней: {month}.']
+    lines = ([f'Анкета: {basic}', f'Завершено тренировок: {total}, за 30 дней: {month}.']
+             if permitted['profile'] else ['Анкетные данные для ИИ отключены пользователем.'])
     hp=health_profile(chat)
     if hp and permitted['profile'] and permitted['health']:
         lines.append('Ограничения движений (со слов пользователя): '+(', '.join(LIMIT_LABELS.get(x,x) for x in hp['affected']) or 'нет')+f"; боль {hp['pain_score']}/10; течение {hp['symptom_course']}.")
@@ -2126,7 +2224,7 @@ def ai_context(chat):
     for dt, name, reps, kg, unit in (sets if permitted['profile'] else []):
         lines.append(f'{dt:%d.%m} {name}: {reps} {"сек" if unit == "sec" else "повт."}, ' +
                      (f'вес {kg} кг.' if kg is not None else 'вес не записан.'))
-    return '\n'.join(lines), list(reversed(turns)), has_agreement(chat) and not health_safety_error(health_profile(chat))
+    return '\n'.join(lines), list(reversed(turns)) if permitted['profile'] else [], has_agreement(chat) and not health_safety_error(health_profile(chat))
 
 
 def call_ai(chat, question):
@@ -4246,6 +4344,10 @@ def mini_api():
             payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'health_analyze':
             payload = {'ok':True, 'analysis':analyze_health_description(chat,data)}
+        elif action == 'ai_personalized_guidance':
+            payload = {'ok':True, **ai_personalized_guidance(chat,data)}
+        elif action == 'ai_personalization_set':
+            payload = {'ok':True, 'consents':set_personalization_consent(chat,data)}
         elif action == 'equipment_analyze':
             payload = {'ok':True, 'equipment':analyze_equipment_description(data)}
         elif action in ('detail','ai_ask','feedback'):
