@@ -3407,17 +3407,20 @@ def mini_history_detail(chat,wid):
     zone = history_local_zone(chat)
     if wid < 0:
         with db() as conn:
-            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment FROM cardio_sessions
+            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal FROM cardio_sessions
                 WHERE id=%s AND chat_id=%s''',(-wid,chat)).fetchone()
         if not cardio:
             raise ValueError('Запись кардио не найдена')
-        dt,minutes,hr,equipment=cardio
-        display_type=CARDIO_LABELS.get(equipment, 'Кардио')
-        items=[{'name':'Вид кардио','key':None,'result':display_type},
+        dt,minutes,hr,equipment,activity_label,met,kcal=cardio
+        display_type=activity_label or CARDIO_LABELS.get(equipment, 'Активность')
+        items=[{'name':'Активность','key':None,'result':display_type},
                {'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
         if hr is not None:
             items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
-        return {'date':history_local_date(dt, zone),'title':display_type,'items':items}
+        if kcal is not None:
+            items.append({'name':'Примерный расход энергии','key':None,
+                          'result':f'≈ {kcal} ккал (MET {met}; не измерение датчика)'})
+        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,'items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
@@ -3459,13 +3462,14 @@ def mini_history_page(chat, body):
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
-        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment FROM ("
+        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
         "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
-        "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment FROM workouts "
+        "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
+        "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
         "WHERE chat_id=%s AND status='finished' " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
-        "NULL::text AS manual_title, minutes, equipment FROM cardio_sessions "
+        "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
         "WHERE chat_id=%s " + filter_c +
         ") AS entries ORDER BY occurred_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -3473,13 +3477,13 @@ def mini_history_page(chat, body):
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
     page = []
-    for ident, timestamp, kind, day, custom, minutes, equipment in rows[:limit]:
+    for ident, timestamp, kind, day, custom, minutes, equipment, activity, kcal in rows[:limit]:
         page.append({
             'id': ident,
             'date': history_local_date(timestamp, zone),
             'type': kind,
             'title': (custom or day_title(p, day)) if kind == 'workout'
-                     else f'{CARDIO_LABELS.get(equipment, "Кардио")} · {minutes} мин',
+                     else cardio_history_title(equipment,minutes,activity,kcal),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
 
@@ -3611,7 +3615,7 @@ def mini_state(chat, just_finished=False):
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
-        cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment FROM cardio_sessions
+        cardio_rows=c.execute('''SELECT id,performed_at,minutes,equipment,activity_label,estimated_kcal FROM cardio_sessions
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     history_zone=history_local_zone(chat)
     combined=[{'id':wid,'date':history_local_date(dt, history_zone),
@@ -3620,8 +3624,8 @@ def mini_state(chat, just_finished=False):
         for wid,day,dt,manual_title in history_rows]
     combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
-        'title':f'{CARDIO_LABELS.get(equipment, "Кардио")} · {mins} мин'}
-        for cid,dt,mins,equipment in cardio_rows)
+        'title':cardio_history_title(equipment,mins,activity,kcal)}
+        for cid,dt,mins,equipment,activity,kcal in cardio_rows)
     combined.sort(key=lambda row:row['sort_at'],reverse=True)
     for entry in combined:
         entry.pop('sort_at')
