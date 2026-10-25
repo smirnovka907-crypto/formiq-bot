@@ -43,10 +43,10 @@ WORKERS = ThreadPoolExecutor(max_workers=1)
 ADMIN_ID = int(os.getenv('FORMIQ_ADMIN_ID', '0') or '0')
 PREMIUM_ENFORCED = os.getenv('FORMIQ_PREMIUM_ENFORCED', '0') == '1'
 TRIAL_DAYS = 14
-START_PRICE_RUB = 490
-COMFORT_PRICE_RUB = 990
-MAX_PRICE_RUB = 1390
-MONTH_PRICES_RUB = {'start':700,'comfort':1300,'max':1900}
+START_PRICE_RUB = 100
+COMFORT_PRICE_RUB = 100
+MAX_PRICE_RUB = 1000
+MONTH_PRICES_RUB = {'start':100,'comfort':100,'max':1000}
 YANDEX_VISION_MODEL = os.getenv('YANDEX_VISION_MODEL','qwen3.6-35b-a3b').strip()
 AI_DAILY_LIMIT = 10
 FEEDBACK_SHEETS_WEBHOOK = os.getenv('FORMIQ_FEEDBACK_SHEETS_WEBHOOK', '').strip()
@@ -593,7 +593,12 @@ def tier_for(chat):
         return 'max' if status in ('trial','premium') else 'start'
     with db() as c:
         row = c.execute('SELECT tier FROM demo_tiers WHERE chat_id=%s',(chat,)).fetchone()
-    return row[0] if row else 'max'
+    if row:
+        return row[0]
+    # The 14-day trial grants full AI access, then defaults to the diary.
+    # Explicit demo selections remain authoritative for owner testing.
+    phase, _ = premium_state(chat)
+    return 'max' if phase in ('trial','premium') else 'start'
 
 
 def require_tier(chat, required):
@@ -3029,6 +3034,9 @@ def save_onboarding(chat,body):
             selected_weekdays = previous.get('weekdays')
             if selected_weekdays is not None:
                 selected_weekdays = validate_weekdays(selected_weekdays,int(vals['days']))
+        # The trial begins with the first successful onboarding transaction.
+        # Re-saving the form never restarts the timer or erases previous data.
+        trial_start_in(c,chat)
         c.execute('INSERT INTO profiles(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
         c.execute('''UPDATE profiles SET goal=%s,level=%s,days=%s,equipment=%s,
             age_group=%s,minutes=%s,clearance=%s,weekdays=%s::jsonb,updated_at=NOW() WHERE chat_id=%s''',
@@ -3977,7 +3985,7 @@ def mini_state(chat, just_finished=False):
     result['zones']=([] if h and any(x in h['affected'] for x in ('heart','breathing')) else heart_zones(result['metrics']))
     result['ai']={'consent':ai_state(chat)[0], 'left':ai_quota(chat)}
     result['prices']={'start':START_PRICE_RUB,'comfort':COMFORT_PRICE_RUB,'max':MAX_PRICE_RUB,
-       'monthly':MONTH_PRICES_RUB,'quarter':{'start':1470,'comfort':2970,'max':4170},'trial_days':TRIAL_DAYS}
+       'monthly':MONTH_PRICES_RUB,'quarter':{},'trial_days':TRIAL_DAYS}
     if just_finished:
         result['workout'] = {'finished':True}
     # A safety restriction must not erase the calendar or send the owner
