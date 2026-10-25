@@ -3369,6 +3369,83 @@ def food_change(chat,body,delete=False):
     return food_history(chat,{'date':changed[1].isoformat()})
 
 
+
+def food_catalog_lookup(chat, body):
+    """Live, user-initiated FatSecret lookup; search results are not stored."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
+        raise ValueError('Справочник FatSecret ещё не подключён')
+    query=body.get('query')
+    if not isinstance(query,str) or not 2<=len(query.strip())<=80:
+        raise ValueError('Напиши название продукта (2–80 символов)')
+    if any(char in query for char in ('@','<','>','\n','\r')):
+        raise ValueError('Ищи продукты только по названию')
+    try:
+        client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+        token=client.get_token()
+        options=client.search(query.strip(),token)
+    except Exception:
+        # Never leak API errors, URLs or provider credentials in the API output.
+        raise ValueError('Поиск FatSecret сейчас недоступен. Продукт можно сохранить вручную') from None
+    return {'candidates':options,'source':'fatsecret',
+        'notice':'КБЖУ основаны на выбранной порции FatSecret, не на приблизительном совпадении названия.'}
+
+
+def food_catalog_attach(chat,body):
+    """Bind ONLY provider IDs after fresh server-side verification.
+
+    FatSecret search and food-get terms allow persistent IDs, not wholesale
+    retention of the food catalogue and its nutrient attributes. Keep user's
+    existing food description and grams, never silently replace their input.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
+        raise ValueError('Справочник FatSecret ещё не подключён')
+    item_id=body.get('id')
+    fid=body.get('food_id')
+    sid=body.get('serving_id')
+    if type(item_id) is not int or item_id<=0:
+        raise ValueError('Выбери продукт из дневника')
+    if not isinstance(fid,str) or not fid.isdecimal() or len(fid)>20:
+        raise ValueError('Неизвестный продукт FatSecret')
+    if not isinstance(sid,str) or not sid.isdecimal() or len(sid)>20:
+        raise ValueError('Неизвестная порция FatSecret')
+    with db() as conn:
+        old=conn.execute("""SELECT i.grams,m.eaten_on
+            FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
+            WHERE i.id=%s AND i.chat_id=%s AND m.chat_id=%s""",
+            (item_id,chat,chat)).fetchone()
+    if not old:
+        raise ValueError('Продукт не найден')
+    try:
+        client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+        token=client.get_token()
+        candidate=client.food_by_id(fid,token)
+    except Exception:
+        raise ValueError('Не удалось проверить порцию FatSecret. Запись дневника не изменена') from None
+    portion=next((p for p in candidate['servings'] if p['serving_id']==sid),None)
+    if not portion or not portion.get('grams') or not portion.get('per_serving'):
+        raise ValueError('У этой порции нет подтверждённых данных на граммы')
+    # The result from FatSecret was normalized by the provider adapter. Numeric
+    # values are used solely in this response, never persisted.
+    ratio=Decimal(str(old[0]))/Decimal(str(portion['grams']))
+    nutrients={key:float((Decimal(str(value))*ratio).quantize(Decimal('0.01')))
+               for key,value in portion['per_serving'].items()}
+    with db() as conn:
+        result=conn.execute("""UPDATE manual_food_items SET
+            source_food_id=%s,source_serving_id=%s,updated_at=NOW()
+            WHERE id=%s AND chat_id=%s RETURNING id""",
+            (fid,sid,item_id,chat)).fetchone()
+        if not result:
+            raise ValueError('Продукт не найден')
+    return {'item_id':item_id,'source':'fatsecret','nutrients':nutrients,
+        'date':old[1].isoformat(),
+        'notice':'Расчёт по выбранной проверенной порции FatSecret. Пищевая ценность не хранится в базе.'}
+
+
+
 def mini_training_preview(chat, body):
     """Read-only preview of a saved, owner-scoped calendar slot.
 
@@ -4908,6 +4985,10 @@ def mini_api():
             payload = {'ok': True, **mini_training_preview(chat,data)}
         elif action == 'food_parse':
             payload = {'ok': True, **food_parse(data)}
+        elif action == 'food_catalog_lookup':
+            payload = {'ok': True, **food_catalog_lookup(chat,data)}
+        elif action == 'food_catalog_attach':
+            payload = {'ok': True, **food_catalog_attach(chat,data)}
         elif action == 'food_history':
             payload = {'ok': True, **food_history(chat,data)}
         elif action == 'food_add':
