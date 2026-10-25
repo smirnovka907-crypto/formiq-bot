@@ -836,7 +836,7 @@ if(token){
   if(typeof tg.onEvent==='function'){
    tg.onEvent('safeAreaChanged',syncTelegramInsets);
    tg.onEvent('contentSafeAreaChanged',syncTelegramInsets);
-   tg.onEvent('fullscreenChanged',syncTelegramInsets);
+   tg.onEvent('fullscreenChanged',()=>{fullscreenRequested=!!tg.isFullscreen;syncTelegramInsets()});
    tg.onEvent('fullscreenFailed',()=>{fullscreenRequested=false;syncTelegramInsets()});
   }
   if(typeof tg.requestFullscreen==='function'&&
