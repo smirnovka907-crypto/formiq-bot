@@ -204,7 +204,11 @@ async function onboardChanged(e){
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
  delete onboardErrors[field];
- if(field==='description'){onboard.aiResult=null;onboard.aiReviewed=false;onboard.clarification=''}
+ if(field==='description'){
+  onboard.aiResult=null;onboard.aiReviewed=false;onboard.clarification='';
+  // Show optional consent controls after the user finishes editing free text.
+  if(e.type==='change')draw();
+ }
  if(field==='aiConsent'&&!target.checked){onboard.aiResult=null;onboard.aiReviewed=false}
  if(field==='equipment'||field==='aiConsent'||field==='profileAiConsent')draw();
 }
