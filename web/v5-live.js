@@ -22,6 +22,7 @@ let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exercise
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
+let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='';
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
@@ -676,6 +677,12 @@ function nutritionLabel(row){
  if(n)return '≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' · Ж '+esc(n.fat_g)+' · У '+esc(n.carbs_g)+' г · FatSecret';
  return row.nutrition_source==='fatsecret'?'FatSecret · КБЖУ по запросу':'КБЖУ нет данных';
 }
+async function loadFatSecretAccount(){
+ if(!state?.fatsecret_diary_configured)return;
+ try{fatsecretAccount=await request('fatsecret_account_status');fatsecretError=''}
+ catch(ex){fatsecretError=ex.message||'Статус FatSecret недоступен'}
+ draw();
+}
 function food(){
  if(!foodDate)foodDate=localClock().date;
  const saved=(foodHistory?.meals||[]);
@@ -720,6 +727,25 @@ function food(){
     button('Сохранить приём пищи','food-save',true):
     button('Добавить продукт вручную','food-draft-add'))+
   '</section>';
+ const fsEntries=fatsecretDaily?.date===foodDate?fatsecretDaily:null;
+ const fsTotals=fsEntries?.totals;
+ const fsSection=state?.fatsecret_diary_configured?'<section class="surface">'+
+  '<h2>Личный дневник FatSecret</h2>'+
+  '<p class="input-note">Записи загружаются из FatSecret и не копируются в ручной дневник.</p>'+
+  (fatsecretAccount?.connected?
+   '<p class="input-note">Аккаунт подключён'+(fatsecretAccount.last_sync_at?' · проверка: '+esc(fatsecretAccount.last_sync_at.slice(0,16).replace('T',' ')):'')+'</p>'+
+   button(fatsecretBusy?'Загружаем…':'Посмотреть день из FatSecret','fatsecret-diary-day',false,fatsecretBusy?'disabled':'')+
+   button('Отключить FatSecret','fatsecret-disconnect-open'):
+   button(fatsecretBusy?'Подключаем…':'Подключить FatSecret','fatsecret-connect',false,fatsecretBusy?'disabled':'')+
+   (fatsecretAuthUrl?'<p><a href="'+esc(fatsecretAuthUrl)+'" rel="noopener noreferrer" target="_blank">Открыть разрешение FatSecret</a></p>':''))+
+  (fatsecretError?'<p role="alert" class="input-note">'+esc(fatsecretError)+'</p>':'')+
+  (fsEntries?
+   (fsTotals?'<p><strong>'+esc(fsTotals.calories_kcal)+' ккал · Б '+esc(fsTotals.protein_g)+
+    ' · Ж '+esc(fsTotals.fat_g)+' · У '+esc(fsTotals.carbs_g)+' г</strong></p>':
+    '<p class="input-note">Полный итог КБЖУ недоступен — не все значения получены.</p>')+
+   (fsEntries.entries||[]).map(e=>'<div class="fq-food-product"><strong>'+esc(e.name)+'</strong>'+
+    '<small>'+esc(mealLabels[e.meal?.toLowerCase()]||e.meal||'')+' · '+(e.kcal==null?'КБЖУ нет данных':esc(e.kcal)+' ккал')+'</small></div>').join(''):'')+
+  '</section>':'';
  const reportAllowed=state?.ai_personalization?.profile===true;
  const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
   '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
@@ -729,7 +755,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+report;
 }
 function profile(){return onboardForm();}
 function previewPanel(){
@@ -793,6 +819,11 @@ function modalHTML(){
    (catalogMessage?'<p role="status" class="input-note">'+esc(catalogMessage)+'</p>':'')+
    cards+button('Вернуться','food-catalog-back');
  }
+ if(modal==='fatsecret-disconnect'){
+  content='<h2>Отключить FatSecret?</h2>'+
+   '<p>Доступ к дневнику будет удалён из FORMIQ. Ручные записи питания останутся.</p>'+
+   button('Отключить','fatsecret-disconnect-confirm')+button('Отмена','close');
+ }
  if(modal==='food-delete'&&foodEdit){
   content='<h2>Удалить продукт?</h2><p>'+esc(foodEdit.name)+' · '+esc(foodEdit.grams)+' г</p>'+
    button('Удалить продукт','food-delete-confirm',true)+button('Отмена','close');
@@ -852,7 +883,7 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
- if(e.target.id==='food-date'){++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-date'){fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
@@ -872,7 +903,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food')loadFoodHistory();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -1086,6 +1117,40 @@ app.addEventListener('click',async e=>{
   const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
   if(!item)return;
   foodEdit={...item};catalogCandidates=[];catalogMessage='';modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='fatsecret-connect'){
+  if(!state?.fatsecret_diary_configured||fatsecretBusy)return;
+  fatsecretBusy=true;fatsecretError='';fatsecretAuthUrl='';draw();
+  try{
+   const r=await request('fatsecret_account_connect'),url=String(r.authorization_url||'');
+   if(!url.startsWith('https://authentication.fatsecret.com/oauth/authorize?'))
+    throw new Error('Некорректная ссылка подключения');
+   fatsecretAuthUrl=url;
+  }catch(ex){fatsecretError=ex.message||'Подключение недоступно'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-diary-day'){
+  if(!fatsecretAccount?.connected||fatsecretBusy)return;
+  const expected=foodDate;fatsecretBusy=true;fatsecretError='';fatsecretDaily=null;draw();
+  try{
+   const r=await request('fatsecret_diary_day',{date:expected});
+   if(expected===foodDate)fatsecretDaily=r;
+  }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Записи недоступны'}
+  finally{fatsecretBusy=false;draw()}
+  return;
+ }
+ if(cmd==='fatsecret-disconnect-open'){modal='fatsecret-disconnect';draw();return}
+ if(cmd==='fatsecret-disconnect-confirm'){
+  if(fatsecretBusy)return;
+  fatsecretBusy=true;draw();
+  try{
+   await request('fatsecret_account_disconnect');
+   fatsecretAccount={connected:false,available:true};
+   fatsecretAuthUrl='';fatsecretDaily=null;fatsecretError='';modal='';
+  }catch(ex){fatsecretError=ex.message||'Не удалось отключить аккаунт';modal=''}
+  finally{fatsecretBusy=false;draw()}
+  return;
  }
  if(cmd==='food-nutrition-day'){
   if(!state?.food_catalog_available||foodDailyBusy)return;
