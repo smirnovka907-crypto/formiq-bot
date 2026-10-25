@@ -369,21 +369,19 @@ async function run(){
   assert.deepEqual(Array.from(sevenDays.requests.find(x=>x.action==='onboarding').answers.weekdays),[0]);
   assert.equal(sevenDays.requests.find(x=>x.action==='onboarding').answers.days,'1');
 
-  const ai=createClient(true,{storage:new Map()});await settle();
+  const aiDenied=createClient(true,{storage:new Map()});await settle();
+  await aiDenied.click({nav:'profile'});
+  await aiDenied.click({onboardPick:'sex',value:'male'});
+  aiDenied.handlers.change({target:{dataset:{onboard:'profileAiConsent'},type:'checkbox',checked:true}});
+  await aiDenied.click({cmd:'onboard-ai'});
+  assert.equal(aiDenied.requests.filter(x=>x.action==='health_analyze').length,0,'Unpersisted AI opt-in never transmits health text');
+
+  const ai=createClient(true,{storage:new Map(),aiPermissions:{profile:true,health:true,cycle:false}});await settle();
   await ai.click({nav:'profile'});
   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
   await ai.click({onboardPick:'sex',value:'male'});
+  ai.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
-  await ai.click({cmd:'onboard-ai'});
-  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'AI requires separate opt-in');
-  ai.handlers.change({target:{dataset:{onboard:'aiConsent'},type:'checkbox',checked:true}});
-  await ai.click({cmd:'onboard-ai'});
-  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'AI requires adult and privacy');
-  ai.handlers.change({target:{dataset:{onboard:'adult'},type:'checkbox',checked:true}});
-  await ai.click({cmd:'onboard-ai'});
-  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,'Privacy must be acknowledged');
-  for(const key of ['terms','privacy','health'])
-    ai.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
   ai.handlers.change({target:{dataset:{onboard:'healthStorageConsent'},type:'checkbox',checked:true}});
   const finishAnalysis=ai.deferOnce('health_analyze');
   const pendingAnalysis=ai.click({cmd:'onboard-ai'});await settle();
@@ -394,7 +392,7 @@ async function run(){
   await ai.click({cmd:'onboard-ai'});
   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
   assert.ok(ai.requests.filter(x=>x.action==='health_analyze')
-    .every(x=>x.ai_consent===true),'Only explicit consent reaches Yandex health analysis');
+    .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
   assert.match(ai.root.innerHTML,/Проверь результат ИИ/);
   await ai.click({cmd:'onboard-save'});
   assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
@@ -403,7 +401,7 @@ async function run(){
   const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
   assert.equal(aiSaves.length,1);
   assert.equal(aiSaves[0].health_profile.pain_score,3);
-
+  assert.equal(aiSaves[0].timezone_confirmed,true);
    const diary=createClient(true,{trackHistory:true});await settle();
    await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
