@@ -5912,48 +5912,57 @@ FORMIQ_BOT_DESCRIPTION = (
 )
 
 
-def _telegram_avatar_unique_id():
-    """Read the avatar that Telegram currently reports, not a cached DB hash.
+def _telegram_current_avatar_bytes():
+    """Download the actual current Telegram profile image for this bot.
 
-    Only return a file_unique_id, never a bot token, Telegram file URL or photo.
+    A stored upload hash is not proof of the currently visible avatar.
+    Uses the official getMe/getUserProfilePhotos/getFile methods.
     """
     bot_user = BOT.get_me()
     photos = BOT.get_user_profile_photos(bot_user.id, limit=1)
     if not photos or not photos.photos or not photos.photos[0]:
         return None
-    return photos.photos[0][-1].file_unique_id
+    photo = photos.photos[0][-1]
+    info = BOT.get_file(photo.file_id)
+    return BOT.download_file(info.file_path)
+
+
+def _avatar_looks_like_approved(actual, approved):
+    """Compare decoded pixels, allowing Telegram recompression/rescaling."""
+    if not actual:
+        return False
+    from PIL import Image, ImageChops, ImageOps, ImageStat
+    with Image.open(BytesIO(approved)) as original, Image.open(BytesIO(actual)) as current:
+        size = (96, 96)
+        reference = ImageOps.fit(original.convert('RGB'), size,
+                                 method=Image.Resampling.LANCZOS)
+        observed = ImageOps.fit(current.convert('RGB'), size,
+                                method=Image.Resampling.LANCZOS)
+        diff = ImageChops.difference(reference, observed)
+        mean_absolute_error = sum(ImageStat.Stat(diff).mean) / 3
+        # Recompression should be small; substantially different art is not.
+        return mean_absolute_error <= 18
 
 
 def apply_approved_avatar_once():
-    """Compare Telegram's current avatar and repair only on a mismatch.
+    """Check the actual Telegram avatar, replacing an absent or wrong image.
 
-    A database image hash by itself proves only a *previous* upload; the owner
-    or BotFather can change the actual photo later. Store Telegram's observed
-    file_unique_id only after a successful upload and independent read-back.
+    This does NOT touch PostgreSQL, user records, webhook or bot tokens.
+    Telegram may resize/recompress uploaded JPEGs, so use visual pixel
+    equivalence rather than trying to compare uploaded file SHA256 values.
     """
     from welcome_art import avatar_jpeg
     image_bytes = avatar_jpeg()
+    try:
+        if _avatar_looks_like_approved(_telegram_current_avatar_bytes(), image_bytes):
+            LOG.info('FORMIQ avatar confirmed via Telegram API image read-back')
+            return
+    except Exception as exc:
+        # Do not blindly replace an avatar if Telegram's read API is failing.
+        # A transient network error is not evidence of a mismatched image.
+        raise RuntimeError('Telegram avatar inspection failed') from exc
+
     image_hash = hashlib.sha256(image_bytes).hexdigest()
-    with db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS bot_branding_state (
-                setting TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-        """)
-        stored = dict(conn.execute(
-            "SELECT setting,value FROM bot_branding_state WHERE setting IN (%s,%s)",
-            ('approved_avatar_hash', 'approved_avatar_file_unique_id')
-        ).fetchall())
-
-    current_id = _telegram_avatar_unique_id()
-    if (current_id and stored.get('approved_avatar_hash') == image_hash
-            and stored.get('approved_avatar_file_unique_id') == current_id):
-        LOG.info('FORMIQ avatar verified via Telegram API')
-        return
-
-    # First verified run after upgrade re-uploads once to establish file ID.
-    # Never assume old DB hash means current Telegram avatar is still correct.
     boundary = 'FormiqPhoto' + image_hash[:20]
     photo_spec = json.dumps(
         {'type': 'static', 'photo': 'attach://avatar'}, separators=(',', ':')
@@ -5979,19 +5988,9 @@ def apply_approved_avatar_once():
         result = json.loads(resp.read().decode('utf-8'))
     if not result.get('ok'):
         raise RuntimeError('Telegram rejected approved avatar')
-    verified_id = _telegram_avatar_unique_id()
-    if not verified_id:
-        raise RuntimeError('Telegram avatar upload not visible in API read-back')
-    with db() as conn:
-        for name, value in (
-                ('approved_avatar_hash', image_hash),
-                ('approved_avatar_file_unique_id', verified_id)):
-            conn.execute(
-                """INSERT INTO bot_branding_state (setting, value) VALUES (%s, %s)
-                   ON CONFLICT (setting) DO UPDATE SET value = EXCLUDED.value""",
-                (name, value)
-            )
-    LOG.info('FORMIQ approved avatar uploaded and observed via Telegram API')
+    if not _avatar_looks_like_approved(_telegram_current_avatar_bytes(), image_bytes):
+        raise RuntimeError('Telegram did not return approved avatar after upload')
+    LOG.info('FORMIQ approved avatar uploaded and verified from Telegram image')
 
 
 _FORMIQ_PROFILE_CONFIGURED = False
