@@ -44,7 +44,7 @@ class Telegram3813(unittest.TestCase):
         self.assertEqual(wake.callback_data, 'wake')
         self.assertIsNone(wake.web_app)
 
-    def test_no_chat_message_for_wake_callback(self):
+    def test_wake_button_sends_real_message_and_preserves_two_buttons(self):
         call = SimpleNamespace(
             data='wake', id='TEST',
             message=SimpleNamespace(chat=SimpleNamespace(id=123, type='private')),
@@ -56,7 +56,11 @@ class Telegram3813(unittest.TestCase):
             self.botmod.callback(call)
         answer.assert_called_once()
         self.assertIn('на связи', answer.call_args.kwargs['text'])
-        send.assert_not_called()
+        send.assert_called_once()
+        self.assertIn('FORMIQ на связи', send.call_args.args[1])
+        markup=send.call_args.kwargs['reply_markup']
+        self.assertEqual([b.text for row in markup.keyboard for b in row],
+                         ['FormIQ','Разбудить'])
         send_photo.assert_not_called()
 
     def test_welcome_photo_has_two_inline_buttons_without_extra_message(self):
