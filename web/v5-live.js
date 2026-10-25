@@ -98,7 +98,7 @@ function onboardForm(){
    (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
      '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
       button('Уточнить для Yandex AI','onboard-ai-clarify'):
-      '<p class="input-note">Проверь сведения перед применением.</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
+      '<p class="input-note"><strong>Yandex AI выделил:</strong> '+esc((d.aiResult.affected||[]).map(x=>onboardRegions.find(([k])=>k===x)?.[1]||'Ограничение').join(', ')||'Общие ограничения')+'. '+(d.aiResult.pain_score==null?'Интенсивность боли не указана.':'Боль: '+esc(d.aiResult.pain_score)+'/10.')+'</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
   onboardError('description')+onboardError('clarification'));
  const legal=block('<h2>Подтверждения</h2>'+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
