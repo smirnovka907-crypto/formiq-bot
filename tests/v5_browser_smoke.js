@@ -103,7 +103,7 @@ async function run(){
    }else if(data.action==='cardio'){
     assert.equal(data.type,'Велосипед');assert.equal(data.minutes,60);assert.equal(data.avg_hr,120);
     if(rejectCardioOnce){rejectCardioOnce=false;response={ok:false,error:'Тест: кардио не сохранено'}}
-    else profileState.history.unshift({id:10,date:'23.10.2026',title:'Кардио · Велосипед · 60 мин'});
+    else profileState.history.unshift({id:10,date:'23.10.2026',title:'Дополнительная тренировка · Велосипед · 60 мин'});
    }else if(data.action!=='state') {
     response={ok:false,error:'Test fixture: unavailable action '+data.action};
    }
@@ -406,7 +406,6 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'weekdays-'+size.width+'.png')});
    await matchedShot('questionnaire-weekdays',async ref=>ref.locator('[data-act="profile"]').first().click(),
     {referenceAnchor:'.weekdays',liveAnchor:'.fq-weekday-options',note:'Weekday selector aligned to viewport top; real questionnaire requires explicit weekdays'});
-   await page.getByRole('button',{name:'Отмена',exact:true}).click();
    await page.locator('.bottom-nav [data-nav="home"]').click();
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
@@ -511,16 +510,16 @@ async function run(){
    await page.locator('.cardio-inline [data-cmd="cardio-type"][data-type="Велосипед"]').click();
    await page.locator('#cardio-min').fill('60');await page.locator('#cardio-hr').fill('120');
    rejectCardioOnce=true;
-   await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
+   await page.getByRole('button',{name:'Сохранить тренировку',exact:true}).click();
    await page.getByRole('alert').filter({hasText:'Тест: кардио не сохранено'}).waitFor();
    assert.equal(await page.locator('#cardio-min').inputValue(),'60','Failed save preserves cardio minutes');
    assert.equal(await page.locator('#cardio-hr').inputValue(),'120','Failed save preserves heart rate');
-   await page.getByRole('button',{name:'Сохранить кардио',exact:true}).click();
+   await page.getByRole('button',{name:'Сохранить тренировку',exact:true}).click();
    assert.equal(await page.locator('.cardio-inline').count(),1,'Cardio editor remains available after save');
    await page.waitForFunction(()=>document.querySelector('#cardio-min')?.value==='','Saved cardio must clear editor');
    assert.equal(await page.locator('#cardio-hr').inputValue(),'','Saved heart rate must clear');
    await page.locator('.bottom-nav [data-nav="progress"]').click();
-   await page.getByRole('button',{name:/Кардио · Велосипед · 60 мин/}).click();
+   await page.getByRole('button',{name:/Дополнительная тренировка · Велосипед · 60 мин/}).click();
    await page.getByText('Записано в тестовом дневнике',{exact:true}).waitFor();
    assert.equal(profileState.history.filter(x=>x.id===10).length,1,'Retry of a rejected request creates one cardio entry');
    assert.equal(errors.length,0,'No JS errors: '+errors.join(' | '));
@@ -567,8 +566,9 @@ async function run(){
   assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'false');
   await onboarding.keyboard.press('Space');
   assert.equal(await onboarding.locator('[data-onboard-weekday="0"]').getAttribute('aria-pressed'),'true','Keyboard focus survives weekday toggle');
-  await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
-  await onboarding.waitForFunction(()=>document.querySelector('h1')?.textContent==='Сегодня');
+  await onboarding.locator('[data-onboard="timezoneConfirmed"]').check();
+   await onboarding.getByRole('button',{name:'Сохранить анкету',exact:true}).click();
+   await onboarding.waitForFunction(()=>/Доброе утро|Добрый день|Добрый вечер|Доброй ночи/.test(document.querySelector('h1')?.textContent||''));
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
   assert.equal(posts.find(p=>p.action==='onboarding').answers.days,'3');
   assert.equal(posts.find(p=>p.action==='onboarding').metrics.sex,'female');
@@ -576,13 +576,15 @@ async function run(){
   assert.equal(await onboarding.locator('body.theme-female').count(),1,'Pink theme persists after save');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
   await onboarding.getByRole('button',{name:'Профиль',exact:true}).click();
-  await onboarding.getByText('Пн, Ср, Пт',{exact:true}).waitFor();
-  await onboarding.getByRole('button',{name:'Редактировать анкету',exact:true}).click();
+  await onboarding.getByText('Профиль:',{exact:true}).waitFor();
+   assert.equal(await onboarding.getByRole('button',{name:'Редактировать анкету'}).count(),0);
   for(const day of [0,2,4])assert.equal(await onboarding.locator('[data-onboard-weekday="'+day+'"]').getAttribute('aria-pressed'),'true','Saved weekday restored');
   await onboarding.screenshot({path:path.join(OUT,'saved-weekdays.png')});
-  await onboarding.getByRole('button',{name:'Отмена',exact:true}).click();
-  await onboarding.locator('.bottom-nav [data-nav="progress"]').click();
   await onboarding.getByText('Женский календарь',{exact:true}).waitFor();
+   await onboarding.locator('.bottom-nav [data-nav="progress"]').click();
+   assert.equal(await onboarding.getByText('Женский календарь',{exact:true}).count(),0);
+   await onboarding.getByRole('button',{name:'Профиль',exact:true}).click();
+   await onboarding.getByText('Женский календарь',{exact:true}).waitFor();
   await onboarding.locator('#period-start').fill('2026-09-01');
   await onboarding.locator('#period-end').fill('2026-09-05');
   await onboarding.getByRole('button',{name:'Добавить период'}).click();
