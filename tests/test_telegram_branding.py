@@ -1,6 +1,7 @@
 """Telegram profile read-back regressions; offline, never call production API."""
 import importlib
 import io
+import hashlib
 import os
 import unittest
 from types import SimpleNamespace
@@ -19,17 +20,29 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
         }):
             cls.m = importlib.import_module('main')
 
-    def test_approved_art_is_same_bytes_as_welcome_art(self):
-        from approved_assets import WELCOME_JPEG, AVATAR_JPEG
+    def test_owner_approved_png_sources_are_exact_and_telegram_transport_is_jpeg(self):
+        from approved_assets import WELCOME_PNG, AVATAR_PNG
         from welcome_art import welcome_jpeg, avatar_jpeg
-        self.assertEqual(welcome_jpeg(), WELCOME_JPEG)
-        self.assertEqual(avatar_jpeg(), AVATAR_JPEG)
-        for jpeg in (WELCOME_JPEG, AVATAR_JPEG):
-            with Image.open(io.BytesIO(jpeg)) as pic:
-                self.assertEqual(pic.format, 'JPEG')
-                self.assertGreaterEqual(min(pic.size), 200)
-        self.assertLess(len(self.m.FORMIQ_BOT_ABOUT), 121)
-        self.assertLess(len(self.m.FORMIQ_BOT_DESCRIPTION), 513)
+        self.assertEqual(
+            hashlib.sha256(AVATAR_PNG).hexdigest(),
+            '690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd',
+            'The original approved avatar must be byte-identical')
+        self.assertEqual(
+            hashlib.sha256(WELCOME_PNG).hexdigest(),
+            '8a485bae6e08b0027a8a9f30a9a578e9990ddceabd0d626e6ba082fa184d9bae',
+            'Only the approved slogan-only welcome edit is allowed')
+        for source,expected_size in ((AVATAR_PNG,(1254,1254)),
+                                     (WELCOME_PNG,(1024,1536))):
+            with Image.open(io.BytesIO(source)) as picture:
+                self.assertEqual(picture.format,'PNG')
+                self.assertEqual(picture.size,expected_size)
+        for jpeg, expected_size in ((avatar_jpeg(),(1254,1254)),
+                                    (welcome_jpeg(),(1024,1536))):
+            with Image.open(io.BytesIO(jpeg)) as picture:
+                self.assertEqual(picture.format,'JPEG')
+                self.assertEqual(picture.size,expected_size)
+        self.assertLess(len(self.m.FORMIQ_BOT_ABOUT),121)
+        self.assertLess(len(self.m.FORMIQ_BOT_DESCRIPTION),513)
 
     def test_live_bot_avatar_uses_official_photo_read_back(self):
         m=self.m
@@ -148,10 +161,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
 
     def test_start_photo_has_the_exact_approved_caption_and_only_two_buttons(self):
         m=self.m
-        expected=('Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. '
-                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом. '
-                  'Веди дневник самостоятельно или доверь персональные рекомендации '
-                  'Yandex AI. FORMIQ — Твоя форма. Наш интеллект.')
+        expected=('Добро пожаловать в FORMIQ!\\n\\n'
+                  'Твоя форма заслуживает умного подхода.\\n\\n'
+                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\\n\\n'
+                  'Веди дневник самостоятельно или доверь Yandex AI создание '
+                  'персонального плана, анализ результатов и адаптацию тренировок.')
         with patch.object(m.BOT,'set_chat_menu_button'), \
              patch.object(m.BOT,'get_chat_menu_button',
                           return_value=SimpleNamespace(type='commands')), \
