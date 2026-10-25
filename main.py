@@ -3632,6 +3632,8 @@ def fatsecret_user_diary(chat,body, *, internal=False):
         entries.append({'external_id':value['external_id'],
             'imported':value['external_id'] in saved,
             'user_edited':bool(user_name or user_meal),
+            'user_name_override':user_name,
+            'user_meal_override':user_meal,
             'meal':user_meal or value['meal'],
             'name':user_name or value['name'],
             'kcal':float(value['calories_kcal']) if value['calories_kcal'] is not None else None,
