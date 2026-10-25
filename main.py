@@ -2347,6 +2347,18 @@ def ai_personalized_guidance(chat,body):
     after=personalization_consent(chat)
     if not after['profile'] or (note and not after['health']) or (used_cycle and not after['cycle']):
         raise ValueError('Согласие отозвано во время ответа')
+    if purpose=='nutrition':
+        # A meal may change from another device while Yandex is responding.
+        # Do not label advice about the previous food snapshot as current.
+        with db() as conn:
+            fresh_food=conn.execute("""SELECT m.meal_type,i.name,i.grams
+                FROM manual_food_meals m JOIN manual_food_items i
+                  ON i.meal_id=m.id AND i.chat_id=m.chat_id
+                WHERE m.chat_id=%s AND m.eaten_on=%s
+                ORDER BY m.id,i.id LIMIT 40""",
+                (chat,nutrition_day)).fetchall()
+        if fresh_food!=manual_food:
+            raise ValueError('Дневник питания изменился во время анализа. Запроси совет заново')
     return {'advice':answer.replace('**','')[:950],'used_cycle':used_cycle,'used_ai':True}
 
 
