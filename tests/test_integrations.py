@@ -69,6 +69,43 @@ class IntegrationTests(unittest.TestCase):
             g.normalize_garmin_webhook({"dailies": [{"userId": "tester", "steps": -1,
                                                      "summaryId": "bad"}]})
 
+    def test_catalog_food_search_scales_only_verified_grams(self):
+        f=module("fatsecret")
+        food={"foods_search":{"food":[{
+            "food_id":"1042","food_name":"Овсянка сухая","food_type":"Generic",
+            "servings":{"serving":[{"serving_id":"27","serving_description":"100 g",
+                "metric_serving_amount":"100","metric_serving_unit":"g",
+                "calories":"380","protein":"13","fat":"7","carbohydrate":"67"}]}
+        }]}}
+        choices=f.normalize_catalog_search(food)
+        self.assertEqual(choices[0]["food_id"],"1042")
+        self.assertEqual(choices[0]["servings"][0]["per_serving"]["kcal"],380)
+        serving=food["foods_search"]["food"][0]["servings"]["serving"][0]
+        result=f.scale_verified_serving(serving,70)
+        self.assertEqual(result["kcal"],Decimal("266.00"))
+        self.assertEqual(result["protein_g"],Decimal("9.10"))
+        self.assertIsNone(f.scale_verified_serving({**serving,"metric_serving_unit":"ml"},70))
+        self.assertIsNone(f.scale_verified_serving({**serving,"protein":None},70))
+        self.assertIsNone(f.scale_verified_serving(serving,-1))
+        with self.assertRaises(ValueError):
+            f.FatSecretCatalogClient("","").get_token()
+        with self.assertRaises(ValueError):
+            f.FatSecretCatalogClient("id","secret").search("oats","")
+
+    def test_catalog_requires_manual_food_selection(self):
+        f=module("fatsecret")
+        p={"foods_search":{"food":[
+            {"food_id":"12","food_name":"Овсянка, сырая","servings":{}},
+            {"food_id":"13","food_name":"Овсянка, сваренная","servings":{}}
+        ]}}
+        found=f.normalize_catalog_search(p)
+        self.assertEqual(len(found),2)
+        self.assertNotEqual(found[0]["food_id"],found[1]["food_id"])
+        self.assertEqual(found[0]["servings"],[])
+        self.assertEqual(found[1]["servings"],[])
+        with self.assertRaises(ValueError):
+            f.normalize_catalog_search({"foods_search":{"food":[{"food_name":"без id"}]}})
+
     def test_import_does_not_require_secrets(self):
         module("fatsecret")
         module("garmin")
