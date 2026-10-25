@@ -103,9 +103,11 @@ function onboardForm(){
   onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
-  '<div class="fq-onboard-actions">'+button('Сохранить анкету','onboard-save',true)+
-  (ready()?button('Отмена','onboard-cancel'):'')+'</div>');
- return h()+'<h1 class="title">Твой профиль</h1>'+intro+block(personal+training)+health+legal;
+  '<div class="fq-onboard-actions">'+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
+ const calendar=d.sex==='female'?(state?.metrics?.sex==='female'?femaleCalendar():block('<h2>Женский календарь</h2><p>Сохрани выбранный пол, чтобы открыть календарь.</p>')):'';
+ const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
+ return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
+  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
@@ -161,7 +163,7 @@ async function loadFemalePeriods(){
  finally{periodBusy=false;draw()}
 }
 function femaleCalendar(){
- if(state?.metrics?.sex!=='female')return '';
+ if(state?.metrics?.sex!=='female'||onboard?.sex==='male')return '';
  const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
  const months=[...new Set((periodEntries||[]).map(p=>p.start.slice(0,7)))];
  const current=months.includes(periodMonth)?periodMonth:months[0]||'';
@@ -554,10 +556,7 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+femaleCalendar()+
-  '<section class="surface soft"><div class="heading-row"><h2 style="font-size:20px;margin:0">Garmin Connect</h2><span class="badge">Не подключён</span></div>'+
-  '<p class="input-note" style="margin-top:13px">Показатели устройств не подменяются расчётами.</p></section>'+
-  trainingPlanCard()+history();
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+trainingPlanCard()+history();
 }
 function food(){
  const today='<section class="surface"><span class="eyebrow">СЕГОДНЯ · ПИТАНИЕ</span>'+
@@ -566,9 +565,9 @@ function food(){
  const macros='<section class="surface"><h2 style="font-size:21px;margin:0 0 18px">Белки, жиры, углеводы</h2>'+
   ['Белки','Жиры','Углеводы'].map(label=>'<div class="macro"><strong>'+label+'</strong><span>— г · нет данных</span></div>').join('')+'</section>';
  const meals='<section class="surface soft"><h2 style="font-size:20px;margin:0 0 10px">Приёмы пищи</h2>'+
-  '<p class="empty">Записей пока нет. FatSecret не синхронизирован.</p></section>';
+  '<p class="empty">Записей пока нет. Автоматический дневник не подключён.</p></section>';
  const report='<section class="surface"><h2 style="font-size:21px;margin:0 0 10px">Анализ отчёта</h2>'+
-  '<p class="input-note" style="margin:0 0 17px">Выбери реальный CSV или изображение FatSecret. Покажем только то, что есть в отчёте.</p>'+
+  '<p class="input-note" style="margin:0 0 17px">Выбери настоящий CSV или изображение отчёта. Покажем только то, что есть в отчёте.</p>'+
   '<label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
   '<label class="checkbox-line" style="margin-top:15px"><input id="nutrition-consent" type="checkbox">'+
   '<span>Разрешаю отправить отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>'+
@@ -577,59 +576,9 @@ function food(){
   button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
   (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report+
-  '<section class="surface soft"><h2>Совет Yandex AI по питанию</h2><p class="input-note">Только по подтверждённой анкете и цели, без фиктивного дневника питания.</p>'+
-  button(aiTipBusy?'Подготавливаем...':'Получить персональный совет','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
-  (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>';
+  '<p class="intro">Понятный дневник без выдуманных показателей.</p>'+today+macros+meals+report;
 }
-function profile(){
- const fields=[['age','Возраст, лет','18','100'],['height_cm','Рост, см','100','240'],['weight_kg','Вес, кг','25','300']];
- const names={goal:'Цель тренировок',level:'Опыт',days:'Тренировок в неделю',equipment:'Место тренировок',
-  age_group:'Возрастная группа',minutes:'Длительность',clearance:'Ограничения'};
- const rows=Object.entries(state.profile||{}).map(([k,v])=>
-  '<div class="fq-live-row"><span>'+esc(names[k]||k)+'</span><strong>'+esc(v)+'</strong></div>').join('')||
-  '<p class="empty">Анкета пока не заполнена.</p>';
- const weekdays=state.profile_raw?.weekdays;
- const days=Array.isArray(weekdays)?'<div class="fq-live-row"><span>Дни тренировок</span><strong>'+
-   esc(weekdays.map(d=>weekdayNames[d]).filter(Boolean).join(', '))+'</strong></div>':'';
- const d=state.metrics||{};
- const measure=metricEdit?'<div class="form-row fq-profile-metric-grid">'+
-  fields.map(([key,label,min,max])=>'<label class="field"><span>'+label+'</span>'+
-   '<input id="profile-'+key+'" data-metric="'+key+'" type="number" inputmode="'+
-    (key==='age'?'numeric':'decimal')+'" min="'+min+'" max="'+max+
-    '" step="'+(key==='age'?'1':'0.1')+'" autocomplete="off" placeholder="—" value="'+
-    esc(profileDraft?.[key]??'')+'"></label>').join('')+'</div>'+
-    '<p class="input-note" style="margin:11px 0">Изменятся только исправленные значения. История сохранится.</p>'+
-    '<div class="fq-live-actions">'+button('Сохранить','profile-metrics-save',true)+
-    button('Отмена','profile-metrics-cancel')+'</div>':
-    '<div class="fq-live-list">'+fields.map(([key,label])=>
-     '<div class="fq-live-row"><span>'+label+'</span><strong>'+
-     (d[key]===null||d[key]===undefined?'—':esc(d[key]))+'</strong></div>').join('')+'</div>'+
-     '<div style="margin-top:15px">'+button('Изменить параметры','profile-metrics-edit')+'</div>';
- const questionnaire='<section class="surface"><h2 class="section-label" style="margin-top:0">Анкета и цель</h2>'+
-  '<div class="fq-live-list">'+rows+days+'</div><div class="workout-cta">'+
-  button('Редактировать анкету','onboard-open',true)+'</div></section>';
- const body='<section class="surface"><h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+
-  (profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+measure+'</section>';
- const aiPermission=state?.ai_personalization||{};
- const aiConsentCard='<section class="surface"><h2 class="section-label" style="margin-top:0">Yandex AI · разрешения</h2>'+
-  '<p class="input-note">Персонализация анкеты: '+(aiPermission.profile?'разрешена':'выключена')+
-  '. Описание здоровья: '+(aiPermission.health?'разрешено':'выключено')+
-  '. Цикл: '+(aiPermission.cycle?'разрешён':'выключен')+'. Можно отозвать без удаления тренировок и календаря.</p>'+
-  (aiPermission.profile?button('Отозвать доступ к анкете','ai-profile-revoke'):'')+
-  (aiPermission.health?button('Отозвать доступ к описанию здоровья','ai-health-revoke'):'')+
-  (aiPermission.cycle?button('Отозвать доступ к циклу','ai-cycle-revoke'):'')+'</section>';
- const health='<section class="surface"><h2 class="section-label" style="margin-top:0">Самочувствие и ограничения</h2>'+
-  '<p class="input-note">Ограничения проверяются сервером. Изменить их и отдельное согласие на Yandex AI можно в анкете.</p></section>';
- const integrations='<section class="surface soft"><h2 class="section-label" style="margin-top:0">Подключения</h2>'+
-  '<div class="connection-row"><div><strong class="connection-title">Garmin Connect</strong>'+
-  '<p class="connection-hint">Данные устройства не синхронизируются.</p></div><span class="connection-status">Не подключён</span></div>'+
-  '<div class="connection-row"><div><strong class="connection-title">FatSecret</strong>'+
-  '<p class="connection-hint">Автоматический дневник пока недоступен.</p></div><span class="connection-status">Не подключён</span></div></section>';
- return h()+'<span class="kicker">Настройки</span><h1 class="title">Твой профиль</h1>'+
-  '<p class="intro">Одна анкета — редактирование без потери истории.</p>'+
-  questionnaire+body+health+aiConsentCard+integrations;
-}
+function profile(){return onboardForm();}
 function modalHTML(){
  if(!modal)return '';
  let content='';
@@ -662,7 +611,7 @@ function modalHTML(){
  return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
- document.body?.classList?.toggle('theme-female',(onboardOpen&&onboard?onboard.sex:state?.metrics?.sex)==='female');
+ document.body?.classList?.toggle('theme-female',((onboardOpen||view==='profile')&&onboard?onboard.sex:state?.metrics?.sex)==='female');
  document.body?.classList?.remove('cardio-typing','workout-typing');
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
@@ -694,7 +643,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress')loadProgressSeries();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -742,14 +691,14 @@ app.addEventListener('click',async e=>{
   return;
  }
  if(element.dataset.onboardWeekday!==undefined){
-  if(!onboardOpen||!onboard)return;
+  if(!(onboardOpen||view==='profile')||!onboard)return;
   const day=Number(element.dataset.onboardWeekday);
   if(!Number.isInteger(day)||day<0||day>6)return;
   onboard.weekdays=onboard.weekdays.includes(day)?onboard.weekdays.filter(d=>d!==day):[...onboard.weekdays,day].sort((a,b)=>a-b);delete onboardErrors.weekdays;
   draw();app.querySelector?.('[data-onboard-weekday="'+day+'"]')?.focus();return;
  }
  if(element.dataset.onboardPick){
-  if(!onboardOpen||!onboard)return;
+  if(!(onboardOpen||view==='profile')||!onboard)return;
   const key=element.dataset.onboardPick,value=element.dataset.value;
   if(!['goal','equipment','sex'].includes(key))return;
   onboard[key]=value;delete onboardErrors[key];
@@ -785,7 +734,7 @@ app.addEventListener('click',async e=>{
   if(!onboard)return;let payload;
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
   const saved=await send('onboarding',payload);
-  if(saved){onboardOpen=false;onboard=null;onboardErrors={};view='home';draw();window.scrollTo(0,0)}
+  if(saved){const editing=view==='profile';onboardOpen=false;onboard=null;onboardErrors={};view=editing?'profile':'home';profileNotice=editing?'Изменения сохранены.':'';draw();window.scrollTo(0,0)}
   return;
  }
  if(cmd==='profile-metrics-edit'){
