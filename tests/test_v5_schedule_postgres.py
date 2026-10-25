@@ -159,6 +159,20 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
 
+    def test_free_text_accepts_explicit_leading_and_trailing_grams_without_guessing(self):
+        result=self.m.food_parse({'text':
+            '80 г рис сухой; творог 150 граммов; 65,5 грамма яблоко; 2 яйца'})
+        self.assertEqual(result['items'],[
+            {'name':'рис сухой','grams':80.0},
+            {'name':'творог','grams':150.0},
+            {'name':'яблоко','grams':65.5}])
+        self.assertEqual(len(result['unparsed']),1)
+        self.assertIn('2 яйца',result['unparsed'][0]['text'])
+        # No household-unit conversion without a confirmed serving definition.
+        only_unknown=self.m.food_parse({'text':'один стакан молока'})
+        self.assertEqual(only_unknown['items'],[])
+        self.assertEqual(len(only_unknown['unparsed']),1)
+
     def test_fatsecret_provider_lookup_and_link_are_owner_scoped_and_explicit(self):
         self.m.save_onboarding(self.chat,self.body())
         self.m.save_onboarding(self.chat+1,self.body())
