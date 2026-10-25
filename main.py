@@ -3547,6 +3547,86 @@ def food_catalog_attach(chat,body):
 
 
 
+
+def food_daily_nutrition(chat,body):
+    """Read-only, on-demand sums of ACTUALLY verified FatSecret portions.
+
+    Only provider IDs are persisted; provider names, serving data and nutrient
+    values are never written to PostgreSQL or an application cache.  A day
+    containing manual/unlinked foods is explicitly incomplete, not a full
+    estimate. Resolve each unique food at most once per request.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    with db() as conn:
+        rows=conn.execute("""SELECT i.id,i.grams,i.source_food_id,i.source_serving_id
+            FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
+            WHERE i.chat_id=%s AND m.chat_id=%s AND m.eaten_on=%s
+            ORDER BY i.id""",(chat,chat,day)).fetchall()
+    linked=[row for row in rows if row[2] and row[3]]
+    base={'date':day.isoformat(),'source':'fatsecret' if linked else None,
+          'items':[],'known_totals':None,'verified_count':0,
+          'unverified_count':len(rows),'complete':False}
+    if not linked:
+        return base
+    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
+        raise ValueError('Справочник FatSecret ещё не подключён')
+    identifiers=sorted({str(row[2]) for row in linked})
+    if len(identifiers)>12:
+        raise ValueError('Слишком много продуктов FatSecret за день; разбей проверку на отдельные даты')
+    try:
+        client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+        token=client.get_token()
+        # No permanent cache; at most 4 concurrent provider lookups and 12 IDs.
+        with ThreadPoolExecutor(max_workers=min(4,len(identifiers))) as pool:
+            details=dict(zip(identifiers,pool.map(
+                lambda identifier: client.food_by_id(identifier,token),identifiers)))
+    except Exception:
+        raise ValueError('FatSecret временно недоступен. Дневник сохранён без изменений') from None
+    result={}
+    sums={key:Decimal('0') for key in ('kcal','protein_g','fat_g','carbs_g')}
+    for iid,grams,fid,sid in linked:
+        candidate=details.get(str(fid)) or {}
+        portion=next((p for p in candidate.get('servings',[])
+                      if p.get('serving_id')==str(sid)),None)
+        if not portion or not portion.get('per_serving'):
+            continue
+        try:
+            weight=Decimal(str(portion['grams']))
+            actual=Decimal(str(grams))
+            if weight<=0 or not weight.is_finite() or actual<=0 or not actual.is_finite():
+                continue
+            nutrients={}
+            for key in sums:
+                value=Decimal(str(portion['per_serving'][key]))
+                if not value.is_finite() or value<0:
+                    raise ValueError('Invalid nutrient')
+                nutrients[key]=(value*actual/weight).quantize(Decimal('0.01'))
+        except (KeyError, ValueError, TypeError, InvalidOperation):
+            continue
+        result[iid]={'id':iid,'grams':float(actual),
+                     'nutrients':{key:float(value) for key,value in nutrients.items()}}
+        for key in sums:
+            sums[key]+=nutrients[key]
+    # Guard against recording today's old macros after a concurrent edit or
+    # unbinding. This query also ensures deleted products are never reported.
+    with db() as conn:
+        current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,i.source_serving_id
+            FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
+            WHERE i.chat_id=%s AND m.chat_id=%s AND m.eaten_on=%s
+            ORDER BY i.id""",(chat,chat,day)).fetchall()
+    if current!=rows:
+        raise ValueError('Дневник изменился во время расчёта. Обнови питание')
+    base['items']=list(result.values())
+    base['verified_count']=len(result)
+    base['unverified_count']=len(rows)-len(result)
+    base['known_totals']={key:float(value) for key,value in sums.items()} if result else None
+    base['complete']=bool(rows and len(result)==len(rows))
+    return base
+
+
+
 def mini_training_preview(chat, body):
     """Read-only preview of a saved, owner-scoped calendar slot.
 
@@ -5092,6 +5172,8 @@ def mini_api():
             payload = {'ok': True, **food_catalog_lookup(chat,data)}
         elif action == 'food_catalog_attach':
             payload = {'ok': True, **food_catalog_attach(chat,data)}
+        elif action == 'food_daily_nutrition':
+            payload = {'ok': True, **food_daily_nutrition(chat,data)}
         elif action == 'food_history':
             payload = {'ok': True, **food_history(chat,data)}
         elif action == 'food_add':
