@@ -205,6 +205,66 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(fake.search.call_count,1)
         self.assertEqual(fake.food_by_id.call_count,2)
 
+    def test_day_kbju_uses_only_owned_verified_portions_and_never_invents_totals(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        a=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+           'items':[{'name':'овсянка сухая','grams':70},
+                    {'name':'овсянка сухая','grams':30}]})
+        b=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+           'items':[{'name':'неизвестный продукт','grams':100}]})
+        item_ids=[x['id'] for x in a['meals'][0]['items']]
+        missing_id=b['meals'][1]['items'][0]['id']
+        with self.connect() as conn:
+            conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                source_serving_id='13' WHERE id=ANY(%s)""",(item_ids,))
+        sample={'food_id':'42','name':'Овсянка сухая',
+          'servings':[{'serving_id':'13','grams':100,
+          'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='token-only-test'
+        fake.food_by_id.return_value=sample
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            partial=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(partial['complete'])
+            self.assertTrue(partial['partial'])
+            self.assertIsNone(partial['totals'])
+            self.assertEqual(partial['total_items'],3)
+            self.assertEqual(partial['resolved_items'],2)
+            self.assertEqual(partial['known_subtotal']['kcal'],380)
+            self.assertEqual(len(partial['meals']),2)
+            self.assertEqual(partial['meals'][0]['known_subtotal']['protein_g'],13.0)
+            self.assertFalse(partial['meals'][1]['complete'])
+            self.assertIsNone(partial['meals'][1]['known_subtotal'])
+            self.assertEqual(fake.food_by_id.call_count,1,'Duplicate food ID queried once')
+            with self.connect() as conn:
+                conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                    source_serving_id='13' WHERE id=%s""",(missing_id,))
+            complete=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(complete['complete'])
+            self.assertEqual(complete['resolved_items'],3)
+            self.assertEqual(complete['totals']['kcal'],760)
+            self.assertEqual(complete['totals']['carbs_g'],134)
+            empty=self.m.food_day_totals(self.chat,{'date':'2026-10-17'})
+            self.assertFalse(empty['complete'])
+            self.assertIsNone(empty['totals'])
+            self.assertIsNone(empty['known_subtotal'])
+            self.m.save_onboarding(self.chat+1,self.body())
+            other=self.m.food_day_totals(self.chat+1,{'date':'2026-10-18'})
+            self.assertEqual(other['total_items'],0)
+            fake.food_by_id.side_effect=RuntimeError('Provider unavailable')
+            failure=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertIsNone(failure['totals'])
+            self.assertIsNone(failure['known_subtotal'])
+            self.assertEqual(failure['resolved_items'],0)
+        with self.connect() as conn:
+            nutrients=conn.execute("""SELECT column_name FROM information_schema.columns
+              WHERE table_schema=%s AND table_name='manual_food_items'
+              AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
+        self.assertEqual(nutrients,[],'Provider macro values must not be stored')
+
     def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
         p,cycle,calendar=self.save((0,2,4))
         slot=calendar[0]
