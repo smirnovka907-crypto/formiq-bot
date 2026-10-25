@@ -765,7 +765,9 @@ app.addEventListener('click',async e=>{
   const analyzedForm=onboard;
   const result=await send('health_analyze',{adult:true,privacy_ack:true,ai_consent:true,text:txt});
   if(result?.analysis){
-   if(onboard!==analyzedForm||!onboard.aiConsent||!onboard.adult||!onboard.privacy){
+   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==original||
+      (cmd==='onboard-ai-clarify'&&String(onboard.clarification||'').trim()!==extra)||
+      !onboard.aiConsent||!onboard.adult||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
    }
    const a=result.analysis;onboard.limitation='yes';
