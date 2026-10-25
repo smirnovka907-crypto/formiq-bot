@@ -703,6 +703,16 @@ function exerciseCardPanel(){
 function modalHTML(){
  if(!modal)return '';
  let content='';
+ if(modal==='food-edit'&&foodEdit){
+  content='<h2>Изменить продукт</h2>'+
+   '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
+   '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
+   button('Сохранить изменения','food-edit-save',true)+button('Отмена','close');
+ }
+ if(modal==='food-delete'&&foodEdit){
+  content='<h2>Удалить продукт?</h2><p>'+esc(foodEdit.name)+' · '+esc(foodEdit.grams)+' г</p>'+
+   button('Удалить продукт','food-delete-confirm',true)+button('Отмена','close');
+ }
  if(modal==='training-preview')content=previewPanel();
  if(modal==='exercise-card')content=exerciseCardPanel();
  if(modal==='feedback')content='<h2>Отзывы и предложения</h2>'+(feedbackError?'<p role="alert" class="fq-form-error">'+esc(feedbackError)+'</p>':'')+
@@ -753,10 +763,13 @@ app.addEventListener('input',e=>{
  if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
+ if(e.target.id==='food-text')foodText=e.target.value;
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
+ if(e.target.id==='food-date'){foodDate=e.target.value;foodHistory=null;foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
 });
@@ -775,7 +788,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='food')loadFoodHistory();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -938,6 +951,59 @@ app.addEventListener('click',async e=>{
    error=ex.name==='AbortError'?'Анализ занимает слишком много времени. Попробуй позже.':ex.message;
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
+ }
+ if(cmd==='food-parse'){
+  foodText=String(document.getElementById('food-text')?.value??foodText).trim();
+  foodMeal=document.getElementById('food-meal')?.value||foodMeal;
+  try{
+   const result=await request('food_parse',{text:foodText});
+   foodDraft=result.items||[];foodUnparsed=result.unparsed||[];
+   foodNotice=foodUnparsed.length?'Проверь строки и дополни нераспознанные продукты вручную.':'Проверь названия и граммовку перед сохранением.';
+   error='';
+  }catch(ex){foodNotice=ex.message||'Не удалось разобрать продукты'}
+  draw();return;
+ }
+ if(cmd==='food-draft-add'){
+  syncFoodDraft();foodDraft.push({name:foodUnparsed.shift()?.text||'',grams:''});draw();return;
+ }
+ if(cmd==='food-draft-remove'){
+  syncFoodDraft();const index=Number(element.dataset.index);
+  if(Number.isInteger(index)&&index>=0&&index<foodDraft.length)foodDraft.splice(index,1);
+  draw();return;
+ }
+ if(cmd==='food-save'){
+  syncFoodDraft();
+  if(!foodDraft.length){fail('Добавь продукт и граммовку');return}
+  try{
+   const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items:foodDraft});
+   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';
+   foodNotice='Приём пищи сохранён в дневнике.';error='';
+  }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
+  draw();return;
+ }
+ if(cmd==='food-edit'||cmd==='food-delete'){
+  const id=Number(element.dataset.id);
+  const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
+  if(!item)return;
+  foodEdit={...item};modal=cmd==='food-edit'?'food-edit':'food-delete';draw();return;
+ }
+ if(cmd==='food-edit-save'){
+  if(!foodEdit)return;
+  try{
+   foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
+   foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
+   const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
+   foodHistory=result;foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';
+  }catch(ex){error=ex.message||'Ошибка изменения продукта'}
+  draw();return;
+ }
+ if(cmd==='food-delete-confirm'){
+  if(!foodEdit)return;
+  try{
+   const result=await request('food_delete',{id:foodEdit.id});
+   foodHistory=result;foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';
+  }catch(ex){error=ex.message||'Не удалось удалить продукт'}
+  draw();return;
  }
  if(cmd==='training-preview'){
   const id=Number(element.dataset.id);
