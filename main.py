@@ -503,6 +503,7 @@ def init_db():
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("""CREATE TABLE IF NOT EXISTS fatsecret_user_connections (
             chat_id BIGINT PRIMARY KEY,
+            connection_id TEXT NOT NULL DEFAULT gen_random_uuid()::text,
             access_token_enc BYTEA NOT NULL,
             access_secret_enc BYTEA NOT NULL,
             connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -512,6 +513,7 @@ def init_db():
         # nutrition, serving amounts, or source names are permanently cached.
         c.execute("""CREATE TABLE IF NOT EXISTS fatsecret_import_refs (
             chat_id BIGINT NOT NULL,
+            connection_id TEXT NOT NULL,
             eaten_on DATE NOT NULL,
             external_id TEXT NOT NULL CHECK(length(external_id) BETWEEN 1 AND 40),
             user_name_override TEXT,
@@ -520,7 +522,7 @@ def init_db():
               user_meal_override IN ('breakfast','lunch','dinner','snack')),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            PRIMARY KEY(chat_id,eaten_on,external_id))""")
+            PRIMARY KEY(chat_id,connection_id,eaten_on,external_id))""")
         c.execute("""CREATE INDEX IF NOT EXISTS fatsecret_import_refs_owner_date
             ON fatsecret_import_refs(chat_id,eaten_on)""")
         c.execute("""CREATE TABLE IF NOT EXISTS garmin_authorized_identities (
@@ -3570,6 +3572,7 @@ def fatsecret_user_finish(state,oauth_token,verifier):
             ON CONFLICT(chat_id) DO UPDATE SET
             access_token_enc=EXCLUDED.access_token_enc,
             access_secret_enc=EXCLUDED.access_secret_enc,
+            connection_id=gen_random_uuid()::text,
             connected_at=NOW(),last_sync_at=NULL""",
             (chat,cipher.encrypt(access_token.encode()),
              cipher.encrypt(access_secret.encode())))
@@ -3592,7 +3595,7 @@ def fatsecret_user_diary(chat,body, *, internal=False):
     day=food_day(body.get('date'))
     cipher=fatsecret_user_cipher()
     with db() as conn:
-        row=conn.execute("""SELECT access_token_enc,access_secret_enc FROM
+        row=conn.execute("""SELECT access_token_enc,access_secret_enc,connection_id FROM
             fatsecret_user_connections WHERE chat_id=%s""",(chat,)).fetchone()
     if not row:
         raise ValueError('Сначала подключи свой FatSecret')
@@ -3616,13 +3619,15 @@ def fatsecret_user_diary(chat,body, *, internal=False):
         still_connected=conn.execute("""UPDATE fatsecret_user_connections
             SET last_sync_at=NOW()
             WHERE chat_id=%s AND access_token_enc=%s AND access_secret_enc=%s
-            RETURNING chat_id""",(chat,row[0],row[1])).fetchone()
+              AND connection_id=%s
+            RETURNING chat_id""",(chat,row[0],row[1],row[2])).fetchone()
     if not still_connected:
         raise ValueError('FatSecret был отключён или переподключён во время загрузки. Повтори запрос')
     with db() as conn:
         imported=conn.execute("""SELECT external_id,user_name_override,user_meal_override
-            FROM fatsecret_import_refs WHERE chat_id=%s AND eaten_on=%s""",
-            (chat,day)).fetchall()
+            FROM fatsecret_import_refs
+            WHERE chat_id=%s AND connection_id=%s AND eaten_on=%s""",
+            (chat,row[2],day)).fetchall()
     saved={entry_id:(name,meal) for entry_id,name,meal in imported}
     if len(normalized['entries'])>150:
         raise ValueError('Слишком много записей FatSecret за один день')
@@ -3648,7 +3653,7 @@ def fatsecret_user_diary(chat,body, *, internal=False):
         'notice':'Данные FatSecret показаны напрямую. Они не скопированы в ручной дневник FORMIQ.'}
     if internal:
         # Encrypted credential pair never leaves this server-side helper.
-        return result,(bytes(row[0]),bytes(row[1]))
+        return result,(bytes(row[0]),bytes(row[1]),row[2])
     return result
 
 
@@ -3670,16 +3675,18 @@ def fatsecret_user_import(chat,body):
         conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         valid=conn.execute("""SELECT 1 FROM fatsecret_user_connections
             WHERE chat_id=%s AND access_token_enc=%s AND access_secret_enc=%s
-            FOR UPDATE""",(chat,connection[0],connection[1])).fetchone()
+              AND connection_id=%s
+            FOR UPDATE""",(chat,connection[0],connection[1],connection[2])).fetchone()
         if not valid:
             raise ValueError('FatSecret отключён или переподключён во время импорта')
         for eid in ids:
             conn.execute("""INSERT INTO fatsecret_import_refs
-                (chat_id,eaten_on,external_id) VALUES(%s,%s,%s)
-                ON CONFLICT(chat_id,eaten_on,external_id) DO NOTHING""",
-                (chat,day,eid))
+                (chat_id,connection_id,eaten_on,external_id) VALUES(%s,%s,%s,%s)
+                ON CONFLICT(chat_id,connection_id,eaten_on,external_id) DO NOTHING""",
+                (chat,connection[2],day,eid))
         count=conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
-            WHERE chat_id=%s AND eaten_on=%s""",(chat,day)).fetchone()[0]
+            WHERE chat_id=%s AND connection_id=%s AND eaten_on=%s""",
+            (chat,connection[2],day)).fetchone()[0]
     return {'date':day.isoformat(),'imported_ids':ids,'imported_count':count,
         'notice':'Ссылки на записи FatSecret сохранены без копирования пищевой ценности.'}
 
@@ -3702,16 +3709,21 @@ def fatsecret_user_import_edit(chat,body,delete=False):
         if meal not in (None,'breakfast','lunch','dinner','snack'):
             raise ValueError('Выбери приём пищи')
     with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        connection=conn.execute("""SELECT connection_id FROM fatsecret_user_connections
+            WHERE chat_id=%s FOR UPDATE""",(chat,)).fetchone()
+        if not connection:
+            raise ValueError('Сначала подключи свой FatSecret')
         if delete:
             row=conn.execute("""DELETE FROM fatsecret_import_refs
-                WHERE chat_id=%s AND eaten_on=%s AND external_id=%s
-                RETURNING external_id""",(chat,day,external_id)).fetchone()
+                WHERE chat_id=%s AND connection_id=%s AND eaten_on=%s AND external_id=%s
+                RETURNING external_id""",(chat,connection[0],day,external_id)).fetchone()
         else:
             row=conn.execute("""UPDATE fatsecret_import_refs
                 SET user_name_override=%s,user_meal_override=%s,updated_at=NOW()
-                WHERE chat_id=%s AND eaten_on=%s AND external_id=%s
+                WHERE chat_id=%s AND connection_id=%s AND eaten_on=%s AND external_id=%s
                 RETURNING external_id""",
-                (name,meal,chat,day,external_id)).fetchone()
+                (name,meal,chat,connection[0],day,external_id)).fetchone()
     if not row:
         raise ValueError('Импортированная запись не найдена')
     return {'date':day.isoformat(),'external_id':external_id,
