@@ -161,6 +161,7 @@ class SchedulePostgresTests(unittest.TestCase):
 
     def test_fatsecret_provider_lookup_and_link_are_owner_scoped_and_explicit(self):
         self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
         recorded=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
             'items':[{'name':'овсянка сухая','grams':70}]})
         item_id=recorded['meals'][0]['items'][0]['id']
