@@ -3436,8 +3436,8 @@ def food_catalog_attach(chat,body):
     with db() as conn:
         result=conn.execute("""UPDATE manual_food_items SET
             source_food_id=%s,source_serving_id=%s,updated_at=NOW()
-            WHERE id=%s AND chat_id=%s RETURNING id""",
-            (fid,sid,item_id,chat)).fetchone()
+            WHERE id=%s AND chat_id=%s AND grams=%s RETURNING id""",
+            (fid,sid,item_id,chat,old[0])).fetchone()
         if not result:
             raise ValueError('Продукт не найден')
     return {'item_id':item_id,'source':'fatsecret','nutrients':nutrients,
