@@ -42,14 +42,14 @@ class Release382Tests(unittest.TestCase):
         when=datetime(2026,10,22,tzinfo=timezone.utc)
         fake=MagicMock()
         fake.__enter__.return_value=fake
-        fake.execute.return_value.fetchone.return_value=(when,35,118,'cycling')
+        fake.execute.return_value.fetchone.return_value=(when,35,118,'cycling',None,None,None)
         with patch.object(self.m,'db',return_value=fake):
             result=self.m.mini_history_detail(123,-8)
         query,params=fake.execute.call_args.args
         self.assertIn('cardio_sessions',query)
         self.assertIn('chat_id=%s',query)
         self.assertEqual(params,(8,123))
-        self.assertEqual(result['title'],'Велосипед')
+        self.assertEqual(result['title'],'Дополнительная тренировка · Велосипед')
         self.assertEqual(len(result['items']),3)
         self.assertEqual(result['items'][0]['result'],'Велосипед')
 
