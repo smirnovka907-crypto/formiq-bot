@@ -20,6 +20,7 @@ import re
 import difflib
 from collections import Counter
 from weight_import import parse_report, MAX_FILE_SIZE
+from integrations.fatsecret import FatSecretCatalogClient
 
 import psycopg
 import telebot
@@ -34,6 +35,8 @@ DATABASE_URL = os.environ['DATABASE_URL']
 BASE_URL = os.getenv('RENDER_EXTERNAL_URL', 'https://formiq-bot.onrender.com').rstrip('/')
 YANDEX_KEY = os.getenv('YANDEX_API_KEY', '').strip()
 FOLDER_ID = os.getenv('YANDEX_FOLDER_ID', '').strip()
+FATSECRET_CLIENT_ID = os.getenv('FATSECRET_CLIENT_ID','').strip()
+FATSECRET_CLIENT_SECRET = os.getenv('FATSECRET_CLIENT_SECRET','').strip()
 MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
 AI_URL = 'https://ai.api.cloud.yandex.net/foundationModels/v1/completion'
 SECRET = hashlib.sha256(TOKEN.encode()).hexdigest()
@@ -453,6 +456,10 @@ def init_db():
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_items_owner_meal
             ON manual_food_items(chat_id,meal_id,id)""")
+        # FatSecret provider food IDs and serving IDs are storable; nutrient
+        # values and names returned by the provider are not persisted.
+        c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_food_id TEXT')
+        c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_serving_id TEXT')
         c.execute("""CREATE TABLE IF NOT EXISTS cardio_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             performed_at TIMESTAMPTZ DEFAULT NOW(),
@@ -3276,7 +3283,8 @@ def food_parse(body):
 def food_history(chat,body):
     day=food_day(body.get('date'))
     with db() as conn:
-        rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams
+        rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams,
+                i.source_food_id,i.source_serving_id
             FROM manual_food_meals m LEFT JOIN manual_food_items i
               ON i.meal_id=m.id AND i.chat_id=%s
             WHERE m.chat_id=%s AND m.eaten_on=%s
@@ -3284,11 +3292,12 @@ def food_history(chat,body):
     # Older releases allowed multiple rows for the same meal/day. Combine
     # their visible cards without rewriting, merging or deleting any history.
     meals={}
-    for mid,meal_type,iid,name,grams in rows:
+    for mid,meal_type,iid,name,grams,food_id,serving_id in rows:
         entry=meals.setdefault(meal_type,{'id':mid,'type':meal_type,'items':[]})
         if iid is not None:
             entry['items'].append({'id':iid,'name':name,'grams':float(grams),
-                'kcal':None,'protein':None,'fat':None,'carbs':None})
+                'kcal':None,'protein':None,'fat':None,'carbs':None,
+                'nutrition_source':'fatsecret' if food_id and serving_id else None})
     return {'date':day.isoformat(),'meals':list(meals.values()),
         'nutrients_available':False}
 
@@ -3347,11 +3356,14 @@ def food_change(chat,body,delete=False):
                     (changed[0],chat))
         else:
             changed=conn.execute("""UPDATE manual_food_items i
-                SET name=%s,grams=%s,updated_at=NOW()
+                SET name=%s,grams=%s,
+                    source_food_id=CASE WHEN name=%s THEN source_food_id ELSE NULL END,
+                    source_serving_id=CASE WHEN name=%s THEN source_serving_id ELSE NULL END,
+                    updated_at=NOW()
                 FROM manual_food_meals m WHERE i.id=%s AND i.chat_id=%s
                 AND m.id=i.meal_id AND m.chat_id=%s
                 RETURNING m.id,m.eaten_on""",
-                (name,grams,iid,chat,chat)).fetchone()
+                (name,grams,name,name,iid,chat,chat)).fetchone()
     if not changed:
         raise ValueError('Продукт не найден')
     return food_history(chat,{'date':changed[1].isoformat()})
@@ -3888,6 +3900,7 @@ def mini_state(chat, just_finished=False):
         'tier': tier,
         'tier_demo': not PREMIUM_ENFORCED,
         'tier_name': TIER_LABEL[tier],
+        'food_catalog_available': bool(FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET),
     }
     with db() as c:
         total, last7, last30 = c.execute('''
