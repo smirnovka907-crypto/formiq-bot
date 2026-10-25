@@ -735,6 +735,28 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(self.m.mini_state(self.chat)['health_description'],
                          'Есть травма колена, пока не знаю нагрузку')
 
+    def test_v6_confirmed_account_deletion_erases_private_records_only_for_owner(self):
+        """Delete user-owned sensitive V6 rows in disposable PG18, not production."""
+        for owner in (self.chat, 999):
+            data=self.body((0,2))
+            data['metrics']['sex']='female'
+            data['answers']['equipment']='home'
+            data['equipment_description']='коврик и резинки'
+            data['health_description']='Индивидуальное ограничение нагрузки'
+            data['health_storage_consent']=True
+            self.m.save_onboarding(owner,data)
+            self.m.period_save(owner,{'start':'2026-10-01','end':'2026-10-05'})
+        with patch.object(self.m,'send') as send:
+            self.m.delete_all(self.chat)
+            send.assert_called_once()
+        with self.connect() as conn:
+            for table in ('profile_health_notes','menstrual_periods',
+                          'profile_equipment','profile_metrics','profiles'):
+                self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                    .format(sql.Identifier(table)),(self.chat,)).fetchone()[0],0,table)
+                self.assertEqual(conn.execute(sql.SQL('SELECT count(*) FROM {} WHERE chat_id=%s')
+                    .format(sql.Identifier(table)),(999,)).fetchone()[0],1,table)
+
     def test_private_female_period_dates_prediction_and_edit(self):
         # A historical 3-cycle series can estimate a *future* date but must
         # not continue showing it as "next" after that date has passed.
