@@ -25,7 +25,7 @@ class Telegram3813(unittest.TestCase):
         content = welcome_jpeg()
         self.assertTrue(content.startswith(b'\xff\xd8\xff'))
         image = Image.open(BytesIO(content))
-        self.assertEqual(image.size, (800, 533))
+        self.assertEqual(image.size, (1024, 1536))
         self.assertLess(len(content), 5_000_000)
         self.assertEqual(
             self.botmod.APP.test_client().get('/mini/welcome-cover.jpg').data,
@@ -74,7 +74,7 @@ class Telegram3813(unittest.TestCase):
             self.botmod.home(123, welcome_image=True)
         set_menu.assert_called_once()
         photo.assert_called_once()
-        self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\xff\xd8'))
+        self.assertTrue(photo.call_args.args[1].getvalue().startswith(b'\x89PNG\r\n\x1a\n'))
         markup = photo.call_args.kwargs['reply_markup']
         self.assertIsInstance(markup, types.InlineKeyboardMarkup)
         self.assertEqual(len(markup.keyboard[0]), 2)
