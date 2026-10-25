@@ -828,3 +828,10 @@ Telegram-бота, изменения токенов/webhook, Render deploy ил
 - **Дополнительно проверяется миграция V5→V6:** PG18 integration regression в уникальной временной схеме сохраняет профиль, показатели, health limits, соглашения, тренировочный цикл и расписание; затем имитирует старую V5 схему (без двух V6-таблиц), дважды запускает `init_db()` и сравнивает прежние строки без изменения. Это тест на синтетических данных, **не** backup/restore production и **не** запись в рабочую БД. Коммиты [`a0e553d`](https://github.com/smirnovka907-crypto/formiq-bot/commit/a0e553d2005119199ea7eb33975f10acda2a678b), [`84acaff`](https://github.com/smirnovka907-crypto/formiq-bot/commit/84acaffd9d5cf2dacc7d05ca32da4a81647283b1). Результат по точному HEAD проверять только в новом Actions.
 
 **Следующее действие:** подтвердить успешный CI на последнем SHA PR #17, после чего передать готовую ветку на согласование выпуска в «FORMIQ | Управление 2» (без самостоятельного merge/deploy).
+
+
+### Подтверждённая проверка V6: хранение legacy-метрик и миграция (25.10.2026)
+
+- [GitHub Actions #40148830815](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40148830815) — **SUCCESS** на функциональном SHA `ef20b8efa07085d7f3804c4d52f9fd0f7102940d`. Job `integration-tests`: Python / JavaScript, мобильный Chromium, runtime + API, изолированная PostgreSQL 18; новый тест сохранения legacy `resting_hr` и тест идемпотентной аддитивной V5→V6 миграции успешно прошли в составе workflow.
+- Render `formiq-bot` по-прежнему Live на `6b41d48f1a062ad317bac0533fceeb1af8224416`. В проверенном лог-периоде после deploy нет error-level записей. Read-only Render PG metadata: `formiq-db` available, PG18 Free до 19.11.2026; обе V6-only таблицы (`profile_health_notes`, `menstrual_periods`) **отсутствуют** в production. Данные и schema production не изменялись.
+- Этот документ добавлен **после** функционального SUCCESS; точный финальный HEAD с документацией требует собственного CI. PR #17 **Draft**, merge и production deploy не выполнялись. Непроверенными остаются restore реальной защищённой production-копии и физический Telegram Android WebView.
