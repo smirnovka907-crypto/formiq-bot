@@ -222,7 +222,10 @@ def normalize_catalog_search(payload: dict) -> list[dict]:
     root=payload.get("foods_search") or {}
     if not isinstance(root,dict):
         raise ValueError("Invalid FatSecret catalog results")
-    items=root.get("food",[])
+    nested=root.get("results",root)
+    if not isinstance(nested,dict):
+        raise ValueError("Invalid FatSecret search results container")
+    items=nested.get("food",[])
     if isinstance(items,dict):
         items=[items]
     if not isinstance(items,list) or len(items)>50:
@@ -290,6 +293,28 @@ class FatSecretCatalogClient:
         if not isinstance(data,dict) or not isinstance(data.get("access_token"),str) or not data["access_token"]:
             raise ValueError("FatSecret OAuth2 token unavailable")
         return data["access_token"]
+
+    def food_by_id(self, food_id: str, bearer_token: str) -> dict:
+        """Resolve one food ID from FatSecret, never trust a client-sent serving."""
+        if not isinstance(food_id,str) or not food_id.isdecimal() or len(food_id)>20:
+            raise ValueError("Invalid FatSecret food identifier")
+        if not isinstance(bearer_token,str) or not bearer_token:
+            raise ValueError("FatSecret catalogue access not configured")
+        query=urlencode({"food_id":food_id,"format":"json"})
+        req=Request("https://platform.fatsecret.com/rest/food/v5?"+query,
+                    headers={"Authorization":"Bearer "+bearer_token,
+                             "Accept":"application/json"},method="GET")
+        with urlopen(req,timeout=12) as response:
+            payload=json.loads(response.read(200_000))
+        if not isinstance(payload,dict) or not isinstance(payload.get("food"),dict):
+            raise ValueError("Invalid FatSecret food details")
+        row=payload["food"]
+        if str(row.get("food_id"))!=food_id:
+            raise ValueError("FatSecret food identifier mismatch")
+        results=normalize_catalog_search({"foods_search":{"results":{"food":[row]}}})
+        if len(results)!=1:
+            raise ValueError("FatSecret food detail unavailable")
+        return results[0]
 
     def search(self, text: str, bearer_token: str, *, region: str = "RU", language: str = "ru") -> list[dict]:
         if not isinstance(text,str) or not 2<=len(text.strip())<=120:
