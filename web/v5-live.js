@@ -18,7 +18,7 @@ function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
 let onboardOpen=false,onboard=null,onboardErrors={};
-let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null;
+let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
@@ -320,6 +320,7 @@ function workout(){
    '<p class="subtitle">Подход '+esc(c.set_no)+' из '+esc(c.set_count)+' · цель '+esc(target)+' '+unit+'</p>'+
    (c.previous?'<p class="input-note" style="margin-top:12px">Прошлый результат: '+esc(c.previous)+'</p>':'')+
    (c.tip?'<p class="input-note" style="margin-top:8px">'+esc(c.tip)+'</p>':'')+
+   button('Техника упражнения','exercise-live')+
    '<div class="workout-input-grid">'+
    (c.unit==='reps'?input('Вес, кг','weight','number','min="0" max="500" step="0.1" inputmode="decimal"'):
      '<div class="metric"><span>Выполняй упражнение по плану</span></div>')+
@@ -354,6 +355,7 @@ function training(){
   '<div class="heading-row"><h2>'+esc(title)+'</h2></div>'+
   '<p class="subtitle">'+esc(next?.date_ru||'Дата уточняется по плану')+'</p><div class="divider"></div>'+
   (state.plan_warning?'<p class="fq-form-error" role="alert">'+esc(state.plan_warning)+'</p>':'')+
+  (state.recovery_advice?'<p class="input-note" role="status">'+esc(state.recovery_advice)+'</p>':'')+
   (exercises||'<p class="empty">'+(state.plan_warning?'Упражнения станут доступны после уточнения безопасной нагрузки.':'План упражнений пока не сформирован.')+'</p>')+
   (items.length?'<div class="workout-cta">'+button('Начать тренировку','mood',true)+'</div>':'')+
   '</section>';
@@ -677,6 +679,7 @@ function previewPanel(){
   '<div class="fq-live-row"><span>Заминка</span><strong>'+esc(p.cooldown_minutes)+' мин</strong></div>'+
   '<p class="input-note">'+esc(p.cardio_note||'')+'</p>'+
   (p.warning?'<p role="alert" class="fq-form-error">'+esc(p.warning)+'</p>':'')+
+  (p.recovery_advice?'<p class="input-note" role="status">'+esc(p.recovery_advice)+'</p>':'')+
   (p.exercises||[]).map((x,i)=>'<button type="button" data-cmd="exercise-card" data-index="'+i+'" class="fq-preview-exercise"><span class="fq-exercise-fallback" aria-hidden="true">◎</span><span><strong>'+
    esc(x.name)+'</strong><small>'+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
    ' '+unit(x)+(x.weight_kg!=null?' · последний рабочий вес '+esc(x.weight_kg)+' кг':' · вес не задан')+
@@ -1013,13 +1016,24 @@ app.addEventListener('click',async e=>{
   catch(ex){error=ex.message||'Не удалось загрузить тренировку';modal='';}
   finally{trainingPreviewBusy=false;draw()}return;
  }
+ if(cmd==='exercise-live'){
+  const c=state?.workout?.current;
+  if(!c)return;
+  exerciseOrigin='live';
+  exerciseDetails={key:c.key,name:c.name,sets:c.set_count,low:c.low,high:c.high,unit:c.unit,
+   weight_kg:null,muscles:'Подробности зависят от движения',
+   start_position:'Проверь устойчивость, положение тела и настройку оборудования.',
+   steps:['Прими исходное положение.',c.tip||'Двигайся плавно и контролируемо.','Вернись к началу движения без рывка.'],
+   mistakes:c.caution||'Не выполняй через боль.',substitutions:[]};
+  modal='exercise-card';draw();return;
+ }
  if(cmd==='exercise-card'){
   const index=Number(element.dataset.index);
   if(!Number.isSafeInteger(index)||index<0)return;
   exerciseDetails=trainingPreview?.exercises?.[index]||null;
-  if(exerciseDetails){modal='exercise-card';draw()}return;
+  if(exerciseDetails){exerciseOrigin='preview';modal='exercise-card';draw()}return;
  }
- if(cmd==='exercise-back'){modal='training-preview';draw();return}
+ if(cmd==='exercise-back'){modal=exerciseOrigin==='live'?'':'training-preview';draw();return}
  if(cmd==='preview-start'){
   if(!trainingPreview?.can_start)return;
   modal='mood';draw();return;
