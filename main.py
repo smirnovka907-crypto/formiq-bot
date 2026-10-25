@@ -4011,6 +4011,24 @@ def food_catalog_lookup(chat, body):
         'notice':'КБЖУ основаны на выбранной порции FatSecret, не на приблизительном совпадении названия.'}
 
 
+def food_preparation_state(name):
+    """Recognize explicit raw/cooked descriptions; unknown is never guessed.
+
+    Gram weights of raw and cooked food are not interchangeable. FatSecret's
+    matching food name is a user-facing choice, not a verified conversion.
+    """
+    if not isinstance(name,str):
+        return None
+    text=name.casefold().replace('ё','е')
+    raw=bool(re.search(
+        r'\b(?:сырой|сырая|сырое|сырые|сырого|сырых|сухой|сухая|сухое|сухие|сухого|сухих|raw|uncooked|dry)\b',text))
+    cooked=bool(re.search(
+        r'\b(?:варен\w*|отварн\w*|приготовлен\w*|готов\w*|жарен\w*|тушен\w*|запечен\w*|boiled|cooked|fried)\b',text))
+    if raw == cooked:
+        return None
+    return 'raw' if raw else 'cooked'
+
+
 def food_catalog_attach(chat,body):
     """Bind ONLY provider IDs after fresh server-side verification.
 
@@ -4044,6 +4062,12 @@ def food_catalog_attach(chat,body):
         candidate=client.food_by_id(fid,token)
     except Exception:
         raise ValueError('Не удалось проверить порцию FatSecret. Запись дневника не изменена') from None
+    # Never silently use a cooked product's macro density for raw grams or
+    # vice versa. Unknown preparations still require manual user selection.
+    selected_state=food_preparation_state(old[0])
+    candidate_state=food_preparation_state(candidate.get('name',''))
+    if selected_state and candidate_state and selected_state!=candidate_state:
+        raise ValueError('Сырой и приготовленный вес отличаются. Выбери продукт FatSecret с таким же состоянием')
     portion=next((p for p in candidate['servings'] if p['serving_id']==sid),None)
     if not portion or not portion.get('grams') or not portion.get('per_serving'):
         raise ValueError('У этой порции нет подтверждённых данных на граммы')
