@@ -815,11 +815,19 @@ app.addEventListener('click',async e=>{
  if(cmd==='detail'){const id=Number(element.dataset.id);if(!Number.isSafeInteger(id))return;const result=await send('detail',{id});if(result){detail=result.detail;modal='detail';draw()}return}
 });
 setInterval(()=>{const element=document.getElementById('rest-count');if(!element)return;const seconds=Math.max(0,Math.ceil((restUntil-Date.now())/1000));if(!seconds){restUntil=0;restFor='';storeRestTimer();draw();return}element.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`},500);
+// Telegram's system safe area and its fullscreen content-controls area are
+// distinct. Reserve both before drawing our own header or profile shortcut.
+let fullscreenRequested=false;
 function syncTelegramInsets(){
  const safe=tg?.safeAreaInset||{},content=tg?.contentSafeAreaInset||{};
  for(const side of ['top','bottom']){
-  const inset=Math.max(0,Number(safe[side])||0,Number(content[side])||0);
-  document.documentElement?.style?.setProperty('--fq-content-safe-'+side,Math.min(inset,180)+'px');
+  const device=Math.max(0,Math.min(Number(safe[side])||0,180));
+  const controls=Math.max(0,Math.min(Number(content[side])||0,180));
+  // On clients that report a late/zero content inset, protect the close/menu
+  // overlay immediately when fullscreen is requested (until Telegram updates).
+  const fallback=(side==='top'&&(tg?.isFullscreen||fullscreenRequested))?device+64:0;
+  const inset=side==='top'?Math.max(device+controls,fallback):Math.max(device,controls);
+  document.documentElement?.style?.setProperty('--fq-content-safe-'+side,Math.min(inset,240)+'px');
  }
 }
 if(token){
@@ -829,9 +837,14 @@ if(token){
    tg.onEvent('safeAreaChanged',syncTelegramInsets);
    tg.onEvent('contentSafeAreaChanged',syncTelegramInsets);
    tg.onEvent('fullscreenChanged',syncTelegramInsets);
+   tg.onEvent('fullscreenFailed',()=>{fullscreenRequested=false;syncTelegramInsets()});
   }
   if(typeof tg.requestFullscreen==='function'&&
-     (typeof tg.isVersionAtLeast!=='function'||tg.isVersionAtLeast('8.0')))tg.requestFullscreen();
+     (typeof tg.isVersionAtLeast!=='function'||tg.isVersionAtLeast('8.0'))){
+   fullscreenRequested=true;
+   syncTelegramInsets();
+   try{tg.requestFullscreen()}catch(_e){fullscreenRequested=false;syncTelegramInsets()}
+  }
  }catch(_e){/* Older Telegram clients stay expanded. */}
  send('state');
 }else draw();
