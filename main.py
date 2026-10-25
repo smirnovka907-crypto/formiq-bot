@@ -21,6 +21,7 @@ import difflib
 from collections import Counter
 from weight_import import parse_report, MAX_FILE_SIZE
 from integrations.fatsecret import FatSecretCatalogClient
+from integrations.garmin import normalize_garmin_webhook
 
 import psycopg
 import telebot
@@ -460,6 +461,30 @@ def init_db():
         # values and names returned by the provider are not persisted.
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_food_id TEXT')
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_serving_id TEXT')
+        # Official Garmin Business API: zero connected accounts until its
+        # approved OAuth2 user mapping and consent have actually succeeded.
+        # Tokens deliberately do not exist in this schema.
+        c.execute("""CREATE TABLE IF NOT EXISTS garmin_authorized_identities (
+            chat_id BIGINT PRIMARY KEY,
+            provider_user_id TEXT NOT NULL UNIQUE,
+            health_consent_at TIMESTAMPTZ NOT NULL,
+            connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            disconnected_at TIMESTAMPTZ,
+            last_sync_at TIMESTAMPTZ)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS garmin_metric_events (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN ('dailies','sleeps','activities')),
+            external_id TEXT NOT NULL,
+            event_at_utc TIMESTAMPTZ,
+            local_calendar_date DATE,
+            metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(chat_id,provider_user_id,category,external_id))""")
+        c.execute("""CREATE INDEX IF NOT EXISTS garmin_metric_events_owner_date
+            ON garmin_metric_events(chat_id,local_calendar_date DESC,id DESC)""")
         c.execute("""CREATE TABLE IF NOT EXISTS cardio_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             performed_at TIMESTAMPTZ DEFAULT NOW(),
@@ -3230,6 +3255,68 @@ def scheduled_calendar(chat,p,cycle):
           'date_ru':dt.strftime('%d.%m.%Y'),'title':day_title(p,day),
           'status':'done' if count_done>0 else ('past' if dt<today else 'planned')})
     return items
+
+
+
+
+# Internal provider ingestion. Never expose this directly through /mini/api:
+# the caller MUST verify a Garmin-signed Business API delivery first, map its
+# authenticated provider identity to an OAuth2-consented FORMIQ owner, and
+# only then call this method. Until access is granted this runs in isolated tests.
+GARMIN_ALLOWED_METRICS = frozenset((
+    'steps','resting_heart_rate_bpm','active_calories_kcal',
+    'total_daily_calories_kcal','resting_calories_kcal',
+    'average_stress_level','body_battery_charged','body_battery_drained',
+    'duration_seconds','duration_minutes','sleep_score','activity_type',
+    'distance_meters','average_heart_rate_bpm'))
+
+
+def ingest_garmin_verified_batch(chat, provider_user_id, payload):
+    """Persist normalized, consented provider summaries without duplicates.
+
+    This does not use Garmin passwords, access tokens, user-provided chat IDs,
+    arbitrary raw JSON or a public webhook. It never edits manual workouts or
+    merges Garmin exercise calories into daily energy totals.
+    """
+    if type(chat) is not int or chat<=0 or not isinstance(provider_user_id,str) or \
+            not provider_user_id or len(provider_user_id)>80:
+        raise PermissionError('Garmin identity is not authorized')
+    records=normalize_garmin_webhook(payload,expected_user_id=provider_user_id)
+    verified=[]
+    for entry in records:
+        local=entry.get('calendar_date')
+        started=entry.get('start_at_utc')
+        if not local and not started:
+            raise ValueError('Garmin event needs an explicit date or timestamp')
+        if local:
+            local=food_day(local)
+        event_at=datetime.fromisoformat(started) if started else None
+        values={k:v for k,v in entry.items()
+            if k in GARMIN_ALLOWED_METRICS and v is not None}
+        if values:
+            verified.append((entry,local,event_at,values))
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        owner=conn.execute("""SELECT 1 FROM garmin_authorized_identities
+            WHERE chat_id=%s AND provider_user_id=%s
+              AND health_consent_at IS NOT NULL AND disconnected_at IS NULL""",
+            (chat,provider_user_id)).fetchone()
+        if not owner:
+            raise PermissionError('Garmin account is not connected and consented')
+        for entry,local,event_at,values in verified:
+            conn.execute("""INSERT INTO garmin_metric_events
+                (chat_id,provider_user_id,category,external_id,
+                 event_at_utc,local_calendar_date,metrics_json)
+                VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb)
+                ON CONFLICT(chat_id,provider_user_id,category,external_id)
+                DO UPDATE SET event_at_utc=EXCLUDED.event_at_utc,
+                    local_calendar_date=EXCLUDED.local_calendar_date,
+                    metrics_json=EXCLUDED.metrics_json,updated_at=NOW()""",
+                (chat,provider_user_id,entry['category'],entry['external_id'],
+                 event_at,local,json.dumps(values,ensure_ascii=False)))
+        conn.execute("""UPDATE garmin_authorized_identities SET last_sync_at=NOW()
+            WHERE chat_id=%s AND provider_user_id=%s""",(chat,provider_user_id))
+    return {'processed':len(verified),'provider':'garmin','saved':True}
 
 
 
