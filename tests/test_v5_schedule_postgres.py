@@ -636,6 +636,35 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM training_cycles WHERE chat_id=%s',
                                           (self.chat,)).fetchone()[0],1)
 
+    def test_v6_additive_migration_from_existing_v5_rows_is_idempotent(self):
+        """Model a populated V5 schema in disposable PG18, not production."""
+        _, cycle, _ = self.save((0,2,4))
+        tables=('profiles','profile_metrics','health_limits','profile_equipment',
+                'user_agreements','training_cycles','scheduled_sessions')
+        def snapshot():
+            with self.connect() as conn:
+                return {name: conn.execute(sql.SQL('SELECT * FROM {} ORDER BY 1')
+                                     .format(sql.Identifier(name))).fetchall()
+                        for name in tables}
+        before=snapshot()
+        self.assertTrue(before['profiles'])
+        self.assertTrue(before['training_cycles'])
+        self.assertTrue(before['scheduled_sessions'])
+        # V5 production predates these two V6-only tables. Drop them only
+        # inside this test's uniquely named ephemeral schema.
+        self.assertTrue(self.schema.startswith('formiq_schedule_regression_'))
+        with self.connect() as conn:
+            conn.execute('DROP TABLE profile_health_notes')
+            conn.execute('DROP TABLE menstrual_periods')
+        self.m.init_db()
+        self.m.init_db()
+        self.assertEqual(snapshot(),before)
+        with self.connect() as conn:
+            for table in ('profile_health_notes','menstrual_periods'):
+                self.assertEqual(conn.execute(
+                    'SELECT to_regclass(%s)',(table,)).fetchone()[0],table)
+        self.assertEqual(self.m.get_cycle(self.chat,self.m.profile(self.chat))[0],cycle)
+
     def test_v6_profile_edit_preserves_legacy_resting_heart_rate(self):
         """V6 no longer asks for resting HR; an edit must not erase old data."""
         original=self.body((0,2))
