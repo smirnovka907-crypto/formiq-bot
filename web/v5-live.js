@@ -380,10 +380,10 @@ function training(){
     '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
   '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
   '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
- const clock=localClock(),greeting=clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
+ const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
- return h()+'<span class="kicker fq-home-date">'+esc(dayLabel)+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
+ return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
   (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard;
 }
