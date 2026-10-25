@@ -21,6 +21,28 @@ class V5StagingContract(unittest.TestCase):
             cls.mod = importlib.import_module('main')
         cls.client = cls.mod.APP.test_client()
 
+    def test_provider_callback_query_params_are_redacted_from_access_logs(self):
+        import logging
+        from unittest.mock import patch
+        token='SECRET_TOKEN_TEST_ONLY'
+        verifier='SECRET_VERIFIER_TEST_ONLY'
+        record=logging.LogRecord('werkzeug',logging.INFO,'web.py',1,
+            '%s - - "GET /mini/fatsecret/callback?state=x&oauth_token=%s&oauth_verifier=%s HTTP/1.1" 200 -',
+            ('127.0.0.1',token,verifier),None)
+        with patch.object(self.mod, 'LOG') as unused_log:
+            for access_filter in logging.getLogger('werkzeug').filters:
+                access_filter.filter(record)
+        output=record.getMessage()
+        self.assertNotIn(token,output)
+        self.assertNotIn(verifier,output)
+        self.assertNotIn('state=x',output)
+        self.assertIn('redacted',output)
+        ordinary=logging.LogRecord('werkzeug',logging.INFO,'web.py',1,
+            'GET /mini OK',(),None)
+        for access_filter in logging.getLogger('werkzeug').filters:
+            access_filter.filter(ordinary)
+        self.assertEqual(ordinary.getMessage(),'GET /mini OK')
+
     def test_all_mini_entry_points_open_v5_without_382_fallback(self):
         public = self.client.get('/mini')
         v5 = self.client.get('/mini/v5')
