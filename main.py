@@ -491,6 +491,12 @@ def init_db():
             description TEXT NOT NULL CHECK(char_length(description)<=800),
             consented_at TIMESTAMPTZ NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE TABLE IF NOT EXISTS ai_personalization_consents(
+            chat_id BIGINT PRIMARY KEY,
+            profile_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            health_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            cycle_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+            changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("""CREATE TABLE IF NOT EXISTS menstrual_periods(
             id BIGSERIAL PRIMARY KEY,
             chat_id BIGINT NOT NULL,
@@ -1987,6 +1993,41 @@ def exercise_progress(chat, mid=None):
     send(chat, '\n'.join(lines), [('🏆 Рекорды', 'records'), ('🤖 ИИ', 'coach'), ('🏠 Меню', 'menu')], mid)
 
 
+def personalization_consent(chat):
+    """Independent, owner-scoped and default-off permissions for Yandex AI."""
+    with db() as conn:
+        row=conn.execute("""SELECT profile_allowed,health_allowed,cycle_allowed
+            FROM ai_personalization_consents WHERE chat_id=%s""",(chat,)).fetchone()
+    return dict(zip(('profile','health','cycle'),map(bool,row))) if row else {
+        'profile':False,'health':False,'cycle':False}
+
+
+def set_personalization_consent(chat,body):
+    """Explicit independent toggles. No cycle consent for male accounts."""
+    allowed=('profile','health','cycle')
+    field=body.get('field');enabled=body.get('enabled')
+    if field not in allowed or type(enabled) is not bool:
+        raise ValueError('Некорректное согласие')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        if field=='cycle':
+            row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+            if not row or row[0]!='female':
+                raise ValueError('Согласие цикла доступно только в женском профиле')
+        if field=='profile' and enabled and profile_in(conn,chat).get('age_group')!='adult':
+            raise ValueError('Сначала сохрани анкету 18+')
+        column={'profile':'profile_allowed','health':'health_allowed','cycle':'cycle_allowed'}[field]
+        # SQL identifiers are hard-coded, never taken from request contents.
+        conn.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
+        conn.execute('UPDATE ai_personalization_consents SET '+column+'=%s,changed_at=NOW() WHERE chat_id=%s',
+            (enabled,chat))
+        if field=='profile' and not enabled:
+            # A previously enabled legacy AI chat must not transmit profile/history
+            # after this new personalization consent is revoked.
+            conn.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
+    return personalization_consent(chat)
+
+
 def ai_state(chat):
     with db() as c:
         row = c.execute('SELECT consented_at,enabled,provider FROM ai_preferences WHERE chat_id=%s',
@@ -2056,7 +2097,9 @@ AI_SYSTEM = '''Ты FORMIQ, русскоязычный фитнес-помощн
 
 
 def ai_context(chat):
-    p = profile(chat)
+    # Legacy conversational AI must not bypass the new profile-revocation gate.
+    permitted=personalization_consent(chat)
+    p = profile(chat) if permitted['profile'] else {}
     with db() as c:
         total, month = c.execute('''SELECT COUNT(*),COUNT(*) FILTER(
             WHERE finished_at >= NOW()-INTERVAL '30 days')
@@ -2076,11 +2119,11 @@ def ai_context(chat):
                       for f in ('goal', 'level', 'days', 'equipment', 'minutes'))
     lines = [f'Анкета: {basic}', f'Завершено тренировок: {total}, за 30 дней: {month}.']
     hp=health_profile(chat)
-    if hp:
+    if hp and permitted['profile'] and permitted['health']:
         lines.append('Ограничения движений (со слов пользователя): '+(', '.join(LIMIT_LABELS.get(x,x) for x in hp['affected']) or 'нет')+f"; боль {hp['pain_score']}/10; течение {hp['symptom_course']}.")
-    for dt, day, week, mood, grade in workouts:
+    for dt, day, week, mood, grade in (workouts if permitted['profile'] else []):
         lines.append(f'{dt:%d.%m} день {day}, неделя {week}, готовность {mood or "нет записи"}, нагрузка {grade or "без оценки"}.')
-    for dt, name, reps, kg, unit in sets:
+    for dt, name, reps, kg, unit in (sets if permitted['profile'] else []):
         lines.append(f'{dt:%d.%m} {name}: {reps} {"сек" if unit == "sec" else "повт."}, ' +
                      (f'вес {kg} кг.' if kg is not None else 'вес не записан.'))
     return '\n'.join(lines), list(reversed(turns)), has_agreement(chat) and not health_safety_error(health_profile(chat))
@@ -2148,6 +2191,7 @@ def delete_all(chat, mid=None):
         for table in ('feedback_items','feedback_drafts','user_agreements','demo_tiers',
                       'scheduled_sessions','custom_programs','cardio_sessions','profile_metrics',
                       'health_limits','profile_health_notes','menstrual_periods',
+                      'ai_personalization_consents',
                       'profile_equipment','workouts','training_cycles','pending_inputs',
                       'premium_access','rest_timers','profiles','ai_messages',
                       'ai_preferences','ai_usage'):
@@ -2818,6 +2862,18 @@ def save_onboarding(chat,body):
             updated_at=NOW()''',
             (chat,json.dumps(health['affected']),health['pain_score'],health['symptom_course'],
              health['danger_signs'],health['activity_cleared']))
+        if body.get('ai_profile_consent') not in (True,False,None) or \
+           body.get('ai_health_consent') not in (True,False,None):
+            raise ValueError('Некорректное согласие на ИИ')
+        c.execute('INSERT INTO ai_personalization_consents(chat_id) VALUES(%s) ON CONFLICT DO NOTHING',(chat,))
+        c.execute('''UPDATE ai_personalization_consents SET profile_allowed=%s,
+            health_allowed=%s,changed_at=NOW() WHERE chat_id=%s''',
+            (body.get('ai_profile_consent') is True,body.get('ai_health_consent') is True,chat))
+        if body.get('ai_profile_consent') is not True:
+            c.execute('UPDATE ai_preferences SET enabled=FALSE WHERE chat_id=%s',(chat,))
+        if sex!='female':
+            c.execute('''UPDATE ai_personalization_consents SET cycle_allowed=FALSE
+                WHERE chat_id=%s''',(chat,))
         if raw_note:
             c.execute("""INSERT INTO profile_health_notes(chat_id,description,consented_at)
                 VALUES(%s,%s,NOW()) ON CONFLICT(chat_id)
@@ -3298,6 +3354,7 @@ def mini_state(chat, just_finished=False):
         'equipment_description': p.get('equipment_description',''),
         'needs_health_profile': not bool(h),
         'agreed': has_agreement(chat),
+        'ai_personalization': personalization_consent(chat),
         'agreement_version': AGREEMENT_VERSION,
         'error': error,
         'workout': None,
