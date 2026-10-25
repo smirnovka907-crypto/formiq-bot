@@ -444,8 +444,8 @@ async function run(){
   await ai.click({cmd:'onboard-save'});
   const optionalSaves=ai.requests.filter(x=>x.action==='onboarding');
   assert.equal(optionalSaves.length,1,'Unreviewed optional Yandex AI must not block saving');
-  assert.ok(optionalSaves[0].health_profile.affected.includes('other'),
-    'Unreviewed free-text health note receives conservative safety restriction');
+  assert.ok(optionalSaves[0].health_profile.affected.includes('knee'),
+    'Explicit knee mention receives conservative region restriction without Yandex AI');
   assert.equal(optionalSaves[0].timezone_confirmed,true);
 
   const reviewed=createClient(true,{storage:new Map(),
