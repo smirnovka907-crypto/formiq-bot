@@ -3421,14 +3421,23 @@ def fatsecret_user_finish(state,oauth_token,verifier):
     cipher=fatsecret_user_cipher()
     digest=hashlib.sha256(state.encode()).hexdigest()
     with db() as conn:
+        # Lock order must match start/disconnect: advisory per-owner lock FIRST,
+        # then row lock. Locking the pending row before advisory can deadlock
+        # with a concurrent reconnect that holds the advisory lock.
+        owner=conn.execute("""SELECT chat_id FROM fatsecret_oauth_pending
+            WHERE state_hash=%s AND expires_at>NOW()""",
+            (digest,)).fetchone()
+        if not owner:
+            raise ValueError('Подключение FatSecret устарело. Начни заново')
+        chat=owner[0]
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         row=conn.execute("""SELECT chat_id,request_token_enc,request_secret_enc
             FROM fatsecret_oauth_pending
-            WHERE state_hash=%s AND expires_at>NOW() FOR UPDATE""",
-            (digest,)).fetchone()
+            WHERE chat_id=%s AND state_hash=%s AND expires_at>NOW()
+            FOR UPDATE""",(chat,digest)).fetchone()
         if not row:
-            raise ValueError('Подключение FatSecret устарело. Начни заново')
-        chat,enc_token,enc_secret=row
-        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+            raise ValueError('Подключение FatSecret уже завершено или истекло')
+        _,enc_token,enc_secret=row
         try:
             sent_token=cipher.decrypt(bytes(enc_token)).decode('utf-8')
             sent_secret=cipher.decrypt(bytes(enc_secret)).decode('utf-8')
