@@ -410,13 +410,26 @@ async function run(){
     .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
   assert.match(ai.root.innerHTML,/Применить результат/);
   await ai.click({cmd:'onboard-save'});
-  assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
-  await ai.click({cmd:'onboard-ai-apply'});
-  await ai.click({cmd:'onboard-save'});
-  const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
-  assert.equal(aiSaves.length,1);
-  assert.equal(aiSaves[0].health_profile.pain_score,3);
-  assert.equal(aiSaves[0].timezone_confirmed,true);
+  const optionalSaves=ai.requests.filter(x=>x.action==='onboarding');
+  assert.equal(optionalSaves.length,1,'Unreviewed optional Yandex AI must not block saving');
+  assert.ok(optionalSaves[0].health_profile.affected.includes('other'),
+    'Unreviewed free-text health note receives conservative safety restriction');
+  assert.equal(optionalSaves[0].timezone_confirmed,true);
+
+  const reviewed=createClient(true,{storage:new Map(),
+    aiPermissions:{profile:true,health:true,cycle:false}});await settle();
+  await reviewed.click({nav:'profile'});
+  await reviewed.click({onboardWeekday:'1'});await reviewed.click({onboardWeekday:'4'});
+  await reviewed.click({onboardPick:'sex',value:'male'});
+  reviewed.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',
+    value:'Беспокоит колено после пробежки'}});
+  await reviewed.click({cmd:'onboard-ai'});
+  await reviewed.click({cmd:'onboard-ai-apply'});
+  await reviewed.click({cmd:'onboard-save'});
+  const reviewedSaves=reviewed.requests.filter(x=>x.action==='onboarding');
+  assert.equal(reviewedSaves.length,1);
+  assert.equal(reviewedSaves[0].health_profile.pain_score,3,
+    'Confirmed Yandex result is used only after explicit acceptance');
    const diary=createClient(true,{trackHistory:true});await settle();
    await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
