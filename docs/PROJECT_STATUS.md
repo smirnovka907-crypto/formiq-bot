@@ -813,3 +813,15 @@ Telegram-бота, изменения токенов/webhook, Render deploy ил
 - **CI по точному HEAD этой документации подлежит проверке**
   отдельно. Реальная приёмка Telegram Android ожидает
   разрешённой публикации, PR оставлен Draft.
+
+
+## ТЗ №2 — сохранение ранее записанного пульса при редактировании V6 (25.10.2026)
+
+**Сверено перед правкой:** production `main` и Render LIVE на `6b41d48f1a062ad317bac0533fceeb1af8224416`; PR #16 и PR #17 — Draft, отдельно от `main`. Точный HEAD PR #17 `984fe4a6a155410ea8df599e6441bf2007dd2edc` имел успешный Actions [#40145132525](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40145132525), включая Python, JS, API, disposable PostgreSQL 18 и мобильный Chromium. Это не проверка настоящего Telegram Android WebView.
+
+- **Обнаруженный дефект:** форма V6 намеренно не спрашивает `resting_hr`, но `save_onboarding()` делал `resting_hr=EXCLUDED.resting_hr` при `ON CONFLICT`. Повторное сохранение V6 с отсутствующим значением могло стереть прежний `profile_metrics.resting_hr` (полезное историческое измерение), хотя другие поля и история оставались.
+- **Исправлено в PR #17:** при обновлении анкеты `resting_hr=COALESCE(EXCLUDED.resting_hr,profile_metrics.resting_hr)`. Для новой записи остаётся NULL, если значения нет; существующий показатель сохраняется. Прямое изменение `save_metrics` остаётся отдельным действием. Коммит [`54230da`](https://github.com/smirnovka907-crypto/formiq-bot/commit/54230da350aa72d9c502c2b1c4294dedf5271645).
+- **Регрессия добавлена:** на изолированном PG18 тест сначала сохраняет старый пульс, затем выполняет аутентифицированное API-редактирование V6 без поля `resting_hr` с новой розовой темой/днями/длительностью и проверяет старое значение в API и PostgreSQL. Коммит [`0c86e54`](https://github.com/smirnovka907-crypto/formiq-bot/commit/0c86e549abe74df6af7b1e42240d1b8245cb71be).
+- **CI после изменения:** проверять отдельно на точном HEAD, включая этот документальный коммит; не считать PASS до подтверждения GitHub Actions. Production PostgreSQL/Render/webhook, `main` и данные пользователей не менялись. PR #17 остаётся Draft; backup/restore production не подтверждены; срок Free PG — **19.11.2026**. Release — **NO-GO** до отдельного разрешения и пользовательской приёмки.
+
+**Следующее действие:** подтвердить успешный CI на последнем SHA PR #17, после чего передать готовую ветку на согласование выпуска в «FORMIQ | Управление 2» (без самостоятельного merge/deploy).
