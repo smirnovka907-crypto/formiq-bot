@@ -559,7 +559,7 @@ async function loadBodyWeight(){
  if(view==='progress'&&!onboardOpen)draw();
 }
 async function uploadBodyWeight(mode){
- if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл Fitdays (CSV, XLSX или XLS).';draw();return}
+ if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл измерений (CSV, XLSX или XLS).';draw();return}
  if(weightFile.size>2000000){weightImportError='Отчёт не должен превышать 2 МБ';draw();return}
  weightImportBusy=true;weightImportError='';draw();
  const fd=new FormData();fd.append('report',weightFile);fd.append('mode',mode);
