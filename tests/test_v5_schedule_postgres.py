@@ -124,8 +124,8 @@ class SchedulePostgresTests(unittest.TestCase):
         item_id=data['meals'][0]['items'][0]['id']
         another=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
             'items':[{'name':'банан','grams':110}]})
-        self.assertEqual(len(another['meals']),1,'One breakfast card per day')
-         self.assertEqual(len(another['meals'][0]['items']),3,'New products append to existing breakfast')
+        self.assertEqual(len(another['meals']),1,'One breakfast card per day') 
+        self.assertEqual(len(another['meals'][0]['items']),3,'New products append to existing breakfast')
         self.m.food_add(self.chat,{'date':'2026-10-17','meal_type':'dinner',
             'items':[{'name':'рис сухой','grams':90}]})
         updated=self.m.food_change(self.chat,{'id':item_id,'name':'овсянка сухая','grams':75})
@@ -135,7 +135,7 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.food_change(self.chat+1,{'id':item_id,'name':'чужой','grams':12})
         after=self.m.food_change(self.chat,{'id':item_id},delete=True)
-        self.assertEqual(len(after['meals'][0]['items']),1)
+        self.assertEqual(len(after['meals'][0]['items']),2)
         self.assertEqual(len(self.m.food_history(self.chat,{'date':'2026-10-17'})['meals']),1)
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
