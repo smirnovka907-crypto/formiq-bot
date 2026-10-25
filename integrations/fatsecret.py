@@ -143,8 +143,12 @@ def _number(value: object) -> Decimal | None:
 
 def normalize_diary(payload: dict) -> dict:
     """Normalized daily summary with stable entry IDs, zero entries supported."""
+    if not isinstance(payload, dict) or payload.get("error") is not None:
+        raise ValueError("FatSecret diary request failed")
     root = payload.get("food_entries") or {}
-    entries = root.get("food_entry", []) if isinstance(root, dict) else []
+    if not isinstance(root, dict) or root.get("error") is not None:
+        raise ValueError("Invalid FatSecret diary payload")
+    entries = root.get("food_entry", [])
     if isinstance(entries, dict):
         entries = [entries]
     if not isinstance(entries, list):
@@ -223,7 +227,7 @@ def scale_verified_serving(serving: dict, grams: object) -> dict | None:
 
 def normalize_catalog_search(payload: dict) -> list[dict]:
     """Strictly annotate food candidates; never auto-attach an ambiguous hit."""
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.get("error") is not None:
         raise ValueError("Invalid FatSecret catalog reply")
     root=payload.get("foods_search") or {}
     if not isinstance(root,dict):
