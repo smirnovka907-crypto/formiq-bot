@@ -636,6 +636,30 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM training_cycles WHERE chat_id=%s',
                                           (self.chat,)).fetchone()[0],1)
 
+    def test_v6_profile_edit_preserves_legacy_resting_heart_rate(self):
+        """V6 no longer asks for resting HR; an edit must not erase old data."""
+        original=self.body((0,2))
+        self.m.save_onboarding(self.chat,original)
+        with self.connect() as conn:
+            before=conn.execute('SELECT resting_hr FROM profile_metrics WHERE chat_id=%s',
+                                (self.chat,)).fetchone()[0]
+        self.assertEqual(before,60)
+        updated=self.body((0,2,4))
+        updated['metrics'].pop('resting_hr')
+        updated['metrics']['sex']='female'
+        updated['answers']['minutes']='120'
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            response=self.m.APP.test_client().post('/mini/api',
+                json={'action':'onboarding',**updated})
+        self.assertEqual(response.status_code,200,response.get_json())
+        self.assertEqual(response.json['data']['metrics']['resting_hr'],60)
+        self.assertEqual(response.json['data']['metrics']['sex'],'female')
+        self.assertEqual(response.json['data']['profile_raw']['weekdays'],[0,2,4])
+        with self.connect() as conn:
+            persisted=conn.execute('SELECT resting_hr FROM profile_metrics WHERE chat_id=%s',
+                                   (self.chat,)).fetchone()[0]
+        self.assertEqual(persisted,60)
+
     def test_weekday_selection_ignores_invalid_or_missing_legacy_frequency(self):
         """Only selected weekdays are authoritative in V6, even if days is stale."""
         client=self.m.APP.test_client()
