@@ -356,6 +356,17 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(fake.access_token.call_count,1)
         self.assertEqual(fake.diary.call_count,1)
 
+    def test_fatsecret_connection_rejects_invalid_encryption_key(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'FORMIQ_INTEGRATION_ENCRYPTION_KEY','incorrect-key'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_KEY','offline'), \
+             patch.object(self.m,'FATSECRET_OAUTH_CONSUMER_SECRET','offline'):
+            self.assertFalse(self.m.fatsecret_user_oauth_ready())
+            self.assertFalse(self.m.fatsecret_user_status(self.chat)['available'])
+            with self.assertRaisesRegex(ValueError,'не настроено'):
+                self.m.fatsecret_user_start(self.chat)
+        self.assertFalse(self.m.fatsecret_user_status(self.chat)['connected'])
+
     def test_fatsecret_oauth_callback_error_does_not_link_account(self):
         from cryptography.fernet import Fernet
         from unittest.mock import Mock
