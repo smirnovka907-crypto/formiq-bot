@@ -74,7 +74,17 @@ def main():
                'Native V5 onboarding not present in public JS')
         ensure(b'window.location.assign(\'/mini/legacy\'' not in js,
                'V5 client unexpectedly redirects to legacy onboarding')
-        print('V5 JavaScript: HTTP 200, native onboarding, no legacy redirect')
+        # V6 release retains Aluminium v5 design, but delivers the new
+        # onboarding, two sex buttons, theme switching, opt-in AI and private
+        # period calendar through the existing versioned JavaScript asset.
+        ensure(b"onboardButtons('sex'" in js
+               and b'function onboardWeekdays()' in js
+               and b'theme-female' in js
+               and b'function femaleCalendar()' in js
+               and b"request('period_save'" in js
+               and b'ai_consent:true' in js,
+               'V6 onboarding, female theme, private calendar or AI consent missing')
+        print('V6 JavaScript: HTTP 200, sex/theme/weekdays/calendar/AI-consent present')
 
         # A request with NO initData MUST NOT be allowed to read or mutate.
         code, _, data = public_request('/mini/api', 'POST', {'action': 'state'})
