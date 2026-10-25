@@ -2,7 +2,7 @@
 from functools import lru_cache
 from io import BytesIO
 from PIL import Image
-from approved_assets import WELCOME_PNG, AVATAR_PNG
+from approved_assets import WELCOME_PNG, AVATAR_PNG, WELCOME_JPEG
 
 
 @lru_cache(maxsize=1)
@@ -32,3 +32,9 @@ def welcome_jpeg():
             output, format='JPEG', quality=93, subsampling=0, optimize=True
         )
         return output.getvalue()
+
+
+@lru_cache(maxsize=1)
+def welcome_jpeg():
+    """Preserve legacy Mini App image endpoint; not used by Telegram /start."""
+    return WELCOME_JPEG
