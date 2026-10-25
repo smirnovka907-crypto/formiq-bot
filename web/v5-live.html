@@ -513,4 +513,17 @@ body.theme-female .history-cal-inline .history-cal-grid button.is-today{border-c
 .fq-ai-result{margin-top:14px;padding:14px;border:1px solid rgba(110,128,124,.20);border-radius:14px;background:rgba(255,255,255,.26)}
 .fq-ai-result textarea{margin-bottom:12px}
 .fq-weight-preview{max-height:230px;overflow:auto;margin:14px 0}
+/* Four-week plan and compact exercise preview share Aluminium tokens. */
+.fq-plan-preview{display:flex;width:100%;align-items:center;justify-content:space-between;text-align:left;cursor:pointer;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);padding:12px 8px;border-radius:12px;font:inherit;gap:9px}
+.fq-plan-preview:focus-visible,.fq-preview-exercise:focus-visible{outline:3px solid var(--pistachio);outline-offset:2px}
+.fq-preview-exercise{width:100%;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.65);color:var(--ink);padding:12px;display:flex;align-items:center;gap:12px;text-align:left;margin:8px 0;font:inherit}
+.fq-preview-exercise span:nth-child(2){flex:1;min-width:0}
+.fq-preview-exercise strong,.fq-preview-exercise small{display:block}
+.fq-preview-exercise strong{font-size:15px}
+.fq-preview-exercise small{font-size:12px;color:var(--secondary);margin-top:4px;line-height:1.45}
+.fq-exercise-fallback{display:grid;place-items:center;flex:none;width:45px;height:45px;border-radius:14px;border:1px solid var(--line);background:var(--ivory);font-size:25px}
+.fq-exercise-illustration{display:flex;align-items:center;justify-content:center;text-align:center;background:var(--ivory);border:1px dashed var(--line);border-radius:16px;padding:22px;margin:15px 0;color:var(--secondary);min-height:110px}
+.fq-live-dialog:has(.fq-preview-exercise){overflow-y:auto;max-height:85dvh}
+.fq-live-dialog ol{padding-left:21px;line-height:1.65}
+body.theme-female .fq-preview-exercise,body.theme-female .fq-exercise-illustration{background:#fff8fc}
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
