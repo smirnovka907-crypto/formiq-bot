@@ -82,6 +82,21 @@ class IntegrationTests(unittest.TestCase):
 
     def test_garmin_rejects_malformed_dates_and_float_overflow(self):
         g=module('garmin')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'bad-long-date',
+                'calendarDate':'2026-10-25-injected','steps':1000}]},
+                expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'X'*81,
+                'calendarDate':'2026-10-25','steps':1000}]},
+                expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'X'*81,'summaryId':'test',
+                'calendarDate':'2026-10-25','steps':1000}]})
+
         for date_string in ('2026-02-30','2026/10/18','2026-10-1'):
             with self.assertRaises(ValueError):
                 g.normalize_garmin_webhook({'dailies':[{
