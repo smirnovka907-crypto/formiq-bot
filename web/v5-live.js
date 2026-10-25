@@ -697,6 +697,8 @@ async function loadFoodHistory(){
  finally{foodLoading=false;draw()}
 }
 async function requestFoodDaily(){
+ // Any edit or re-fetch invalidates guidance for the previous food snapshot.
+ aiNutritionTip='';
  const expected=foodDate,seq=++foodDailySeq;
  const hasLinked=(foodHistory?.meals||[]).some(m=>(m.items||[]).some(x=>x.nutrition_source==='fatsecret'));
  foodDaily=null;foodDailyError='';
