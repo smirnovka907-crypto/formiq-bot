@@ -4353,8 +4353,8 @@ def analyze_nutrition_report(chat, data_bytes, filename, mime):
     require_tier(chat,'comfort')
     if not has_agreement(chat) or profile(chat).get('age_group')!='adult':
         raise ValueError('Сначала пройди анкету')
-    if not all(ai_state(chat)):
-        raise ValueError('Сначала включи Yandex AI и согласись на передачу данных Яндексу')
+    if not personalization_consent(chat).get('profile'):
+        raise ValueError('Разреши Yandex AI в анкете для анализа выбранного отчёта')
     if not (YANDEX_KEY and FOLDER_ID):
         raise ValueError('Yandex AI временно недоступен')
     # Accept content only by validated type and signature, not by untrusted filename.
