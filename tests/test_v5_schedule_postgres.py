@@ -174,8 +174,8 @@ class SchedulePostgresTests(unittest.TestCase):
         fake.get_token.return_value='TEST_ONLY'
         fake.search.return_value=[candidate]
         fake.food_by_id.return_value=candidate
-        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \\
-             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \\
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
              patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
             result=self.m.food_catalog_lookup(self.chat,{'query':'овсянка'})
             self.assertEqual(result['candidates'][0]['food_id'],'42')
