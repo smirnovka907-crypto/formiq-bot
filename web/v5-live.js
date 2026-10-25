@@ -110,7 +110,7 @@ function onboardForm(){
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?femaleCalendar():'';
- const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
+ const connections=''; // Inactive integrations are not displayed in the app.
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
   (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
 }
@@ -605,6 +605,10 @@ function progress(){
   '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong></div>'+
   (lastWeight?'<div class="metric" style="margin-top:10px"><span>Последний импорт: '+esc(showMeasure(lastWeight))+'</span><strong>'+esc(lastWeight.weight_kg)+' кг</strong>'+
    '<span>'+additions+'</span></div>'+weightChart(weightPoints,'Масса тела'):'<p class="input-note">Истории измерений пока нет.</p>')+
+  '<h3 class="section-label">Внести измерение вручную</h3>'+
+  '<div class="fq-food-draft"><label class="field"><span>Дата</span><input type="date" id="manual-weight-date" value="'+esc(localClock().date)+'"></label>'+
+  '<label class="field"><span>Вес, кг</span><input type="number" id="manual-weight-value" min="20" max="400" step="0.1" placeholder="75.5"></label></div>'+
+  button('Сохранить измерение','manual-weight-save')+
   '<h3 class="section-label">Загрузить отчёт умных весов</h3>'+
   '<p class="input-note">Совместимые CSV, XLSX, XLS. Без отправки в Yandex AI и без сохранения исходного файла.</p>'+
   '<label class="field"><span>Файл с измерениями</span><input id="weight-report-file" type="file" accept=".csv,.xlsx,.xls"></label>'+
@@ -868,6 +872,15 @@ app.addEventListener('click',async e=>{
   if(!['goal','equipment','sex'].includes(key))return;
   onboard[key]=value;delete onboardErrors[key];
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
+  draw();return;
+ }
+ if(cmd==='manual-weight-save'){
+  const measured=document.getElementById('manual-weight-date')?.value||localClock().date;
+  const kg=document.getElementById('manual-weight-value')?.value;
+  try{
+   const response=await request('body_measurement_manual',{date:measured,weight_kg:kg});
+   weightHistory=response.measurements||[];weightImportNotice='Ручное измерение сохранено.';error='';
+  }catch(ex){weightImportError=ex.message||'Не удалось сохранить измерение'}
   draw();return;
  }
  if(cmd==='weight-preview'||cmd==='weight-import'){await uploadBodyWeight(cmd==='weight-import'?'import':'preview');return}
