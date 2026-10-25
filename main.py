@@ -6,6 +6,7 @@ import html
 import time
 import hmac
 import hashlib
+import secrets
 import logging
 import urllib.request
 import urllib.error
@@ -13,17 +14,18 @@ from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 import gzip
 import csv
 import re
 import difflib
 from collections import Counter
 from weight_import import parse_report, MAX_FILE_SIZE
-from integrations.fatsecret import FatSecretCatalogClient
+from integrations.fatsecret import FatSecretCatalogClient, FatSecretClient, normalize_diary
 from integrations.garmin import normalize_garmin_webhook
 
 import psycopg
+from cryptography.fernet import Fernet, InvalidToken
 import telebot
 from telebot import types
 from flask import Flask, request, abort, jsonify, send_file, make_response
@@ -38,6 +40,9 @@ YANDEX_KEY = os.getenv('YANDEX_API_KEY', '').strip()
 FOLDER_ID = os.getenv('YANDEX_FOLDER_ID', '').strip()
 FATSECRET_CLIENT_ID = os.getenv('FATSECRET_CLIENT_ID','').strip()
 FATSECRET_CLIENT_SECRET = os.getenv('FATSECRET_CLIENT_SECRET','').strip()
+FATSECRET_OAUTH_CONSUMER_KEY = os.getenv('FATSECRET_OAUTH_CONSUMER_KEY','').strip()
+FATSECRET_OAUTH_CONSUMER_SECRET = os.getenv('FATSECRET_OAUTH_CONSUMER_SECRET','').strip()
+FORMIQ_INTEGRATION_ENCRYPTION_KEY = os.getenv('FORMIQ_INTEGRATION_ENCRYPTION_KEY','').strip()
 MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
 AI_URL = 'https://ai.api.cloud.yandex.net/foundationModels/v1/completion'
 SECRET = hashlib.sha256(TOKEN.encode()).hexdigest()
@@ -464,6 +469,22 @@ def init_db():
         # Official Garmin Business API: zero connected accounts until its
         # approved OAuth2 user mapping and consent have actually succeeded.
         # Tokens deliberately do not exist in this schema.
+        # FatSecret 3-legged OAuth1 is separate from catalogue OAuth2.
+        # OAuth request tokens are short-lived; access tokens are Fernet-
+        # encrypted with an operator-managed key, NEVER Telegram BOT_TOKEN.
+        c.execute("""CREATE TABLE IF NOT EXISTS fatsecret_oauth_pending (
+            chat_id BIGINT PRIMARY KEY,
+            state_hash TEXT NOT NULL UNIQUE,
+            request_token_enc BYTEA NOT NULL,
+            request_secret_enc BYTEA NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("""CREATE TABLE IF NOT EXISTS fatsecret_user_connections (
+            chat_id BIGINT PRIMARY KEY,
+            access_token_enc BYTEA NOT NULL,
+            access_secret_enc BYTEA NOT NULL,
+            connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_sync_at TIMESTAMPTZ)""")
         c.execute("""CREATE TABLE IF NOT EXISTS garmin_authorized_identities (
             chat_id BIGINT PRIMARY KEY,
             provider_user_id TEXT NOT NULL UNIQUE,
@@ -3320,6 +3341,172 @@ def ingest_garmin_verified_batch(chat, provider_user_id, payload):
 
 
 
+
+# Never mark a provider integration as available on the strength of code alone.
+# Requires independently provisioned user-diary OAuth 1.0a credentials, an
+# application encryption key kept only in Render, and an HTTPS callback URL.
+def fatsecret_user_oauth_ready():
+    return bool(FATSECRET_OAUTH_CONSUMER_KEY and FATSECRET_OAUTH_CONSUMER_SECRET
+        and FORMIQ_INTEGRATION_ENCRYPTION_KEY and BASE_URL.startswith('https://'))
+
+
+def fatsecret_user_cipher():
+    if not fatsecret_user_oauth_ready():
+        raise ValueError('Подключение личного FatSecret ещё не настроено')
+    try:
+        return Fernet(FORMIQ_INTEGRATION_ENCRYPTION_KEY.encode('ascii'))
+    except (ValueError,TypeError,UnicodeError):
+        raise ValueError('Безопасное подключение FatSecret недоступно') from None
+
+
+def fatsecret_user_client():
+    if not fatsecret_user_oauth_ready():
+        raise ValueError('Подключение личного FatSecret ещё не настроено')
+    return FatSecretClient(FATSECRET_OAUTH_CONSUMER_KEY,FATSECRET_OAUTH_CONSUMER_SECRET)
+
+
+def fatsecret_user_status(chat):
+    with db() as conn:
+        link=conn.execute("""SELECT connected_at,last_sync_at
+            FROM fatsecret_user_connections WHERE chat_id=%s""",(chat,)).fetchone()
+    return {'available':fatsecret_user_oauth_ready(),
+        'connected':bool(link),
+        'connected_at':link[0].isoformat() if link else None,
+        'last_sync_at':link[1].isoformat() if link and link[1] else None}
+
+
+def fatsecret_user_start(chat):
+    """One explicit opt-in per owner; never take a FatSecret password."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    cipher=fatsecret_user_cipher()
+    state=secrets.token_urlsafe(32)
+    callback=BASE_URL+'/mini/fatsecret/callback?state='+quote(state,safe='')
+    try:
+        request_token,request_secret=fatsecret_user_client().request_token(callback)
+        if not request_token or not request_secret:
+            raise ValueError('Incomplete request token')
+    except Exception:
+        raise ValueError('FatSecret недоступен. Подключение не началось') from None
+    digest=hashlib.sha256(state.encode()).hexdigest()
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        conn.execute("""INSERT INTO fatsecret_oauth_pending
+            (chat_id,state_hash,request_token_enc,request_secret_enc,expires_at)
+            VALUES(%s,%s,%s,%s,NOW()+INTERVAL '10 minutes')
+            ON CONFLICT(chat_id) DO UPDATE SET
+            state_hash=EXCLUDED.state_hash,
+            request_token_enc=EXCLUDED.request_token_enc,
+            request_secret_enc=EXCLUDED.request_secret_enc,
+            expires_at=EXCLUDED.expires_at,created_at=NOW()""",
+            (chat,digest,cipher.encrypt(request_token.encode()),
+             cipher.encrypt(request_secret.encode())))
+    # Link is FatSecret's official authorization page. It carries a temporary
+    # request token only, never an access token or credentials.
+    return {'authorization_url':fatsecret_user_client().authorize_url(request_token),
+        'expires_minutes':10}
+
+
+def fatsecret_user_finish(state,oauth_token,verifier):
+    """Callback binds one provider authorization to its initiating FORMIQ user.
+
+    The callback deliberately needs no Telegram initData: it can only complete
+    the short-lived, unguessable request tied to an existing user. Enforce
+    OAuth token and verifier verification plus one-time consumption at the DB.
+    """
+    if (not isinstance(state,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}',state)
+        or not isinstance(oauth_token,str) or not 1<=len(oauth_token)<=512
+        or not isinstance(verifier,str) or not 1<=len(verifier)<=512):
+        raise ValueError('Ссылка авторизации недействительна')
+    cipher=fatsecret_user_cipher()
+    digest=hashlib.sha256(state.encode()).hexdigest()
+    with db() as conn:
+        row=conn.execute("""SELECT chat_id,request_token_enc,request_secret_enc
+            FROM fatsecret_oauth_pending
+            WHERE state_hash=%s AND expires_at>NOW() FOR UPDATE""",
+            (digest,)).fetchone()
+        if not row:
+            raise ValueError('Подключение FatSecret устарело. Начни заново')
+        chat,enc_token,enc_secret=row
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        try:
+            sent_token=cipher.decrypt(bytes(enc_token)).decode('utf-8')
+            sent_secret=cipher.decrypt(bytes(enc_secret)).decode('utf-8')
+        except (InvalidToken,UnicodeError):
+            raise ValueError('Невозможно проверить подключение FatSecret') from None
+        if not hmac.compare_digest(sent_token,oauth_token):
+            raise ValueError('Ссылка FatSecret не соответствует подключению')
+        try:
+            access_token,access_secret=fatsecret_user_client().access_token(
+                sent_token,sent_secret,verifier)
+            if not access_token or not access_secret:
+                raise ValueError('Incomplete FatSecret access grant')
+        except Exception:
+            raise ValueError('FatSecret не подтвердил доступ к дневнику') from None
+        conn.execute("""INSERT INTO fatsecret_user_connections
+            (chat_id,access_token_enc,access_secret_enc,connected_at,last_sync_at)
+            VALUES(%s,%s,%s,NOW(),NULL)
+            ON CONFLICT(chat_id) DO UPDATE SET
+            access_token_enc=EXCLUDED.access_token_enc,
+            access_secret_enc=EXCLUDED.access_secret_enc,
+            connected_at=NOW(),last_sync_at=NULL""",
+            (chat,cipher.encrypt(access_token.encode()),
+             cipher.encrypt(access_secret.encode())))
+        conn.execute('DELETE FROM fatsecret_oauth_pending WHERE chat_id=%s',(chat,))
+    return True
+
+
+def fatsecret_user_disconnect(chat):
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        conn.execute('DELETE FROM fatsecret_oauth_pending WHERE chat_id=%s',(chat,))
+        conn.execute('DELETE FROM fatsecret_user_connections WHERE chat_id=%s',(chat,))
+    return {'connected':False,'notice':'FatSecret отключён в FORMIQ. При необходимости отзови доступ также в FatSecret.'}
+
+
+def fatsecret_user_diary(chat,body):
+    """Fetch user's delegated FatSecret diary LIVE; no licensed data cached."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    cipher=fatsecret_user_cipher()
+    with db() as conn:
+        row=conn.execute("""SELECT access_token_enc,access_secret_enc FROM
+            fatsecret_user_connections WHERE chat_id=%s""",(chat,)).fetchone()
+    if not row:
+        raise ValueError('Сначала подключи свой FatSecret')
+    try:
+        access=cipher.decrypt(bytes(row[0])).decode('utf-8')
+        access_secret=cipher.decrypt(bytes(row[1])).decode('utf-8')
+    except (InvalidToken,UnicodeError):
+        raise ValueError('Ключи подключения FatSecret недоступны. Подключи аккаунт заново') from None
+    try:
+        diary=fatsecret_user_client().diary(access,access_secret,day)
+        normalized=normalize_diary(diary)
+    except Exception:
+        raise ValueError('Не удалось получить записи FatSecret. Дневник FORMIQ сохранён') from None
+    # Only provider-approved IDs/access credentials may be retained long-term.
+    # Names/macros remain in this authenticated response, not PostgreSQL/cache.
+    with db() as conn:
+        conn.execute("""UPDATE fatsecret_user_connections SET last_sync_at=NOW()
+            WHERE chat_id=%s AND access_token_enc=%s""",(chat,row[0]))
+    entries=[]
+    for value in normalized['entries'][:150]:
+        entries.append({'external_id':value['external_id'],
+            'meal':value['meal'],'name':value['name'],
+            'kcal':float(value['calories_kcal']) if value['calories_kcal'] is not None else None,
+            'protein':float(value['protein_g']) if value['protein_g'] is not None else None,
+            'fat':float(value['fat_g']) if value['fat_g'] is not None else None,
+            'carbs':float(value['carbs_g']) if value['carbs_g'] is not None else None})
+    return {'date':day.isoformat(),'source':'fatsecret','entries':entries,
+        'complete':normalized['complete'],
+        'totals':({field:float(normalized[field])
+                    for field in ('calories_kcal','protein_g','fat_g','carbs_g')}
+                   if normalized['complete'] else None),
+        'notice':'Данные FatSecret показаны напрямую. Они не скопированы в ручной дневник FORMIQ.'}
+
+
+
 def food_day(raw):
     if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
         raise ValueError('Укажи дату питания')
@@ -5155,6 +5342,36 @@ def mini_workout_delta(chat):
                'caution':info[2],'help_url':'https://musclewiki.com/ru-ru','image':None}
     return {'workout':item}
 
+@APP.get('/mini/fatsecret/callback')
+def mini_fatsecret_callback():
+    # Never render, log or forward OAuth tokens/verifiers or Telegram IDs.
+    try:
+        fatsecret_user_finish(request.args.get('state'),
+                              request.args.get('oauth_token'),
+                              request.args.get('oauth_verifier'))
+        success=True
+    except (ValueError,PermissionError):
+        success=False
+    except Exception:
+        LOG.warning('FatSecret callback was not completed')
+        success=False
+    phrase=('FatSecret подключён. Вернись в FORMIQ и открой Питание.'
+            if success else
+            'Не удалось подтвердить FatSecret. Вернись в FORMIQ и повтори подключение.')
+    page=('<!doctype html><html lang="ru"><meta charset="utf-8">'
+          '<meta name="viewport" content="width=device-width,initial-scale=1">'
+          '<title>FORMIQ · FatSecret</title><main style="font:18px system-ui;'
+          'max-width:420px;margin:12vh auto;padding:24px;text-align:center">'
+          '<strong>FORMIQ</strong><p>'+html.escape(phrase)+'</p></main></html>')
+    result=make_response(page,200 if success else 400)
+    result.headers['Content-Type']='text/html; charset=utf-8'
+    result.headers['Cache-Control']='no-store'
+    result.headers['Referrer-Policy']='no-referrer'
+    result.headers['X-Content-Type-Options']='nosniff'
+    result.headers['Content-Security-Policy']="default-src 'none'; style-src 'unsafe-inline'"
+    return result
+
+
 @APP.post('/mini/api')
 def mini_api():
     if not request.is_json or (request.content_length and request.content_length > 8192):
@@ -5182,6 +5399,14 @@ def mini_api():
             payload = {'ok': True, **mini_progress_series(chat)}
         elif action == 'training_preview':
             payload = {'ok': True, **mini_training_preview(chat,data)}
+        elif action == 'fatsecret_account_status':
+            payload = {'ok':True, **fatsecret_user_status(chat)}
+        elif action == 'fatsecret_account_connect':
+            payload = {'ok':True, **fatsecret_user_start(chat)}
+        elif action == 'fatsecret_account_disconnect':
+            payload = {'ok':True, **fatsecret_user_disconnect(chat)}
+        elif action == 'fatsecret_diary_day':
+            payload = {'ok':True, **fatsecret_user_diary(chat,data)}
         elif action == 'food_parse':
             payload = {'ok': True, **food_parse(data)}
         elif action == 'food_nutrition_day':
