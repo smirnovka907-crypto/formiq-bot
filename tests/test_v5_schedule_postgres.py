@@ -291,6 +291,59 @@ class SchedulePostgresTests(unittest.TestCase):
               AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
         self.assertEqual(nutrients,[],'Provider macro values must not be stored')
 
+    def test_offline_garmin_import_requires_consent_mapping_and_is_idempotent(self):
+        self.m.save_onboarding(self.chat,self.body())
+        snapshot=self.snapshot_history()
+        payload={'dailies':[{'userId':'OFFLINE_GARMIN_1','summaryId':'d20261018',
+             'calendarDate':'2026-10-18','steps':7000,'activeKilocalories':450,
+             'totalKilocalories':2450,'bmrKilocalories':1600}],
+          'activities':[{'userId':'OFFLINE_GARMIN_1','summaryId':'a1',
+             'startTimeInSeconds':1792300000,'durationInSeconds':1800,
+             'activityType':'running','activeKilocalories':310}]}
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO garmin_authorized_identities
+               (chat_id,provider_user_id,health_consent_at)
+               VALUES(%s,%s,NOW())""",(self.chat,'OFFLINE_GARMIN_1'))
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat+1,'OFFLINE_GARMIN_1',payload)
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OTHER_ACCOUNT',payload)
+        first=self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        second=self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        self.assertEqual(first['processed'],2)
+        self.assertEqual(second['processed'],2)
+        with self.connect() as conn:
+            events=conn.execute("""SELECT category,metrics_json FROM garmin_metric_events
+                WHERE chat_id=%s ORDER BY category""",(self.chat,)).fetchall()
+            self.assertEqual(len(events),2,'A repeated Garmin delivery is an UPSERT, not a new workout')
+            daily=next(m for c,m in events if c=='dailies')
+            activity=next(m for c,m in events if c=='activities')
+            self.assertEqual(daily['active_calories_kcal'],450)
+            self.assertEqual(daily['total_daily_calories_kcal'],2450)
+            self.assertNotIn('total_daily_calories_kcal',activity)
+            self.assertEqual(activity['duration_seconds'],1800)
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+              WHERE chat_id=%s""",(self.chat+1,)).fetchone()[0],0)
+            self.assertIsNotNone(conn.execute("""SELECT last_sync_at
+               FROM garmin_authorized_identities WHERE chat_id=%s""",(self.chat,)).fetchone()[0])
+        edited={'dailies':[dict(payload['dailies'][0],steps=8200)]}
+        self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',edited)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM garmin_metric_events
+               WHERE chat_id=%s""",(self.chat,)).fetchone()[0],2)
+            self.assertEqual(conn.execute("""SELECT metrics_json->>'steps' FROM garmin_metric_events
+               WHERE chat_id=%s AND category='dailies'""",(self.chat,)).fetchone()[0],'8200.0')
+            conn.execute("""UPDATE garmin_authorized_identities SET disconnected_at=NOW()
+               WHERE chat_id=%s""",(self.chat,))
+        with self.assertRaises(PermissionError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',payload)
+        self.assertEqual(snapshot,self.snapshot_history(),'Never touch manual workout history')
+        with self.assertRaises(ValueError):
+            self.m.ingest_garmin_verified_batch(self.chat,'OFFLINE_GARMIN_1',
+                {'dailies':[{'userId':'OFFLINE_GARMIN_1','summaryId':'bad','steps':9}]})
+
     def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
         p,cycle,calendar=self.save((0,2,4))
         slot=calendar[0]
