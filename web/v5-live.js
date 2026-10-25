@@ -124,8 +124,8 @@ function onboardingPayload(){
   else mm[key]=value;
  }
  const description=String(d.description||'').trim();
- if(d.aiResult?.needs_clarification)errs.clarification='Ответь на уточняющий вопрос Yandex AI перед сохранением анкеты.';
- else if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI перед сохранением.';
+ // An unreviewed Yandex AI analysis is optional; its structured fields are
+ // applied only after confirmation. Saving can proceed with conservative limits.
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
@@ -351,7 +351,8 @@ function training(){
  const trainingCard='<section class="surface"><div class="heading-row"><span class="eyebrow">БЛИЖАЙШАЯ ТРЕНИРОВКА</span></div>'+
   '<div class="heading-row"><h2>'+esc(title)+'</h2></div>'+
   '<p class="subtitle">'+esc(next?.date_ru||'Дата уточняется по плану')+'</p><div class="divider"></div>'+
-  (exercises||'<p class="empty">План упражнений пока не сформирован.</p>')+
+  (state.plan_warning?'<p class="fq-form-error" role="alert">'+esc(state.plan_warning)+'</p>':'')+
+  (exercises||'<p class="empty">'+(state.plan_warning?'Упражнения станут доступны после уточнения безопасной нагрузки.':'План упражнений пока не сформирован.')+'</p>')+
   (items.length?'<div class="workout-cta">'+button('Начать тренировку','mood',true)+'</div>':'')+
   '</section>';
  const selected=cardioType||'Выбрать упражнение';
