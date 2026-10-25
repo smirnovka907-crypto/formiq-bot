@@ -906,6 +906,45 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertFalse(severe['used_ai'])
             self.assertEqual(before,len(outbound))
 
+    def test_opt_in_yandex_nutrition_uses_only_owners_manual_food_date(self):
+        """Never fake macros or export another user's meal to Yandex."""
+        import io,json
+        data=self.body()
+        data['ai_profile_consent']=True
+        self.m.save_onboarding(self.chat,data)
+        self.m.save_onboarding(999,self.body())
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'рис сухой','grams':85}]})
+        self.m.food_add(999,{'date':'2026-10-18','meal_type':'lunch',
+            'items':[{'name':'ЧУЖОЙ УЖИН','grams':200}]})
+        submitted=[]
+        def provider(request,timeout=None):
+            body=json.loads(request.data)
+            submitted.append(json.loads(body['messages'][-1]['text']))
+            return io.BytesIO(json.dumps({'result':{'alternatives':[{
+                'message':{'text':'Собери сбалансированный рацион.'}}]}}).encode())
+        with patch.object(self.m,'YANDEX_KEY','offline-only'), \
+             patch.object(self.m,'FOLDER_ID','offline-only'), \
+             patch.object(self.m.urllib.request,'urlopen',side_effect=provider):
+            result=self.m.ai_personalized_guidance(self.chat,
+                {'purpose':'nutrition','date':'2026-10-18'})
+            self.assertTrue(result['used_ai'])
+            self.assertEqual(len(submitted),1)
+            facts=submitted[-1]
+            self.assertEqual(facts['nutrition_day'],'2026-10-18')
+            self.assertEqual(len(facts['manual_food_entries']),1)
+            self.assertEqual(facts['manual_food_entries'][0]['user_entered_name'],'рис сухой')
+            self.assertEqual(facts['manual_food_entries'][0]['grams'],85)
+            self.assertIsNone(facts['verified_nutrition_values'])
+            self.assertNotIn('ЧУЖОЙ УЖИН',str(facts))
+            self.assertNotIn('chat_id',str(facts))
+            self.m.set_personalization_consent(self.chat,
+                {'field':'profile','enabled':False})
+            with self.assertRaisesRegex(ValueError,'Разреши'):
+                self.m.ai_personalized_guidance(self.chat,
+                    {'purpose':'nutrition','date':'2026-10-18'})
+            self.assertEqual(len(submitted),1)
+
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
         by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
