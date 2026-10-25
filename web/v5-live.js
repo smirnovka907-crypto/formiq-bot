@@ -683,6 +683,7 @@ const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',
 async function loadFoodHistory(){
  if(!foodDate)foodDate=localClock().date;
  const requested=foodDate;
+ aiNutritionTip='';
  foodLoading=true;draw();
  try{
   const result=await request('food_history',{date:requested});
@@ -986,12 +987,13 @@ app.addEventListener('click',async e=>{
  if(cmd==='ai-tip-training'||cmd==='ai-tip-nutrition'||cmd==='ai-tip-discomfort'){
   if(aiTipBusy)return;
   aiTipBusy=true;const purpose=cmd==='ai-tip-nutrition'?'nutrition':'training';
+  const expectedFoodDate=purpose==='nutrition'?foodDate:null;
   try{
    const result=await request('ai_personalized_guidance',{
       purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal',
       ...(purpose==='nutrition'?{date:foodDate}:{})});
    if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
-   else aiNutritionTip=result.advice;
+   else if(expectedFoodDate===foodDate)aiNutritionTip=result.advice;
   }catch(ex){error=ex.message||'Не удалось получить совет Yandex AI'}
   finally{aiTipBusy=false;draw()}
   return;
