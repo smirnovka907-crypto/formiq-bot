@@ -80,6 +80,20 @@ class IntegrationTests(unittest.TestCase):
             g.normalize_garmin_webhook({"dailies": [{"userId": "tester", "steps": -1,
                                                      "summaryId": "bad"}]})
 
+    def test_garmin_rejects_malformed_dates_and_float_overflow(self):
+        g=module('garmin')
+        for date_string in ('2026-02-30','2026/10/18','2026-10-1'):
+            with self.assertRaises(ValueError):
+                g.normalize_garmin_webhook({'dailies':[{
+                    'userId':'tester','summaryId':'bad-date',
+                    'calendarDate':date_string,'steps':1000}]},
+                    expected_user_id='tester')
+        with self.assertRaises(ValueError):
+            g.normalize_garmin_webhook({'dailies':[{
+                'userId':'tester','summaryId':'huge',
+                'calendarDate':'2026-10-25','activeKilocalories':'1e10000'}]},
+                expected_user_id='tester')
+
     def test_catalog_food_search_scales_only_verified_grams(self):
         f=module("fatsecret")
         food={"foods_search":{"food":[{
