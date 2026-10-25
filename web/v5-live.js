@@ -153,6 +153,7 @@ function onboardingPayload(){
   metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
   health_description:description,health_storage_consent:!!d.healthStorageConsent,
   ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!d.profileAiConsent,ai_cycle_consent:!!(d.profileAiConsent&&d.sex==='female'),
+  unified_ai_consent:!!d.profileAiConsent,
   health_profile:{affected,pain_score:reviewed?Number(d.pain||0):Number(prior.pain_score||0),
    symptom_course:course,danger_signs:reviewed?d.danger:prior.danger_signs===true,
    activity_cleared:reviewed?d.cleared:prior.activity_cleared===true},
