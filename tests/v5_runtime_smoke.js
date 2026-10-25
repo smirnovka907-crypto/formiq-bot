@@ -340,9 +340,11 @@ async function run(){
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
  const garminClient=createClient(true,{garminConnected:true,
    now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
- await settle();await garminClient.click({nav:'progress'});await settle();
- assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
+ await settle();
+ assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'),'Initial workouts view loads only verified Garmin status');
  assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.ok(garminClient.root.innerHTML.indexOf('id="cardio-entry"')<garminClient.root.innerHTML.indexOf('Garmin Connect'),'Garmin panel follows additional workout');
+ assert.ok(garminClient.root.innerHTML.indexOf('Garmin Connect')<garminClient.root.innerHTML.indexOf('id="training-plan"'),'Garmin panel precedes training plan');
  assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
  assert.match(garminClient.root.innerHTML,/7600/,'Only observed Garmin steps');
  assert.match(garminClient.root.innerHTML,/2260.*ккал/,'Total day energy shown separately');
@@ -350,6 +352,10 @@ async function run(){
  assert.match(garminClient.root.innerHTML,/215.*ккал активности/,'Activity calories not added to all-day totals');
  assert.match(garminClient.root.innerHTML,/Сон/);
  assert.match(garminClient.root.innerHTML,/42/);
+ await garminClient.click({nav:'progress'});await settle();
+ assert.doesNotMatch(garminClient.root.innerHTML,/Garmin Connect/,'Progress contains progress only, not Garmin');
+ await garminClient.click({nav:'home'});await settle();
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/,'Connected Garmin returns to workouts');
  await garminClient.click({cmd:'garmin-refresh'});await settle();
  assert.ok(garminClient.requests.filter(x=>x.action==='garmin_day').length>=2);
  await garminClient.click({cmd:'garmin-disconnect-open'});
