@@ -479,6 +479,29 @@ class SchedulePostgresTests(unittest.TestCase):
             with self.connect() as conn:
                 self.assertEqual(conn.execute("""SELECT COUNT(*) FROM fatsecret_import_refs
                     WHERE chat_id=%s""",(self.chat,)).fetchone()[0],1)
+            # A different FatSecret authorization may reuse the same numeric
+            # provider entry IDs. Old owner edits MUST NOT attach to that diary.
+            self.m.fatsecret_user_start(self.chat)
+            callback2=fake.request_token.call_args.args[0]
+            state2=parse_qs(urlsplit(callback2).query)['state'][0]
+            self.assertNotEqual(state,state2)
+            self.m.fatsecret_user_finish(state2,'request-token','verifier')
+            fresh=self.m.fatsecret_user_diary(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(len(fresh['entries']),2)
+            self.assertTrue(all(not e['imported'] for e in fresh['entries']))
+            with self.assertRaisesRegex(ValueError,'не найдена'):
+                self.m.fatsecret_user_import_edit(self.chat,{'date':'2026-10-18',
+                    'external_id':'18','name_override':'Не от старого аккаунта'})
+            self.m.fatsecret_user_import(self.chat,{'date':'2026-10-18'})
+            with self.connect() as conn:
+                refs=conn.execute("""SELECT connection_id,external_id,user_name_override
+                    FROM fatsecret_import_refs WHERE chat_id=%s
+                    ORDER BY connection_id,external_id""",(self.chat,)).fetchall()
+                self.assertEqual(len(refs),3, 'Previous imported references remain preserved')
+                self.assertEqual(len({x[0] for x in refs}),2)
+                self.assertFalse(any(x[2] for x in refs))
+            self.assertEqual(self.m.food_history(self.chat,
+                {'date':'2026-10-18'})['meals'][0]['items'][0]['id'],item_id)
 
     def test_fatsecret_connection_rejects_invalid_encryption_key(self):
         self.m.save_onboarding(self.chat,self.body())
