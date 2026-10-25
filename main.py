@@ -2796,7 +2796,8 @@ def save_onboarding(chat,body):
         c.execute('''INSERT INTO profile_metrics(chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone)
             VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
             age=EXCLUDED.age,height_cm=EXCLUDED.height_cm,weight_kg=EXCLUDED.weight_kg,
-            resting_hr=EXCLUDED.resting_hr,sex=EXCLUDED.sex,
+            resting_hr=COALESCE(EXCLUDED.resting_hr,profile_metrics.resting_hr),
+            sex=EXCLUDED.sex,
             timezone=EXCLUDED.timezone,updated_at=NOW()''',
             (chat,age,height,weight,hr,sex,user_tz))
         c.execute('''INSERT INTO health_limits(chat_id,affected,pain_score,symptom_course,
