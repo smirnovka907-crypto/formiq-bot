@@ -318,7 +318,7 @@ async function run(){
    assert.equal(await page.locator('.cardio-inline').count(),1,'Cardio must be embedded on the workouts screen');
    assert.equal(await page.locator('.cardio-inline #cardio-min').count(),1);
    assert.equal(await page.locator('.cardio-inline #cardio-hr').count(),1);
-   assert.equal(await page.locator('#training-plan').count(),0,'Today must not include the four-week plan');
+   assert.equal(await page.locator('#training-plan').count(),1,'Workouts contains the four-week plan');
    assert.equal(await page.getByRole('button',{name:'Мой план'}).count(),0,'No obsolete plan link on Today');
    await page.screenshot({path:path.join(OUT,'home-'+size.width+'.png')});
    await matchedShot('home',null);
@@ -328,18 +328,15 @@ async function run(){
    await page.locator('#cardio-min').evaluate(e=>e.blur());
    assert.equal(await page.evaluate(()=>document.body.classList.contains('cardio-typing')),false,'Cardio typing class clears');
    assert.equal(await page.locator('.bottom-nav').evaluate(e=>getComputedStyle(e).visibility),'visible','Bottom nav restores');
-   await page.locator('.bottom-nav [data-nav="progress"]').click();
-   await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Прогресс');
    const planOrder=await page.evaluate(()=>{
     const card=document.querySelector('#training-plan');
-    return {before:card?.previousElementSibling?.querySelector('h2')?.textContent,
-      after:card?.nextElementSibling?.querySelector('h2')?.textContent};
+    return {before:card?.previousElementSibling?.querySelector('h2')?.textContent};
    });
-   assert.equal(planOrder.after,'История тренировок','Training plan directly before history');
-    assert.equal(await page.getByText('Garmin Connect',{exact:true}).count(),0);
-    assert.equal(await page.getByText('Женский календарь',{exact:true}).count(),0);
+   assert.equal(planOrder.before,'Дополнительная тренировка','Plan directly follows extra training');
    await page.getByRole('button',{name:/19.10.2026/}).first().click();
    await page.locator('.week-details').first().waitFor();
+    assert.equal(await page.getByText('Garmin Connect',{exact:true}).count(),0);
+    assert.equal(await page.getByText('Женский календарь',{exact:true}).count(),0);
    const planButtons=await page.locator('.fq-plan-period-grid .week-group>button').evaluateAll(items=>items.map(el=>el.getBoundingClientRect().toJSON()));
    assert.equal(planButtons.length,4,'Four actual server-dated periods');
    assert.ok(Math.abs(planButtons[0].top-planButtons[1].top)<1,'Periods use two columns like v5');
@@ -352,8 +349,9 @@ async function run(){
      'Days expand across both card columns');
    await checkLayout('plan');
    await page.screenshot({path:path.join(OUT,'plan-'+size.width+'.png')});
-   await matchedShot('plan-component',async ref=>{await ref.locator('.bottom-nav [data-nav="progress"]').click();await ref.locator('[data-week="1"]').first().click();},
-    {referenceAnchor:'.plan-grid',liveAnchor:'.fq-plan-period-grid',note:'Same expanded period component; approved prototype embeds the plan within Progress'});
+   await page.locator('.bottom-nav [data-nav="progress"]').click();
+   await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Прогресс');
+   assert.equal(await page.locator('#training-plan').count(),0,'Progress no longer contains training plan');
    await page.locator('.fq-empty-chart').waitFor();
    assert.equal(await page.locator('.fq-progress-chart').count(),0,'No fabricated working-weight graph');
    await checkLayout('progress');
