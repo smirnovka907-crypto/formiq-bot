@@ -1,3 +1,14 @@
+# FORMIQ | Telegram-оформление — утверждённый выпуск, подготовка (26.10.2026)
+
+**Разрешение владельца:** утверждена одна замена аватарки и приветствия в единственном боте @formiqcoachbot; разрешены PR, CI, merge в main и штатный автодеплой Render. **Пока ветка / PR не объединены, код не опубликован** (обновить после фактического выпуска).
+- Основание: main `ceffb4e6b89b3b36388719c870f85517fe050e8e`, Render Live на том же SHA; ветка `fix/telegram-branding-owner-approved-20261026`.
+- В `assets/telegram_avatar_approved.png` хранится неизменённый PNG SHA-256 `690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd`. Только для `setMyProfilePhoto` формируется JPEG (требование Telegram Bot API), сохраняется сравнение с реальным фото через getMe/getUserProfilePhotos/getFile.
+- В `assets/telegram_welcome_approved.png` хранится PNG SHA-256 `8a485bae6e08b0027a8a9f30a9a578e9990ddceabd0d626e6ba082fa184d9bae`; заменён только слоган на «Твоя форма. Наш интеллект.». `/start` отправляет это изображение одним фото-сообщением с точным утверждённым текстом в caption и двумя Telegram-кнопками FormIQ / Разбудить. Текстовый fallback сохраняет текст и две кнопки.
+- About/Description, Mini App, темы, схемы/данные PostgreSQL, тарифы, бот, webhook и секреты не изменяются. PR #25 (перенос Garmin) вне этого выпуска, не merge.
+- Принять только после SUCCESS CI на точном HEAD и подтверждённого Render Live/нового SHA. Telegram read-back аватарки подтвердить из журналов; реальное приветственное сообщение и отображение на телефоне — приёмка владельца.
+
+---
+
 # FORMIQ | Критическое исправление Telegram-оформления — подготовлено, НЕ опубликовано (25.10.2026)
 
 **Статус:** новая изолированная ветка `fix/telegram-approved-branding-20261025`, основание опубликованный main `5dbeeed345dee21f68b0ed5cc5fc7c784cd08d44` (Render Live). **Нового merge/deploy нет и без явного разрешения не будет.**
