@@ -331,13 +331,12 @@ function workout(){
    '<p class="subtitle">Подход '+esc(c.set_no)+' из '+esc(c.set_count)+' · цель '+esc(target)+' '+unit+'</p>'+
    (c.previous?'<p class="input-note" style="margin-top:12px">Прошлый результат: '+esc(c.previous)+'</p>':'')+
    (c.tip?'<p class="input-note" style="margin-top:8px">'+esc(c.tip)+'</p>':'')+
-   button('Техника упражнения','exercise-live')+
    '<div class="workout-input-grid">'+
    (c.unit==='reps'?input('Вес, кг','weight','number','min="0" max="500" step="0.1" inputmode="decimal"'):
      '<div class="metric"><span>Выполняй упражнение по плану</span></div>')+
    input(c.unit==='reps'?'Повторений':'Время','reps','number','min="1" max="300" inputmode="numeric"')+
    '</div><p class="input-note" style="margin:13px 0 0">Отдых после подхода: '+esc(c.rest_seconds||0)+' сек. При боли прекрати упражнение.</p>'+
-   '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div></section>';
+   '<div class="workout-cta">'+button('Подход выполнен','record',true)+'</div>'+button('Техника упражнения','exercise-live')+'</section>';
  }
  const exercises=Array.isArray(w.exercises)?w.exercises:[];
  const overview=exercises.length?'<section class="surface soft workout-plan-list">'+
