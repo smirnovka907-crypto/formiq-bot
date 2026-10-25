@@ -5895,11 +5895,41 @@ def webhook():
     return 'OK', 200
 
 
-def apply_approved_avatar_once():
-    """Update bot avatar using Telegram Bot API, once per approved image hash.
+# Approved Telegram profile text, distinct from the /start caption.
+# For default and Russian Telegram locale the same exact copy is used.
+FORMIQ_BOT_ABOUT = (
+    '💪 FORMIQ — твой ИИ-тренер. Персональные тренировки, питание и '
+    'контроль прогресса. 🎁 14 дней бесплатно!'
+)
+FORMIQ_BOT_DESCRIPTION = (
+    '💪 FORMIQ — твой персональный ИИ-тренер! '
+    '🏋️ Индивидуальные программы тренировок '
+    '🥗 Рекомендации по питанию '
+    '📊 Отслеживание прогресса '
+    '🤖 Умный тренер, который адаптируется под тебя '
+    '🎁 Первые 14 дней бесплатно! '
+    'Твоя цель. Твой темп. Твой результат.'
+)
 
-    This version of pyTelegramBotAPI predates set_my_profile_photo; submit
-    InputProfilePhotoStatic directly to the official Bot API instead.
+
+def _telegram_avatar_unique_id():
+    """Read the avatar that Telegram currently reports, not a cached DB hash.
+
+    Only return a file_unique_id, never a bot token, Telegram file URL or photo.
+    """
+    bot_user = BOT.get_me()
+    photos = BOT.get_user_profile_photos(bot_user.id, limit=1)
+    if not photos or not photos.photos or not photos.photos[0]:
+        return None
+    return photos.photos[0][-1].file_unique_id
+
+
+def apply_approved_avatar_once():
+    """Compare Telegram's current avatar and repair only on a mismatch.
+
+    A database image hash by itself proves only a *previous* upload; the owner
+    or BotFather can change the actual photo later. Store Telegram's observed
+    file_unique_id only after a successful upload and independent read-back.
     """
     from welcome_art import avatar_jpeg
     image_bytes = avatar_jpeg()
@@ -5911,12 +5941,19 @@ def apply_approved_avatar_once():
                 value TEXT NOT NULL
             )
         """)
-        row = conn.execute(
-            "SELECT value FROM bot_branding_state WHERE setting = %s",
-            ('approved_avatar_hash',)
-        ).fetchone()
-        if row and row[0] == image_hash:
-            return
+        stored = dict(conn.execute(
+            "SELECT setting,value FROM bot_branding_state WHERE setting IN (%s,%s)",
+            ('approved_avatar_hash', 'approved_avatar_file_unique_id')
+        ).fetchall())
+
+    current_id = _telegram_avatar_unique_id()
+    if (current_id and stored.get('approved_avatar_hash') == image_hash
+            and stored.get('approved_avatar_file_unique_id') == current_id):
+        LOG.info('FORMIQ avatar verified via Telegram API')
+        return
+
+    # First verified run after upgrade re-uploads once to establish file ID.
+    # Never assume old DB hash means current Telegram avatar is still correct.
     boundary = 'FormiqPhoto' + image_hash[:20]
     photo_spec = json.dumps(
         {'type': 'static', 'photo': 'attach://avatar'}, separators=(',', ':')
@@ -5942,44 +5979,75 @@ def apply_approved_avatar_once():
         result = json.loads(resp.read().decode('utf-8'))
     if not result.get('ok'):
         raise RuntimeError('Telegram rejected approved avatar')
+    verified_id = _telegram_avatar_unique_id()
+    if not verified_id:
+        raise RuntimeError('Telegram avatar upload not visible in API read-back')
     with db() as conn:
-        conn.execute(
-            """INSERT INTO bot_branding_state (setting, value) VALUES (%s, %s)
-               ON CONFLICT (setting) DO UPDATE SET value = EXCLUDED.value""",
-            ('approved_avatar_hash', image_hash)
-        )
-    LOG.info('FORMIQ approved avatar installed')
+        for name, value in (
+                ('approved_avatar_hash', image_hash),
+                ('approved_avatar_file_unique_id', verified_id)):
+            conn.execute(
+                """INSERT INTO bot_branding_state (setting, value) VALUES (%s, %s)
+                   ON CONFLICT (setting) DO UPDATE SET value = EXCLUDED.value""",
+                (name, value)
+            )
+    LOG.info('FORMIQ approved avatar uploaded and observed via Telegram API')
 
 
 _FORMIQ_PROFILE_CONFIGURED = False
 
+
+def _sync_telegram_description(language_code):
+    """Verify About and Description via the official Telegram getters."""
+    current_about = BOT.get_my_short_description(language_code=language_code)
+    if getattr(current_about, 'short_description', None) != FORMIQ_BOT_ABOUT:
+        BOT.set_my_short_description(FORMIQ_BOT_ABOUT, language_code=language_code)
+    verified_about = BOT.get_my_short_description(language_code=language_code)
+    if getattr(verified_about, 'short_description', None) != FORMIQ_BOT_ABOUT:
+        raise RuntimeError('Telegram About did not match after update')
+
+    current_description = BOT.get_my_description(language_code=language_code)
+    if getattr(current_description, 'description', None) != FORMIQ_BOT_DESCRIPTION:
+        BOT.set_my_description(FORMIQ_BOT_DESCRIPTION, language_code=language_code)
+    verified_description = BOT.get_my_description(language_code=language_code)
+    if getattr(verified_description, 'description', None) != FORMIQ_BOT_DESCRIPTION:
+        raise RuntimeError('Telegram Description did not match after update')
+    LOG.info('FORMIQ Telegram About and Description verified (locale=%s)',
+             language_code or 'default')
+
+
 def configure_formiq_bot_profile():
+    """Repair only missing branding and retry failures on the next /start."""
     global _FORMIQ_PROFILE_CONFIGURED
     if _FORMIQ_PROFILE_CONFIGURED:
         return
-    bot_description = ('FORMIQ — тренировки, питание и прогресс в Telegram. '
-                       'Подберём программу под твою цель. '
-                       'Открывай приложение через кнопку FormIQ под приветствием.')
-    short_description = ('FORMIQ: персональные тренировки, прогресс и AI-помощник.')
-    assert len(bot_description) <= 512 and len(short_description) <= 120
+    assert len(FORMIQ_BOT_DESCRIPTION) <= 512 and len(FORMIQ_BOT_ABOUT) <= 120
+    all_ok = True
     for code in (None, 'ru'):
         try:
-            BOT.set_my_description(bot_description, language_code=code)
-            BOT.set_my_short_description(short_description, language_code=code)
-        except Exception:
-            LOG.exception('Telegram description update failed (%s)', code)
+            _sync_telegram_description(code)
+        except Exception as exc:
+            all_ok = False
+            # Network errors may include a bot-token URL. Log only error type.
+            LOG.warning('Telegram description verification failed (%s, %s)',
+                        code or 'default', type(exc).__name__)
     try:
-        # Explicitly replace the BotFather/default Web App launch button.
+        # Keep only the two buttons attached to the welcome message.
         BOT.set_chat_menu_button(menu_button=types.MenuButtonCommands())
         BOT.delete_my_commands()
-        _FORMIQ_PROFILE_CONFIGURED = True
-        try:
-            apply_approved_avatar_once()
-        except Exception as exc:
-            # Do not reveal the Bot API token in request exception text.
-            LOG.warning('Could not update FORMIQ avatar (%s)', type(exc).__name__)
-    except Exception:
-        LOG.exception('Telegram menu update failed')
+        menu = BOT.get_chat_menu_button()
+        if getattr(menu, 'type', None) != 'commands':
+            raise RuntimeError('Unexpected Telegram default menu')
+    except Exception as exc:
+        all_ok = False
+        LOG.warning('Telegram menu verification failed (%s)', type(exc).__name__)
+    try:
+        apply_approved_avatar_once()
+    except Exception as exc:
+        all_ok = False
+        LOG.warning('Telegram avatar verification failed (%s)', type(exc).__name__)
+    # Never mark configured merely because setter calls were attempted.
+    _FORMIQ_PROFILE_CONFIGURED = all_ok
 
 
 if __name__ == '__main__':
