@@ -3370,6 +3370,107 @@ def food_change(chat,body,delete=False):
 
 
 
+
+# FatSecret food.get.v5 allows permanent storage of food/serving IDs only.
+# Show derived values to the owner on demand; never retain the response in DB.
+FOOD_DAY_MAX_PROVIDER_IDS = 20
+
+
+def food_day_totals(chat, body):
+    """Resolve one owner's selected day from verified FatSecret source IDs.
+
+    A subtotal cannot be labelled a full daily total while any product is
+    unlinked, a serving is unavailable, or an API request fails. Even a
+    partially available day stays usable without false 0 kcal entries.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    with db() as conn:
+        records=conn.execute("""SELECT i.id,m.meal_type,i.grams,
+                   i.source_food_id,i.source_serving_id,i.updated_at
+            FROM manual_food_meals m JOIN manual_food_items i
+              ON i.meal_id=m.id AND i.chat_id=m.chat_id
+            WHERE m.chat_id=%s AND m.eaten_on=%s
+            ORDER BY m.id,i.id""",(chat,day)).fetchall()
+    if len(records)>250:
+        raise ValueError('За день слишком много продуктов для одного расчёта')
+    linked={r[3] for r in records if r[3] and r[4]}
+    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
+        # Do not claim a '0 kcal' total when there is no real provider.
+        raise ValueError('Расчёт КБЖУ недоступен: FatSecret пока не подключён')
+    if len(linked)>FOOD_DAY_MAX_PROVIDER_IDS:
+        raise ValueError('Слишком много разных продуктов FatSecret за день для одного запроса')
+    sources={}
+    if linked:
+        try:
+            provider=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+            token=provider.get_token()
+        except Exception:
+            raise ValueError('FatSecret временно недоступен; сохранённые продукты не изменены') from None
+        for fid in sorted(linked):
+            try:
+                sources[fid]=provider.food_by_id(fid,token)
+            except Exception:
+                sources[fid]=None
+    keys=('kcal','protein_g','fat_g','carbs_g')
+    subtotal={key:Decimal('0') for key in keys}
+    meal_values={}
+    items=[]
+    for item_id,meal_type,grams,fid,sid,modified in records:
+        meal=meal_values.setdefault(meal_type,{'type':meal_type,'total_items':0,
+                                               'resolved_items':0,
+                                               'subtotal':{key:Decimal('0') for key in keys}})
+        meal['total_items']+=1
+        detail=sources.get(fid) if fid and sid else None
+        serving=next((p for p in detail['servings'] if p.get('serving_id')==sid),None) if detail else None
+        values=None
+        if serving and serving.get('grams') and serving.get('per_serving'):
+            factor=Decimal(str(grams))/Decimal(str(serving['grams']))
+            try:
+                # Server always retrieves fresh serving data rather than using
+                # nutrient numbers submitted by a user or saved to PostgreSQL.
+                values={key:(Decimal(str(serving['per_serving'][key]))*factor).quantize(
+                    Decimal('0.01')) for key in keys}
+            except (InvalidOperation,TypeError,ValueError,KeyError):
+                values=None
+        if values is not None:
+            meal['resolved_items']+=1
+            for key in keys:
+                subtotal[key]+=values[key]
+                meal['subtotal'][key]+=values[key]
+        items.append({'id':item_id,'meal_type':meal_type,
+            'source':'fatsecret' if values is not None else None,
+            'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
+    # If a product changed during an API request, never present a stale number
+    # as belonging to its newer grams or provider identity.
+    if records:
+        with db() as conn:
+            current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,
+                        i.source_serving_id,i.updated_at
+                FROM manual_food_meals m JOIN manual_food_items i
+                  ON i.meal_id=m.id AND i.chat_id=m.chat_id
+                WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
+                (chat,day)).fetchall()
+        if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
+            raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
+    complete=bool(records) and all(item['nutrition'] is not None for item in items)
+    return {'date':day.isoformat(), 'source':'fatsecret',
+        'complete':complete,'total_items':len(records),
+        'resolved_items':sum(item['nutrition'] is not None for item in items),
+        'partial':bool(records) and not complete,
+        'totals':{k:float(v) for k,v in subtotal.items()} if complete else None,
+        'known_subtotal':{k:float(v) for k,v in subtotal.items()}
+            if any(item['nutrition'] is not None for item in items) else None,
+        'meals':[{'type':m['type'],'resolved_items':m['resolved_items'],
+                  'total_items':m['total_items'],'complete':m['total_items']==m['resolved_items'],
+                  'known_subtotal':({k:float(v) for k,v in m['subtotal'].items()}
+                      if m['resolved_items'] else None)}
+                 for m in meal_values.values()],
+        'items':items}
+
+
+
 def food_catalog_lookup(chat, body):
     """Live, user-initiated FatSecret lookup; search results are not stored."""
     if not has_agreement(chat):
@@ -4985,6 +5086,8 @@ def mini_api():
             payload = {'ok': True, **mini_training_preview(chat,data)}
         elif action == 'food_parse':
             payload = {'ok': True, **food_parse(data)}
+        elif action == 'food_nutrition_day':
+            payload = {'ok': True, **food_day_totals(chat,data)}
         elif action == 'food_catalog_lookup':
             payload = {'ok': True, **food_catalog_lookup(chat,data)}
         elif action == 'food_catalog_attach':
