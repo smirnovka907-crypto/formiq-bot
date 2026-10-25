@@ -53,7 +53,7 @@ function createClient(auth=true,shared={}){
    let response;
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
-    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',
+    profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',food_catalog_available:shared.foodCatalogAvailable===true,
     workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
@@ -71,6 +71,14 @@ function createClient(auth=true,shared={}){
     response={ok:true,patch:{workout}};
    }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
+   else if(p.action==='food_catalog_lookup')response={ok:true,source:'fatsecret',candidates:[{food_id:'42',name:'Овсянка сухая',servings:[{
+     serving_id:'13',description:'100 г',grams:100,per_serving:{kcal:380,protein_g:13,fat_g:7,carbs_g:67}
+   }]}]};
+   else if(p.action==='food_catalog_attach'){
+    assert.equal(p.food_id,'42');assert.equal(p.serving_id,'13');
+    for(const m of shared.foodMeals||[])for(const i of m.items||[])if(i.id===p.id)i.nutrition_source='fatsecret';
+    response={ok:true,item_id:p.id,source:'fatsecret',nutrients:{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}};
+   }
    else if(p.action==='food_add'){
     shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
     response={ok:true,date:p.date,meals:shared.foodMeals,nutrients_available:false};
@@ -332,6 +340,19 @@ async function run(){
  await app.click({cmd:'food-delete',id:'100'});
  await app.click({cmd:'food-delete-confirm'});
  assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
+ const catalogClient=createClient(true,{foodCatalogAvailable:true,
+  foodMeals:[{id:81,type:'breakfast',items:[{id:202,name:'овсянка сухая',grams:70}]}]});
+ await settle();await catalogClient.click({nav:'food'});await settle();
+ await catalogClient.click({cmd:'food-edit',id:'202'});
+ assert.match(catalogClient.root.innerHTML,/Найти в FatSecret/,'Official catalogue only when configured');
+ await catalogClient.click({cmd:'food-catalog-open'});
+ catalogClient.fields.set('food-catalog-query',{id:'food-catalog-query',value:'овсянка'});
+ await catalogClient.click({cmd:'food-catalog-search'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_lookup'&&x.query==='овсянка'));
+ assert.match(catalogClient.root.innerHTML,/Овсянка сухая/);
+ await catalogClient.click({cmd:'food-catalog-link',foodId:'42',servingId:'13'});
+ assert.ok(catalogClient.requests.some(x=>x.action==='food_catalog_attach'&&x.id===202));
+ assert.match(catalogClient.root.innerHTML,/266.*ккал/,'Only verified serving may produce KБЖУ');
  const reportClient=createClient(true,{aiPermissions:{profile:true,health:true,cycle:false}});
  await settle();await reportClient.click({nav:'food'});await settle();
  assert.match(reportClient.root.innerHTML,/nutrition-file/);
