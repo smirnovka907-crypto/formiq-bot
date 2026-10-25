@@ -51,11 +51,14 @@ class V5StagingContract(unittest.TestCase):
         self.assertIn("role=\"status\"", js)
         self.assertNotIn("formiq_preview_cardio_v1", js)
 
-    def test_v6_privacy_policy_discloses_private_health_and_period_storage(self):
-        text=self.client.get('/mini/privacy').data.decode('utf-8')
-        self.assertIn('текстовое описание ограничений здоровья',text)
-        self.assertIn('даты менструаций',text)
-        self.assertIn('даты женского календаря не включаются',text)
+    def test_v7_privacy_policy_discloses_private_health_and_period_storage(self):
+        policy=self.client.get('/mini/privacy').data.decode('utf-8')
+        self.assertIn('описание ограничений здоровья',policy)
+        self.assertIn('приватный менструальный календарь',policy)
+        self.assertIn('/mini/yandex-privacy',policy)
+        disclosure=self.client.get('/mini/yandex-privacy').data.decode('utf-8')
+        self.assertIn('Абсолютные даты менструаций',disclosure)
+        self.assertIn('Отзыв согласия',disclosure)
 
     def test_wake_callback_sends_visible_confirmation_in_private_chat(self):
         """A real message must survive the short Telegram callback-popup expiry."""
@@ -346,7 +349,7 @@ class V5StagingContract(unittest.TestCase):
                 conn.assert_not_called()
 
     def test_health_ai_requires_explicit_server_side_consent(self):
-        """A signed session alone cannot authorize external health-data transfer."""
+        """Signed Telegram plus the per-request opt-in cannot bypass stored consent."""
         from urllib.error import URLError
         import urllib.request
         client=self.mod.APP.test_client()
@@ -355,17 +358,19 @@ class V5StagingContract(unittest.TestCase):
         with patch.object(self.mod,'mini_auth',return_value=777), \
              patch.object(self.mod,'YANDEX_KEY','test-key'), \
              patch.object(self.mod,'FOLDER_ID','test-folder'), \
-             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound:
-            for value in (None,False,'yes'):
+             patch.object(urllib.request,'urlopen',side_effect=URLError('offline synthetic test')) as outbound, \
+             patch.object(self.mod,'personalization_consent',return_value={
+                  'profile':False,'health':False,'cycle':False}) as stored:
+            for value in (None,False,'yes',True):
                 body={**payload}
                 if value is not None:
                     body['ai_consent']=value
                 rejected=client.post('/mini/api',json=body)
                 self.assertEqual(rejected.status_code,400,rejected.get_json())
-                self.assertIn('отдельное согласие',rejected.json['error'])
+                self.assertIn('согласие',rejected.json['error'])
             outbound.assert_not_called()
-            # Explicit opt-in allows the separate AI path to reach the
-            # outbound request, here deliberately intercepted offline.
+            stored.return_value={'profile':True,'health':True,'cycle':False}
+            # Only an explicit request plus persisted consent can reach Yandex.
             allowed=client.post('/mini/api',json={**payload,'ai_consent':True})
             self.assertEqual(allowed.status_code,400,allowed.get_json())
             outbound.assert_called_once()
