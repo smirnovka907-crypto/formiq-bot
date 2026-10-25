@@ -2832,10 +2832,12 @@ def analyze_health_description(chat, body):
         LOG.warning('Health AI analysis unavailable or invalid; no health data saved')
         raise ValueError('Не получилось разобрать текст. Попробуй ещё раз или укажи ограничения вручную')
 
-def analyze_equipment_description(body):
-    """User-approved Yandex parsing; no raw text persisted automatically."""
+def analyze_equipment_description(chat,body):
+    """Parse equipment only with an authenticated, stored Yandex permission."""
     if body.get('privacy_ack') is not True or body.get('adult') is not True:
         raise ValueError('Разреши передачу текста и подтверди возраст 18+')
+    if not personalization_consent(chat)['profile']:
+        raise ValueError('Сначала сохрани согласие на Yandex AI в анкете')
     raw=body.get('text')
     if not isinstance(raw,str) or not 3<=len(raw.strip())<=400:
         raise ValueError('Опиши свой инвентарь (3–400 символов)')
@@ -4467,7 +4469,7 @@ def mini_api():
         elif action == 'ai_personalization_set':
             payload = {'ok':True, 'consents':set_personalization_consent(chat,data)}
         elif action == 'equipment_analyze':
-            payload = {'ok':True, 'equipment':analyze_equipment_description(data)}
+            payload = {'ok':True, 'equipment':analyze_equipment_description(chat,data)}
         elif action in ('detail','ai_ask','feedback'):
             payload = {'ok':True, **mini_aux(chat,action,data)}
         elif action == 'save_metrics':
