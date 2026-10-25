@@ -509,6 +509,10 @@ async function run(){
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
     x.purpose==='nutrition'&&x.date==='2026-10-25'));
   assert.match(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
+  await ownerCoach.click({cmd:'food-parse'});await settle();
+  await ownerCoach.click({cmd:'food-save'});await settle();
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/,
+    'Editing the diary invalidates previous AI nutrition guidance');
   const diaryOnly=createClient(true,{tier:'start',
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();await diaryOnly.click({nav:'food'});await settle();
