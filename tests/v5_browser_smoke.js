@@ -359,11 +359,13 @@ async function run(){
    await matchedShot('progress',async ref=>ref.locator('.bottom-nav [data-nav="progress"]').click());
    await page.locator('.bottom-nav [data-nav="food"]').click();
    await page.waitForFunction(()=>document.querySelector('h1')?.textContent==='Питание');
-   assert.equal(await page.locator('.nutrition-ring b').textContent(),'—','Missing FatSecret cannot show fake calories');
-   assert.equal(await page.locator('.macro').count(),3,'Three macro rows');
+   assert.equal(await page.locator('#food-text').count(),1,'Manual food input is available');
+   assert.equal(await page.locator('#food-date').count(),1,'Nutrition includes date selector');
+   assert.equal(await page.locator('#nutrition-consent').count(),0,'No duplicate Yandex consent');
+   assert.equal(await page.locator('.nutrition-ring').count(),0,'No fabricated calorie display');
    await checkLayout('food');
    await page.screenshot({path:path.join(OUT,'food-'+size.width+'.png')});
-   await matchedShot('food',async ref=>ref.locator('.bottom-nav [data-nav="food"]').click());
+   // Nutrition now has a new approved manual diary, not the retired empty-state reference.
    assert.equal(await page.locator('.profile-open').evaluate(el=>getComputedStyle(el).position),'static',
     'Profile shortcut must scroll with header instead of covering content');
    await page.getByRole('button',{name:'Профиль'}).click();
