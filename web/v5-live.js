@@ -95,7 +95,7 @@ function onboardForm(){
   '<label class="field"><span>Есть ли заболевания, травмы или ограничения, которые нужно учитывать при тренировках?</span>'+
   '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
   '<p class="input-note">Описание необязательно. При нажатии «Сохранить» оно сохраняется в приватном профиле. При симптомах или травмах уточни допустимую нагрузку у специалиста.</p>'+
-  (String(d.description).trim()?button('Разобрать описание','onboard-ai'):'')+
+  (String(d.description).trim()?button('Уточнить с Yandex AI','onboard-ai'):'')+
   (d.aiResult?'<div class="fq-ai-result">'+
    (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
      '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
@@ -138,8 +138,19 @@ function onboardingPayload(){
  // professional or a separately authorized + confirmed AI analysis is available.
  const previousAreas=Array.isArray(prior.affected)?prior.affected:[];
  const noteChanged=!!description&&description!==(state?.health_description||'');
+ // Literal body-region mentions only; this is not a clinical interpretation.
+ // Unknown/high-risk texts remain conservatively blocked until clarified.
+ const regions=[
+  ['knee',/колен|коленк|надколенн/iu],['back',/поясниц|спин|позвоночн/iu],
+  ['shoulder',/плеч|лопатк/iu],['ankle',/голеностоп|лодыжк|стоп[аыуе]/iu],
+  ['hip',/тазобедрен|бедр|тазов/iu],['wrist',/запяст|кист[ьи]/iu],
+  ['neck',/ше[еяюй]|шейн/iu],['heart',/сердц|кардио/iu],
+  ['breathing',/дыхани|астм|одышк/iu]];
+ const located=regions.filter(([_,regex])=>regex.test(description)).map(([key])=>key);
+ const unclear=/перелом|операци|обморок|потер[яию]|боль.{0,12}груд|груд.{0,12}боль|сильн.{0,12}боль|онколог|инфаркт|инсульт|неизвестн/iu.test(description);
+ const inferred=located.length&&!unclear?located:['other'];
  const affected=reviewed?d.areas:
-  (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
+  (noteChanged?[...new Set([...previousAreas,...inferred])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=deviceZone();
