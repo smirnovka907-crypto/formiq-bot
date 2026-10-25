@@ -2792,7 +2792,7 @@ def analyze_health_description(chat, body):
     # Server-side, per-request opt-in: a forged authenticated Mini App
     # action must not send health notes to Yandex without separate consent.
     if body.get('ai_consent') is not True or body.get('privacy_ack') is not True:
-        raise ValueError('Для передачи текста подтверди Yandex AI и ознакомление с политикой конфиденциальности')
+        raise ValueError('Для передачи текста необходимо согласие на Yandex AI и ознакомление с политикой конфиденциальности')
     # A freshly completed questionnaire is not needed just to ask one optional
     # question. Telegram authentication + fresh opt-in for this very request
     # authorizes the temporary text; it is not persisted on the server.
@@ -2951,7 +2951,7 @@ def save_onboarding(chat,body):
         raise ValueError('Описание здоровья: не более 800 символов')
     raw_note=raw_note.strip()
     if raw_note and (body.get('health_storage_consent') is not True or body.get('privacy') is not True):
-        raise ValueError('Для сохранения описания здоровья ознакомься с политикой конфиденциальности')
+        raise ValueError('Подтверди сохранение описания здоровья через принятие политики конфиденциальности')
     # No automatic diagnosis: text alone cannot override existing health limits.
     # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
