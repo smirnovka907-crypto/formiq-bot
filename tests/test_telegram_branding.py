@@ -2,6 +2,8 @@
 import importlib
 import io
 import os
+import hashlib
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,14 +22,27 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
             cls.m = importlib.import_module('main')
 
     def test_approved_art_is_same_bytes_as_welcome_art(self):
-        from approved_assets import WELCOME_JPEG, AVATAR_JPEG
         from welcome_art import welcome_jpeg, avatar_jpeg
-        self.assertEqual(welcome_jpeg(), WELCOME_JPEG)
-        self.assertEqual(avatar_jpeg(), AVATAR_JPEG)
-        for jpeg in (WELCOME_JPEG, AVATAR_JPEG):
-            with Image.open(io.BytesIO(jpeg)) as pic:
-                self.assertEqual(pic.format, 'JPEG')
-                self.assertGreaterEqual(min(pic.size), 200)
+        assets = Path(__file__).resolve().parents[1] / 'assets'
+        approved = (
+            ('telegram_avatar_owner_approved.png',
+             '690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd',
+             (1254, 1254), avatar_jpeg()),
+            ('telegram_welcome_owner_approved.png',
+             '94a7f37496f475dd10959102ce88529c605622d27b5e9e118a79ea9a8b1c416d',
+             (1024, 1536), welcome_jpeg()),
+        )
+        for filename, expected_hash, dimensions, jpeg in approved:
+            source = (assets / filename).read_bytes()
+            self.assertEqual(hashlib.sha256(source).hexdigest(), expected_hash,
+                             'Only owner-approved source PNG is permitted')
+            with Image.open(io.BytesIO(source)) as raw:
+                self.assertEqual(raw.format, 'PNG')
+                self.assertEqual(raw.size, dimensions)
+            with Image.open(io.BytesIO(jpeg)) as encoded:
+                self.assertEqual(encoded.format, 'JPEG')
+                self.assertEqual(encoded.size, dimensions)
+                self.assertLess(len(jpeg), 6_000_000)
         self.assertLess(len(self.m.FORMIQ_BOT_ABOUT), 121)
         self.assertLess(len(self.m.FORMIQ_BOT_DESCRIPTION), 513)
 
@@ -148,10 +163,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
 
     def test_start_photo_has_the_exact_approved_caption_and_only_two_buttons(self):
         m=self.m
-        expected=('Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. '
-                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом. '
-                  'Веди дневник самостоятельно или доверь персональные рекомендации '
-                  'Yandex AI. FORMIQ — Твоя форма. Наш интеллект.')
+        expected=('Добро пожаловать в FORMIQ!\n\n'
+                  'Твоя форма заслуживает умного подхода.\n\n'
+                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\n\n'
+                  'Веди дневник самостоятельно или доверь Yandex AI создание '
+                  'персонального плана, анализ результатов и адаптацию тренировок.')
         with patch.object(m.BOT,'set_chat_menu_button'), \
              patch.object(m.BOT,'get_chat_menu_button',
                           return_value=SimpleNamespace(type='commands')), \
@@ -161,6 +177,8 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
         photo.assert_called_once()
         fallback.assert_not_called()
         self.assertEqual(photo.call_args.kwargs['caption'],expected)
+        self.assertEqual(expected.count('\n\n'),3)
+        self.assertLessEqual(len(expected),1024,'Telegram sendPhoto caption limit')
         keyboard=photo.call_args.kwargs['reply_markup'].keyboard
         self.assertEqual([item.text for row in keyboard for item in row],
                          ['FormIQ','Разбудить'])
