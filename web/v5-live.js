@@ -163,7 +163,7 @@ function femaleCalendar(){
   button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
  const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
   esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
-  '<p class="input-note">Прогноз появится после трёх последовательных записей с достаточно устойчивым интервалом.</p>';
+  '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
  return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
   '<p class="input-note">Необязательный личный дневник. Данные видишь только ты, в ИИ они не отправляются.</p>'+
   '<div class="fq-live-grid" style="margin-top:15px">'+
