@@ -110,6 +110,49 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIn('Другое',result['plan_warning'])
         self.assertIsNotNone(result['cycle_start'])
 
+    def test_manual_food_parse_history_edits_and_owner_isolation(self):
+        parsed=self.m.food_parse({'text':'овсянка 70 грамм, творог 5% 200 грамм, яблоко'})
+        self.assertEqual([(x['name'],x['grams']) for x in parsed['items']],
+                         [('овсянка',70),('творог 5%',200)])
+        self.assertEqual(len(parsed['unparsed']),1)
+        self.m.save_onboarding(self.chat,self.body())
+        data=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':parsed['items']})
+        self.assertEqual(len(data['meals']),1)
+        self.assertEqual(len(data['meals'][0]['items']),2)
+        self.assertIsNone(data['meals'][0]['items'][0]['kcal'])
+        item_id=data['meals'][0]['items'][0]['id']
+        another=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+            'items':[{'name':'банан','grams':110}]})
+        self.assertEqual(len(another['meals']),2,'Multiple meals of same type on same day')
+        self.m.food_add(self.chat,{'date':'2026-10-17','meal_type':'dinner',
+            'items':[{'name':'рис сухой','grams':90}]})
+        updated=self.m.food_change(self.chat,{'id':item_id,'name':'овсянка сухая','grams':75})
+        self.assertEqual(updated['meals'][0]['items'][0]['name'],'овсянка сухая')
+        self.assertEqual(updated['meals'][0]['items'][0]['grams'],75)
+        self.assertEqual(self.m.food_history(self.chat+1,{'date':'2026-10-18'})['meals'],[])
+        with self.assertRaises(ValueError):
+            self.m.food_change(self.chat+1,{'id':item_id,'name':'чужой','grams':12})
+        after=self.m.food_change(self.chat,{'id':item_id},delete=True)
+        self.assertEqual(len(after['meals'][0]['items']),1)
+        self.assertEqual(len(self.m.food_history(self.chat,{'date':'2026-10-17'})['meals']),1)
+        with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
+
+    def test_training_preview_is_read_only_and_keeps_preexisting_history(self):
+        p,cycle,calendar=self.save((0,2,4))
+        slot=calendar[0]
+        before=self.snapshot_history()
+        preview=self.m.mini_training_preview(self.chat,{'id':slot['id']})['preview']
+        self.assertEqual(preview['id'],slot['id'])
+        self.assertEqual(preview['week'],slot['week'])
+        self.assertTrue(preview['exercises'])
+        self.assertIsNone(preview['exercises'][0]['weight_kg'])
+        self.assertTrue(preview['can_start'])
+        self.assertEqual(self.snapshot_history(),before)
+        with self.assertRaises(ValueError):
+            self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
+
     def rows(self, cycle):
         with self.connect() as conn:
             return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state
