@@ -1,3 +1,17 @@
+# FORMIQ | Telegram — выпуск и проверка (26.10.2026, 02:19 Europe/Moscow)
+
+**Статус: опубликовано; пользовательская визуальная приёмка ожидается.** [PR #26](https://github.com/smirnovka907-crypto/formiq-bot/pull/26) merged 25.10.2026 23:18:50 UTC; GitHub main `afd2c4495fbfa40529ad13894375cd41872d4561`. Render `formiq-bot` LIVE на том же SHA, единственный автоматический deploy `dep-dbf8sn3bc2fs738v4v60` (finished 23:19:44 UTC). Повторный деплой не выполнялся.
+
+- [GitHub Actions #40244189318](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40244189318) — **SUCCESS на точном опубликованном SHA**; прошли Python, JavaScript, offline Telegram-моки, API, PostgreSQL 18 и мобильный Chromium. Последний рабочий HEAD PR #26 `c82acdb893a4aa918bdfd553c27d9cee7dc2c338` также прошёл [Actions #40244028986](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40244028986).
+- Неизменённые исходные PNG в репозитории: `assets/telegram_avatar_approved.png` SHA256 `690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd`; `assets/telegram_welcome_approved.png` SHA256 `8a485bae6e08b0027a8a9f30a9a578e9990ddceabd0d626e6ba082fa184d9bae`. Регрессионный CI сверил эти хеши и байты, передаваемые `/start`. Подлинность визуального выбора подтверждает только владелец на устройстве.
+- Код `cmd_start` вызывает `home(..., welcome_image=True)`: одна фотография PNG и caption в четырёх утверждённых абзацах; две inline-кнопки `FormIQ` → `/mini` (Web App) и `Разбудить` → `wake` callback с ответным сообщением. Оба пути покрыты offline unit tests; **отправка и нажатия в реальном Telegram не проверены**.
+- Render startup logs 25.10.2026 23:19 UTC: `FORMIQ Telegram About and Description verified (locale=default)`, `(locale=ru)`, `FORMIQ approved avatar uploaded and verified from Telegram image`; `FORMIQ 38.3.3 ready`; `GET /` → HTTP 200. Не обнаружены журнальные записи уровня `error` в проверенном интервале. HTTP `/mini` после выпуска и реальные Telegram Android/iOS-переходы не проверены напрямую.
+- Не меняли production PostgreSQL, токены, webhook, Mini App, темы, тарифы и About/Description в рамках выпуска. [PR #25](https://github.com/smirnovka907-crypto/formiq-bot/pull/25) — отдельный открытый Draft Garmin, без merge/deploy и без разрешения на публикацию.
+
+**Один следующий шаг:** владелец проверяет в `@formiqcoachbot` на устройстве аватарку, картинку и подпись `/start`, действие обеих кнопок, после чего отмечаем PASS/FAIL в чате «FORMIQ | Управление 7». Технический выпуск не равен пользовательской приёмке. Эта документальная запись готовится **в отдельном Draft PR без слияния в main**: слияние настраивает новый Render auto-deploy и не разрешено в рамках уже использованного разрешения.
+
+---
+
 # FORMIQ | Telegram — утверждённый владелецом релиз (26.10.2026)
 
 **Стадия записи:** реализация в отдельной ветке `fix/telegram-branding-owner-approved-20261026`, разрешение владельца на **один** merge + штатный автоматический деплой получено. Результат CI, merge и Live отмечать только после фактического подтверждения. Старые записи ниже исторические, включая прежнее утверждение «НЕ опубликовано», которое уже было опровергнуто выпуском PR #23/#24.
