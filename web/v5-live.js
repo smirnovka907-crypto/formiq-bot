@@ -933,11 +933,11 @@ app.addEventListener('click',async e=>{
  if(cmd==='nutrition-analyze'){
   if(nutritionBusy)return;
   const file=document.getElementById('nutrition-file')?.files?.[0];
-  const consent=document.getElementById('nutrition-consent')?.checked===true;
+  const consent=state?.ai_personalization?.profile===true;
   const alert=document.getElementById('nutrition-error');
   if(!file){if(alert)alert.textContent='Выбери JPG, PNG или CSV-отчёт.';return}
   if(file.size<24||file.size>1500000){if(alert)alert.textContent='Отчёт должен быть не больше 1,5 МБ.';return}
-  if(!consent){if(alert)alert.textContent='Подтверди согласие на отправку выбранного отчёта в Yandex AI.';return}
+  if(!consent){if(alert)alert.textContent='Включи Yandex AI в анкете. Без него ручной дневник доступен.';return}
   nutritionBusy=true;error='';draw();
   const data=new FormData();data.append('report',file);data.append('consent','yes');
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),65000);
