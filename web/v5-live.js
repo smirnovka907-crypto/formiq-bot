@@ -13,6 +13,10 @@ let state=null,view='home',error='',busy=false,modal='',detail=null,restUntil=0,
 const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&state?.metrics?.age&&state?.metrics?.height_cm&&state?.metrics?.weight_kg&&!state?.needs_health_profile);
 // Server-side safety warnings prevent unsafe sessions, not access to the app.
 const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const deviceZone=()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow'}catch(_e){return 'Europe/Moscow'}};
+function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('en-GB',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(now);const val=k=>p.find(x=>x.type===k)?.value||'';return {hour:Number(val('hour')),date:val('year')+'-'+val('month')+'-'+val('day')}}catch(_e){return {hour:now.getHours(),date:now.toISOString().slice(0,10)}}}
+function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
+
 let onboardOpen=false,onboard=null,onboardErrors={};
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false;
@@ -33,15 +37,15 @@ function initOnboard(){
   equipment:p.equipment==='gym'?'gym':'home',
   minutes:String(Math.max(20,Math.min(120,Math.round(oldMinutes/10)*10))),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
-  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',
+  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:m.timezone||deviceZone(),timezoneConfirmed:false,
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
   aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
-  profileAiConsent:state?.ai_personalization?.profile===true,
+  profileAiConsent:state?.ai_personalization?.profile===true&&state?.ai_personalization?.health===true&&(m.sex!=='female'||state?.ai_personalization?.cycle===true),
   healthAiStored:state?.ai_personalization?.health===true,
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
-  adult:false,terms:false,privacy:false,health:false};
+  adult:!!state?.agreed,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
 function onboardError(key){
@@ -77,7 +81,11 @@ function onboardForm(){
  const personal='<h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+
   onboardButtons('sex','Пол',[['Мужской','male'],['Женский','female']])+
   '<div class="form-row">'+onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
-  onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+onboardCheckbox('adult','Мне исполнилось 18 лет');
+  onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+
+ '<label class="field"><span>Часовой пояс *</span><input data-onboard="timezone" type="search" list="fq-timezones" required autocomplete="off" value="'+esc(d.timezone)+'" placeholder="Город / регион"></label>'+
+ '<datalist id="fq-timezones">'+allTimezones().map(z=>'<option value="'+esc(z)+'"></option>').join('')+'</datalist>'+
+ onboardError('timezone')+'<p class="input-note">Определён по устройству: '+esc(deviceZone())+'. Можно изменить; VPN не учитывается.</p>'+
+ onboardCheckbox('timezoneConfirmed','Подтверждаю выбранный часовой пояс')+onboardCheckbox('adult','Мне исполнилось 18 лет');
  const training='<h2 class="section-label">Тренировки</h2>'+
   onboardButtons('goal','Цель',onboardChoices.goal)+onboardChoice('level','Опыт',onboardChoices.level)+
   onboardWeekdays()+onboardChoice('minutes','Продолжительность тренировки',onboardChoices.minutes)+
@@ -88,8 +96,8 @@ function onboardForm(){
   '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
   '<p class="input-note">Описание необязательно. Без разбора ограничений ИИ приложение не делает медицинских выводов. При симптомах или травмах уточни безопасную нагрузку со специалистом.</p>'+
   onboardCheckbox('healthStorageConsent','Разрешаю сохранить описание здоровья в приватном дневнике (если оно указано)')+
-  (String(d.description).trim()?onboardCheckbox('aiConsent','Отдельно разрешаю передать этот текст в Yandex AI для структурирования')+
-    (d.aiConsent?button('Разобрать описание','onboard-ai'): '')+
+  (String(d.description).trim()?''+
+    (d.profileAiConsent&&state?.ai_personalization?.health?button('Разобрать описание','onboard-ai'): '')+
     (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь результат ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+'</div>'+
        (d.aiResult.needs_clarification&&d.aiResult.clarification_question?'<label class="field"><span>'+
         esc(d.aiResult.clarification_question)+'</span><textarea data-onboard="clarification" rows="2" maxlength="220" placeholder="Ответ необязателен"></textarea></label>'+
@@ -97,9 +105,8 @@ function onboardForm(){
        onboardCheckbox('aiReviewed','Подтверждаю проверенные результаты анализа'):''):'')+
   onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
-  onboardCheckbox('profileAiConsent','Разрешаю передачу необходимых данных моей анкеты в Yandex AI для персонализации тренировок и питания')+
-  '<p class="input-note">При согласии: цель, уровень, место, выбранные дни, длительность и факты из истории тренировок. Для питания — советы без вымышленных калорий и подключений. Можно отозвать в профиле. Без согласия анкета и план работают обычно.</p>'+
-  (d.description.trim()?onboardCheckbox('healthAiStored','Отдельно разрешаю ИИ учитывать сохранённое описание ограничений здоровья'):'')+
+  onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
+  '<p class="input-note"><a href="/mini/yandex-privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность Yandex AI</a>. Согласие добровольное, его можно отозвать здесь.</p>'+
   onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
