@@ -83,6 +83,33 @@ class SchedulePostgresTests(unittest.TestCase):
         cycle, _ = self.m.get_cycle(self.chat, profile)
         return profile, cycle, self.m.scheduled_calendar(self.chat, profile, cycle)
 
+    def test_initial_onboarding_persists_four_weeks_before_first_state_read(self):
+        # The first save must produce a durable calendar even if the next
+        # network request fails; no lazy creation in state/get_cycle required.
+        self.m.save_onboarding(self.chat, self.body())
+        with self.connect() as conn:
+            cycles=conn.execute('''SELECT id,starts_on FROM training_cycles
+                WHERE chat_id=%s''',(self.chat,)).fetchall()
+            self.assertEqual(len(cycles),1)
+            slots=conn.execute('''SELECT week_no,planned_date,schedule_state
+                FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s''',
+                (self.chat,cycles[0][0])).fetchall()
+        self.assertEqual(len(slots),12)
+        self.assertEqual({week for week,_,_ in slots},{1,2,3,4})
+        self.assertTrue(all(status=='auto' for _,_,status in slots))
+
+    def test_health_safety_hold_retains_calendar_but_never_offers_exercises(self):
+        body=self.body()
+        body['health_profile']=dict(affected=['other'],pain_score=0,
+            symptom_course='unspecified',danger_signs=False,activity_cleared=False)
+        self.m.save_onboarding(self.chat,body)
+        result=self.m.mini_state(self.chat)
+        self.assertTrue(result['agreed'])
+        self.assertEqual(len(result['calendar']),12)
+        self.assertEqual(result['plan'],[])
+        self.assertIn('Другое',result['plan_warning'])
+        self.assertIsNotNone(result['cycle_start'])
+
     def rows(self, cycle):
         with self.connect() as conn:
             return conn.execute('''SELECT id,week_no,day_code,planned_date,schedule_state
