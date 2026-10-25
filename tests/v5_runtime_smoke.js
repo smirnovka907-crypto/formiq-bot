@@ -70,6 +70,7 @@ function createClient(auth=true,shared={}){
     shared.workout=workout;
     response={ok:true,patch:{workout}};
    }else if(p.action==='progress_series')response={ok:true,exercises:shared.progressSeries||[]};
+   else if(p.action==='body_weight_history')response={ok:true,measurements:[]};
    else if(p.action==='history_month')response={ok:true,dates:['2026-10-23'],month:p.month};
    else if(p.action==='history_page')response={ok:true,history:history.filter(x=>!p.date||x.date.split('.').reverse().join('-')===p.date),next_offset:null};
    else if(p.action==='detail')response={ok:true,detail:{title:'Силовая',date:'23.10.2026',items:[{name:'Жим ногами',result:'12 повт. · 60 кг'}]}};
@@ -252,7 +253,7 @@ async function run(){
  assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
  assert.match(app.root.innerHTML,/data-onboard="age"/);
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
- assert.match(app.root.innerHTML,/data-onboard="timezone"/);
+ assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
  assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
@@ -351,13 +352,12 @@ async function run(){
   assert.doesNotMatch(ux.root.innerHTML,/href="\/mini\/legacy"/,'Editing stays in v5');
   await ux.click({cmd:'onboard-save'});
   assert.equal(ux.requests.filter(x=>x.action==='onboarding').length,0,'No consent, no save');
-  for(const key of ['adult','terms','privacy','health'])
+  for(const key of ['terms','privacy','health'])
     ux.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
   await ux.click({cmd:'onboard-save'});
   assert.match(ux.root.innerHTML,/Выбери Мужской или Женский/);
   await ux.click({onboardWeekday:'0'});await ux.click({onboardWeekday:'3'});
   await ux.click({onboardPick:'sex',value:'female'});
-  ux.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   ux.handlers.change({target:{dataset:{onboard:'minutes'},type:'select-one',value:'120'}});
   ux.handlers.input({target:{dataset:{onboard:'equipment_description'},type:'textarea',value:'гантели, резинки'}});
   await ux.click({cmd:'onboard-save'});
@@ -379,9 +379,8 @@ async function run(){
   const sevenDays=createClient(true,{profileRaw:{days:'7',weekdays:[0,1,2,3,4,5,6]}});await settle();
   await sevenDays.click({nav:'profile'});
   assert.equal((sevenDays.root.innerHTML.match(/data-onboard-weekday="[0-6]" aria-pressed="true"/g)||[]).length,7);
-  for(const key of ['adult','terms','privacy','health'])sevenDays.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
+  for(const key of ['terms','privacy','health'])sevenDays.handlers.change({target:{dataset:{onboard:key},type:'checkbox',checked:true}});
   await sevenDays.click({onboardPick:'sex',value:'male'});
-  sevenDays.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   for(let day=1;day<7;day++)await sevenDays.click({onboardWeekday:String(day)});
   await sevenDays.click({cmd:'onboard-save'});
   assert.deepEqual(Array.from(sevenDays.requests.find(x=>x.action==='onboarding').answers.weekdays),[0]);
@@ -398,9 +397,7 @@ async function run(){
   await ai.click({nav:'profile'});
   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
   await ai.click({onboardPick:'sex',value:'male'});
-  ai.handlers.change({target:{dataset:{onboard:'timezoneConfirmed'},type:'checkbox',checked:true}});
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
-  ai.handlers.change({target:{dataset:{onboard:'healthStorageConsent'},type:'checkbox',checked:true}});
   const finishAnalysis=ai.deferOnce('health_analyze');
   const pendingAnalysis=ai.click({cmd:'onboard-ai'});await settle();
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Теперь беспокоит спина, не колено'}});
@@ -411,10 +408,10 @@ async function run(){
   assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
   assert.ok(ai.requests.filter(x=>x.action==='health_analyze')
     .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
-  assert.match(ai.root.innerHTML,/Проверь результат ИИ/);
+  assert.match(ai.root.innerHTML,/Применить результат/);
   await ai.click({cmd:'onboard-save'});
   assert.equal(ai.requests.filter(x=>x.action==='onboarding').length,0,'AI result must be reviewed');
-  ai.handlers.change({target:{dataset:{onboard:'aiReviewed'},type:'checkbox',checked:true}});
+  await ai.click({cmd:'onboard-ai-apply'});
   await ai.click({cmd:'onboard-save'});
   const aiSaves=ai.requests.filter(x=>x.action==='onboarding');
   assert.equal(aiSaves.length,1);

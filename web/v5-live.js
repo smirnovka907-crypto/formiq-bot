@@ -18,7 +18,8 @@ function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
 let onboardOpen=false,onboard=null,onboardErrors={};
-let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='';
+let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
+let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,feedbackNotice='',feedbackError='';
 const onboardChoices={
  goal:[['Похудеть','loss'],['Мышцы и сила','muscle'],['Выносливость','endurance'],['Поддерживать форму','general']],
@@ -37,7 +38,7 @@ function initOnboard(){
   equipment:p.equipment==='gym'?'gym':'home',
   minutes:String(Math.max(20,Math.min(120,Math.round(oldMinutes/10)*10))),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
-  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:m.timezone||deviceZone(),timezoneConfirmed:false,
+  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:deviceZone(),timezoneConfirmed:true,
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
   aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
   profileAiConsent:state?.ai_personalization?.profile===true&&state?.ai_personalization?.health===true&&(m.sex!=='female'||state?.ai_personalization?.cycle===true),
@@ -45,7 +46,7 @@ function initOnboard(){
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
-  adult:!!state?.agreed,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
+  adult:true,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
 function onboardError(key){
@@ -82,10 +83,7 @@ function onboardForm(){
   onboardButtons('sex','Пол',[['Мужской','male'],['Женский','female']])+
   '<div class="form-row">'+onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
   onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+
- '<label class="field"><span>Часовой пояс *</span><input data-onboard="timezone" type="search" list="fq-timezones" required autocomplete="off" value="'+esc(d.timezone)+'" placeholder="Город / регион"></label>'+
- '<datalist id="fq-timezones">'+allTimezones().map(z=>'<option value="'+esc(z)+'"></option>').join('')+'</datalist>'+
- onboardError('timezone')+'<p class="input-note">Определён по устройству: '+esc(deviceZone())+'. Можно изменить; VPN не учитывается.</p>'+
- onboardCheckbox('timezoneConfirmed','Подтверждаю выбранный часовой пояс')+onboardCheckbox('adult','Мне исполнилось 18 лет');
+ ''; 
  const training='<h2 class="section-label">Тренировки</h2>'+
   onboardButtons('goal','Цель',onboardChoices.goal)+onboardChoice('level','Опыт',onboardChoices.level)+
   onboardWeekdays()+onboardChoice('minutes','Продолжительность тренировки',onboardChoices.minutes)+
@@ -94,16 +92,14 @@ function onboardForm(){
  const health=block('<h2>Здоровье</h2>'+
   '<label class="field"><span>Есть ли заболевания, травмы или ограничения, которые нужно учитывать при тренировках?</span>'+
   '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
-  '<p class="input-note">Описание необязательно. Без разбора ограничений ИИ приложение не делает медицинских выводов. При симптомах или травмах уточни безопасную нагрузку со специалистом.</p>'+
-  onboardCheckbox('healthStorageConsent','Разрешаю сохранить описание здоровья в приватном дневнике (если оно указано)')+
-  (String(d.description).trim()?''+
-    (d.profileAiConsent&&state?.ai_personalization?.health?button('Разобрать описание','onboard-ai'): '')+
-    (d.aiResult?'<div class="fq-live-banner" role="status"><strong>Проверь результат ИИ перед сохранением.</strong> '+esc(d.aiResult.short_summary||'')+'</div>'+
-       (d.aiResult.needs_clarification&&d.aiResult.clarification_question?'<label class="field"><span>'+
-        esc(d.aiResult.clarification_question)+'</span><textarea data-onboard="clarification" rows="2" maxlength="220" placeholder="Ответ необязателен"></textarea></label>'+
-        button('Уточнить с ИИ (необязательно)','onboard-ai-clarify'):'')+
-       onboardCheckbox('aiReviewed','Подтверждаю проверенные результаты анализа'):''):'')+
-  onboardError('description'));
+  '<p class="input-note">Описание необязательно. При нажатии «Сохранить» оно сохраняется в приватном профиле. При симптомах или травмах уточни допустимую нагрузку у специалиста.</p>'+
+  (String(d.description).trim()?button('Разобрать описание','onboard-ai'):'')+
+  (d.aiResult?'<div class="fq-ai-result">'+
+   (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
+     '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
+      button('Уточнить для Yandex AI','onboard-ai-clarify'):
+      '<p class="input-note"><strong>Yandex AI выделил:</strong> '+esc((d.aiResult.affected||[]).map(x=>onboardRegions.find(([k])=>k===x)?.[1]||'Ограничение').join(', ')||'Общие ограничения')+'. '+(d.aiResult.pain_score==null?'Интенсивность боли не указана.':'Боль: '+esc(d.aiResult.pain_score)+'/10.')+'</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
+  onboardError('description')+onboardError('clarification'));
  const legal=block('<h2>Подтверждения</h2>'+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
   '<p class="input-note"><a href="/mini/yandex-privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность Yandex AI</a>. Согласие добровольное, его можно отозвать здесь.</p>'+
@@ -111,7 +107,7 @@ function onboardForm(){
   onboardCheckbox('privacy','Ознакомился с <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">политикой конфиденциальности</a>')+
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
- const calendar=d.sex==='female'?(state?.metrics?.sex==='female'?femaleCalendar():block('<h2>Женский календарь</h2><p>Сохрани выбранный пол, чтобы открыть календарь.</p>')):'';
+ const calendar=d.sex==='female'?femaleCalendar():'';
  const connections=view==='profile'?block('<h2>Подключения</h2><p class="input-note">Garmin Connect и FatSecret: синхронизация недоступна, подключения нет.</p>'):'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
   (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal;
@@ -120,9 +116,6 @@ function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
  if(!['male','female'].includes(d.sex))errs.sex='Выбери Мужской или Женский.';
  if(!Array.isArray(d.weekdays)||d.weekdays.length<1)errs.weekdays='Выбери хотя бы один день недели.';
- if(!d.adult)errs.adult='Подтверди возраст 18+.';
- if(!d.timezoneConfirmed)errs.timezoneConfirmed='Подтверди часовой пояс.';
- try{new Intl.DateTimeFormat('ru-RU',{timeZone:d.timezone})}catch(_e){errs.timezone='Введи корректный IANA-часовой пояс.'}
  for(const key of ['terms','privacy','health'])if(!d[key])errs[key]='Подтверди согласие.';
  const mm={};
  for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
@@ -131,8 +124,8 @@ function onboardingPayload(){
   else mm[key]=value;
  }
  const description=String(d.description||'').trim();
- if(description&&!d.healthStorageConsent)errs.healthStorageConsent='Для сохранения описания нужно отдельное согласие.';
- if(description&&d.aiResult&&!d.aiReviewed)errs.description='Проверь и подтверди результат ИИ.';
+ if(d.aiResult?.needs_clarification)errs.clarification='Ответь на уточняющий вопрос Yandex AI перед сохранением анкеты.';
+ else if(description&&d.aiResult&&!d.aiReviewed)errs.description='Примени результат Yandex AI перед сохранением.';
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
@@ -147,11 +140,11 @@ function onboardingPayload(){
   (noteChanged?[...new Set([...previousAreas,'other'])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
- const timezone=d.timezone;
+ const timezone=deviceZone();
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
-  health_description:description,health_storage_consent:!!d.healthStorageConsent,
+  health_description:description,health_storage_consent:!!description&&d.privacy,
   ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!d.profileAiConsent,ai_cycle_consent:!!(d.profileAiConsent&&d.sex==='female'),
   unified_ai_consent:!!d.profileAiConsent,
   health_profile:{affected,pain_score:reviewed?Number(d.pain||0):Number(prior.pain_score||0),
@@ -173,21 +166,22 @@ async function loadFemalePeriods(){
  finally{periodBusy=false;draw()}
 }
 function femaleCalendar(){
- if(state?.metrics?.sex!=='female'||onboard?.sex==='male')return '';
+ if(onboard?.sex!=='female')return '';
  const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
- const months=[...new Set((periodEntries||[]).map(p=>p.start.slice(0,7)))];
+ const visiblePeriods=[...(periodEntries||[]),...pendingPeriods];
+ const months=[...new Set(visiblePeriods.map(p=>p.start.slice(0,7)))];
  const current=months.includes(periodMonth)?periodMonth:months[0]||'';
  const selector=months.length?'<label class="field" style="margin-top:16px"><span>Месяц истории</span><select id="period-month">'+
   months.map(v=>'<option value="'+esc(v)+'"'+(v===current?' selected':'')+'>'+esc(v.slice(5,7)+'.'+v.slice(0,4))+'</option>').join('')+
   '</select></label>':'';
- const entries=(periodEntries||[]).filter(p=>p.start.slice(0,7)===current).map(p=>
+ const entries=visiblePeriods.filter(p=>p.start.slice(0,7)===current).map(p=>
   '<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
-  button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
+  (p.id<0?'<small>Будет сохранено с анкетой</small>':'')+button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
  const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
   esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
   '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
  return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
-  '<p class="input-note">Необязательный приватный дневник. Без отдельного согласия данные не отправляются в Yandex AI.</p>'+
+  '<p class="input-note">Приватный дневник. Новые даты можно ввести сразу — они сохранятся вместе с анкетой. Без согласия данные не передаются в Yandex AI.</p>'+
   '<p class="input-note">Для передачи данных цикла в Yandex AI действует единое согласие анкеты. Отзыв не удаляет записи.</p>'+
   '<div class="fq-live-grid" style="margin-top:15px">'+
   '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
@@ -360,11 +354,11 @@ function training(){
   (exercises||'<p class="empty">План упражнений пока не сформирован.</p>')+
   (items.length?'<div class="workout-cta">'+button('Начать тренировку','mood',true)+'</div>':'')+
   '</section>';
- const selected=cardioType||'Выбрать вид кардио';
+ const selected=cardioType||'Выбрать упражнение';
  const cardioCard='<section class="surface cardio-inline" id="cardio-entry">'+
   '<div class="heading-row"><h2 style="margin:0;font-size:21px">Дополнительная тренировка</h2></div>'+
   '<p class="input-note" style="margin:9px 0 15px">Активность вне основного тренировочного плана.</p>'+
-  '<div class="field"><span>Вид кардио</span>'+
+  '<div class="field"><span class="visually-hidden">Упражнение</span>'+
   button(selected,'cardio-types',false,'aria-expanded="'+typesOpen+'" aria-controls="cardio-type-options"')+
   '</div>'+
   (typesOpen?'<div class="cardio-choices cardio-inline-choices" id="cardio-type-options">'+
@@ -405,7 +399,7 @@ function calendar(){
  const [year,n]=month.split('-').map(Number);
  const first=new Date(Date.UTC(year,n-1,1)),count=new Date(Date.UTC(year,n,0)).getUTCDate();
  const padding=(first.getUTCDay()+6)%7;
- const highlighted=new Set([...monthMarks,...(state.history||[]).map(x=>isoDate(x.date))]);
+ const highlighted=new Set([...monthMarks,...(state.history||[]).map(x=>isoDate(x.date))]);const today=localClock().date;
  return '<div class="history-cal-inline" id="history-calendar-grid" aria-label="Календарь тренировок">'+
    '<div class="calendar-controls">'+
    '<button type="button" data-cmd="prev-month" aria-label="Предыдущий месяц">‹</button>'+
@@ -417,7 +411,7 @@ function calendar(){
    Array.from({length:count},(_,i)=>{
      const day=month+'-'+String(i+1).padStart(2,'0');
      return '<button type="button" class="'+(highlighted.has(day)?'has-entry has-workout ':'')+
-       (date===day?'selected':'')+'" data-date="'+day+'" aria-label="'+prettyDate(day)+'">'+(i+1)+'</button>'
+       (date===day?'selected ':'')+(day===today?'is-today':'')+'" data-date="'+day+'" aria-label="'+prettyDate(day)+'">'+(i+1)+'</button>'
    }).join('')+'</div>'+
    '<p class="cal-help"><span class="history-legend-dot"></span> Отмечены дни с записями в дневнике.</p></div>';
 }
@@ -543,6 +537,30 @@ async function loadProgressSeries(){
   if(view==='progress'&&!onboardOpen)draw();
  }
 }
+async function loadBodyWeight(){
+ try{const response=await request('body_weight_history');weightHistory=Array.isArray(response.measurements)?response.measurements:[]}
+ catch(_e){weightImportError='Не удалось загрузить историю измерений'}
+ if(view==='progress'&&!onboardOpen)draw();
+}
+async function uploadBodyWeight(mode){
+ if(weightImportBusy||!weightFile){weightImportError='Сначала выбери файл Fitdays (CSV, XLSX или XLS).';draw();return}
+ if(weightFile.size>2000000){weightImportError='Отчёт не должен превышать 2 МБ';draw();return}
+ weightImportBusy=true;weightImportError='';draw();
+ const fd=new FormData();fd.append('report',weightFile);fd.append('mode',mode);
+ if(mode==='import'){fd.append('confirmed','yes');fd.append('file_hash',weightPreview?.file_hash||'')}
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),30000);
+ try{
+  const response=await fetch('/mini/body-weight/report',{method:'POST',
+   headers:{'X-Formiq-Init':token},body:fd,credentials:'same-origin',cache:'no-store',signal:abort.signal});
+  const data=await response.json();if(!response.ok||!data.ok)throw Error(data.error||'Ошибка файла весов');
+  if(mode==='preview'){weightPreview=data;weightImportNotice='Проверь измерения перед сохранением.'}
+  else{
+   weightImportNotice='Добавлено измерений: '+data.imported+'. Уже были: '+data.duplicates+'.';
+   weightPreview=null;weightFile=null;await loadBodyWeight();
+  }
+ }catch(ex){weightImportError=ex.name==='AbortError'?'Импорт не ответил вовремя. Проверь историю перед повтором.':ex.message}
+ finally{clearTimeout(timer);weightImportBusy=false;draw()}
+}
 function progress(){
  const stats=state.stats||{},weight=state.metrics?.weight_kg;
  const valid=weight!==null&&weight!==undefined&&Number.isFinite(Number(weight))&&Number(weight)>0;
@@ -559,9 +577,26 @@ function progress(){
    '<p class="chart-leg">Максимальный сохранённый вес по каждому дню. Только завершённые тренировки.</p>':
   '<div class="chart-block fq-empty-chart" role="status">Пока нет завершённых подходов с записанным весом.</div>';
  const strength='<section class="surface"><div class="chart-caption"><strong>Рабочий вес</strong><small>По записям подходов</small></div>'+chart+'</section>';
- const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Последнее измерение</small></div>'+
-  '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong><span>'+
-  (valid?'Последнее сохранённое значение · динамика пока недоступна':'Нет измерений')+'</span></div></section>';
+ const lastWeight=weightHistory[0];
+ const showMeasure=(row)=>new Date(typeof row==='string'?row:row.date).toLocaleString('ru-RU',{timeZone:state?.metrics?.timezone||deviceZone(),day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+ const additions=lastWeight?Object.entries({body_fat_pct:'Жир, %',muscle_mass_kg:'Мышцы, кг',body_water_pct:'Вода, %',visceral_fat:'Висцеральный жир',bmr_kcal:'Базовый обмен, ккал',bmi:'ИМТ'})
+  .filter(([key])=>lastWeight[key]!=null).map(([key,label])=>'<span>'+esc(label)+': '+esc(lastWeight[key])+'</span>').join(' · '):'';
+ const weightPoints=weightHistory.slice(0,30).reverse().map(x=>({weight:x.weight_kg,date:new Intl.DateTimeFormat('sv-SE',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(x.date))}));
+ const preview=weightPreview?'<div class="fq-weight-preview"><p class="input-note">Найдено '+esc(weightPreview.count)+' измерений; пропущено '+esc(weightPreview.invalid)+'. Последние записи:</p>'+
+  (weightPreview.preview||[]).map(x=>'<div class="fq-live-row"><span>'+esc(showMeasure(x.measured_at))+'</span><strong>'+esc(x.weight_kg)+' кг</strong></div>').join('')+'</div>'+
+  button(weightImportBusy?'Сохраняем...':'Подтвердить и сохранить','weight-import',true,weightImportBusy?'disabled':''):'';
+ const body='<section class="surface"><div class="chart-caption"><strong>Масса тела</strong><small>Только реальные измерения</small></div>'+
+  '<div class="metric"><span>Вес в профиле</span><strong>'+shown+'</strong></div>'+
+  (lastWeight?'<div class="metric" style="margin-top:10px"><span>Последний импорт: '+esc(showMeasure(lastWeight))+'</span><strong>'+esc(lastWeight.weight_kg)+' кг</strong>'+
+   '<span>'+additions+'</span></div>'+weightChart(weightPoints,'Масса тела'):'<p class="input-note">Истории измерений пока нет.</p>')+
+  '<h3 class="section-label">Загрузить отчёт умных весов</h3>'+
+  '<p class="input-note">Fitdays и совместимые CSV, XLSX, XLS. Без отправки в Yandex AI и без сохранения исходного файла.</p>'+
+  '<label class="field"><span>Файл с измерениями</span><input id="weight-report-file" type="file" accept=".csv,.xlsx,.xls"></label>'+
+  (weightFile?'<p class="input-note">Выбрано: '+esc(weightFile.name)+'</p>':'')+
+  (weightImportError?'<p role="alert" class="fq-form-error">'+esc(weightImportError)+'</p>':'')+
+  (weightImportNotice?'<p role="status" class="input-note">'+esc(weightImportNotice)+'</p>':'')+
+  '<div style="margin-top:13px">'+button(weightImportBusy?'Обрабатываем...':'Проверить отчёт','weight-preview',true,weightImportBusy?'disabled':'')+'</div>'+
+  preview+'</section>';
  const summary='<section class="surface"><h2 style="font-size:20px;margin:0 0 14px">Результаты</h2>'+
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
@@ -581,7 +616,7 @@ function food(){
   '<label class="field"><span>Отчёт питания</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
   '<label class="checkbox-line" style="margin-top:15px"><input id="nutrition-consent" type="checkbox">'+
   '<span>Разрешаю отправить отчёт в Yandex AI для анализа. Исходный файл не сохраняется в дневнике.</span></label>'+
-  '<p class="input-note" style="margin:11px 0">Отдельное согласие на ИИ можно изменить в анкете.</p>'+
+  '<p class="input-note" style="margin:11px 0">Отдельное согласие на Yandex AI можно изменить в анкете.</p>'+
   '<p id="nutrition-error" class="fq-live-error" role="alert"></p>'+
   button(nutritionBusy?'Анализируем...':'Проанализировать','nutrition-analyze',true,nutritionBusy?'disabled':'')+
   (nutritionAnswer?'<p role="status" class="fq-live-banner" style="white-space:pre-wrap;margin-top:14px">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
@@ -597,7 +632,7 @@ function modalHTML(){
   button('Отправить','feedback-send',true)+button('Отмена','close');
  if(modal==='cardio'){
   content='<h2>Дополнительная тренировка</h2><p>Активность вне основного плана.</p>'+
-   '<label class="field"><span>Вид активности</span>'+button(cardioType||'Выбрать вид активности','cardio-types')+'</label>'+
+   '<label class="field"><span class="visually-hidden">Упражнение</span>'+button(cardioType||'Выбрать упражнение','cardio-types')+'</label>'+
    (typesOpen?'<div class="fq-live-actions">'+['Ходьба','Бег','Велосипед','Плавание','Другое'].map(x=>button(x,'cardio-type',false,'data-type="'+esc(x)+'"')).join('')+'</div>':'')+
    (cardioType==='Другое'?'<label class="field"><span>Название активности</span><textarea id="cardio-activity" rows="2" maxlength="100" placeholder="Играл в теннис, работал в саду...">'+esc(drafts['cardio-activity']||'')+'</textarea></label>'+
      '<label class="field"><span>Предполагаемая интенсивность</span><select id="cardio-intensity">'+
@@ -609,7 +644,7 @@ function modalHTML(){
    button('Сохранить тренировку','cardio',true)+button('Отмена','close');
  }
  if(modal==='mood')content=state?.metrics?.sex==='female'?
-  `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет ИИ при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
+  `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет Yandex AI при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
   `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
  if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
@@ -643,7 +678,10 @@ app.addEventListener('input',e=>{
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
-app.addEventListener('change',onboardChanged);
+app.addEventListener('change',e=>{
+ if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
+ onboardChanged(e);
+});
 app.addEventListener('focusin',e=>{
  if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
  if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
@@ -659,7 +697,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress')loadProgressSeries();if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
@@ -680,12 +718,12 @@ app.addEventListener('click',async e=>{
       purpose,mood:cmd==='ai-tip-discomfort'?'discomfort':'normal'});
    if(purpose==='training'){aiTrainingTip=result.advice;modal=''}
    else aiNutritionTip=result.advice;
-  }catch(ex){error=ex.message||'Не удалось получить совет ИИ'}
+  }catch(ex){error=ex.message||'Не удалось получить совет Yandex AI'}
   finally{aiTipBusy=false;draw()}
   return;
  }
  if(cmd==='period-edit'){
-  const id=Number(element.dataset.periodId),record=periodEntries?.find(x=>x.id===id);
+  const id=Number(element.dataset.periodId),record=[...(periodEntries||[]),...pendingPeriods].find(x=>x.id===id);
   if(!record)return;
   periodEditing=id;periodDraft={start:record.start,end:record.end};periodError='';draw();return;
  }
@@ -696,6 +734,12 @@ app.addEventListener('click',async e=>{
   if(periodBusy)return;
   if(!periodDraft.start||!periodDraft.end){periodError='Укажи обе даты.';draw();return}
   if(periodDraft.end<periodDraft.start){periodError='Окончание не может быть раньше начала.';draw();return}
+  if(state?.metrics?.sex!=='female'){
+   if(pendingPeriods.some(p=>p.id!==periodEditing&&p.start<=periodDraft.end&&p.end>=periodDraft.start)){periodError='Даты пересекаются с другой записью.';draw();return}
+   const id=periodEditing&&periodEditing<0?periodEditing:pendingPeriodId--;
+   pendingPeriods=pendingPeriods.filter(p=>p.id!==id);pendingPeriods.push({...periodDraft,id});
+   periodMonth=periodDraft.start.slice(0,7);periodEditing=null;periodDraft={start:'',end:''};periodError='';draw();return;
+  }
   periodBusy=true;
   try{
    const response=await request('period_save',{...periodDraft,...(periodEditing?{id:periodEditing}:{})});
@@ -718,24 +762,27 @@ app.addEventListener('click',async e=>{
   const key=element.dataset.onboardPick,value=element.dataset.value;
   if(!['goal','equipment','sex'].includes(key))return;
   onboard[key]=value;delete onboardErrors[key];
+  if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
   draw();return;
  }
+ if(cmd==='weight-preview'||cmd==='weight-import'){await uploadBodyWeight(cmd==='weight-import'?'import':'preview');return}
  if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
    if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
  if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
-  if(!onboard?.profileAiConsent||!state?.ai_personalization?.health){fail('Для разбора сначала сохрани единое согласие Yandex AI в анкете.');return}
-  if(!onboard.adult||!onboard.privacy){fail('Перед анализом подтверди возраст 18+ и ознакомление с политикой конфиденциальности.');return}
+  if(!onboard?.profileAiConsent){fail('Разреши Yandex AI в анкете, затем нажми «Разобрать описание».');return}
+  if(!onboard.privacy||!(Number(onboard.age)>=18)){fail('Для разбора нужны возраст 18+ и ознакомление с политикой конфиденциальности.');return}
   const original=String(onboard.description||'').trim();
   const extra=cmd==='onboard-ai-clarify'?String(onboard.clarification||'').trim():'';
+  if(cmd==='onboard-ai-clarify'&&extra.length<2){fail('Ответь на уточняющий вопрос Yandex AI.');return}
   const txt=extra?original+'\nДополнительное пояснение пользователя: '+extra:original;
   if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
   const analyzedForm=onboard;
-  const result=await send('health_analyze',{adult:true,privacy_ack:true,ai_consent:true,text:txt});
+  const result=await send('health_analyze',{adult:true,age:Number(onboard.age),privacy_ack:true,ai_consent:true,onboarding_preview:true,text:txt});
   if(result?.analysis){
    if(onboard!==analyzedForm||String(onboard.description||'').trim()!==original||
       (cmd==='onboard-ai-clarify'&&String(onboard.clarification||'').trim()!==extra)||
-      !onboard.profileAiConsent||!onboard.adult||!onboard.privacy){
+      !onboard.profileAiConsent||Number(onboard.age)<18||!onboard.privacy){
     fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
    }
    const a=result.analysis;onboard.limitation='yes';
@@ -746,11 +793,22 @@ app.addEventListener('click',async e=>{
    onboard.aiResult=a;onboard.aiReviewed=false;onboard.clarification='';draw();
   }return;
  }
+ if(cmd==='onboard-ai-apply'){if(onboard?.aiResult){onboard.aiReviewed=true;error='';draw()}return}
  if(cmd==='onboard-save'){
   if(!onboard)return;let payload;
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
   const saved=await send('onboarding',payload);
-  if(saved){const editing=view==='profile';onboardOpen=false;onboard=null;onboardErrors={};view=editing?'profile':'home';profileNotice=editing?'Изменения сохранены.':'';draw();window.scrollTo(0,0)}
+  if(saved){
+   if(onboard.sex==='female'){
+    for(const entry of [...pendingPeriods]){
+     try{await request('period_save',{start:entry.start,end:entry.end});pendingPeriods=pendingPeriods.filter(p=>p.id!==entry.id)}
+     catch(ex){error='Анкета сохранена, но даты календаря не записаны: '+ex.message;draw();return}
+    }
+   }
+   pendingPeriods=[];
+   onboardOpen=false;onboard=null;onboardErrors={};periodEntries=null;view='home';
+   profileNotice='';error='';draw();window.scrollTo(0,0);
+  }
   return;
  }
  if(cmd==='profile-metrics-edit'){

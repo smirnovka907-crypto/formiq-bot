@@ -407,7 +407,7 @@ class V5StagingContract(unittest.TestCase):
             self.assertEqual(unauthorized.status_code,401)
 
     def test_health_ai_requires_explicit_server_side_consent(self):
-        """Signed Telegram plus the per-request opt-in cannot bypass stored consent."""
+        """Signed Telegram plus per-request opt-in cannot bypass consent without an onboarding adult preview."""
         from urllib.error import URLError
         import urllib.request
         client=self.mod.APP.test_client()
@@ -428,7 +428,7 @@ class V5StagingContract(unittest.TestCase):
                 self.assertIn('согласие',rejected.json['error'])
             outbound.assert_not_called()
             stored.return_value={'profile':True,'health':True,'cycle':False}
-            # Only an explicit request plus persisted consent can reach Yandex.
+            # An explicit request plus persisted consent can reach Yandex; new accounts use a separate adult preview action.
             allowed=client.post('/mini/api',json={**payload,'ai_consent':True})
             self.assertEqual(allowed.status_code,400,allowed.get_json())
             outbound.assert_called_once()
