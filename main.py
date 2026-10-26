@@ -5320,8 +5320,10 @@ def mini_write(chat, action, body):
                 WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
             # A skipped session must never count as a completed workout.
             # Explicit early finish with no sets is also recorded, not blocked.
-            final_status = ('skipped' if action=='skip_workout' else
-                            'finished' if done else 'finished_empty')
+            # Preserve completed work even if the user chooses "skip" later:
+            # a partially completed session must not disappear from progress.
+            final_status = ('finished' if done else
+                            'skipped' if action=='skip_workout' else 'finished_empty')
             c.execute('''UPDATE workouts SET status=%s,finished_at=NOW()
                 WHERE id=%s AND chat_id=%s AND status='active' ''',(final_status,wid,chat))
             affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
