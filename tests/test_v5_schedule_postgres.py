@@ -777,6 +777,72 @@ class SchedulePostgresTests(unittest.TestCase):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
 
 
+    def test_tz3_birth_date_is_real_optional_for_legacy_profiles_and_recalculates(self):
+        old=self.body()
+        self.m.save_onboarding(self.chat,old)
+        stored=self.m.metrics(self.chat)
+        self.assertEqual(stored['age'],34)
+        self.assertIsNone(stored['birth_date'],'Never invent date of birth from legacy age')
+        updated=self.body()
+        updated['metrics']['birth_date']='1992-10-20'
+        self.m.save_onboarding(self.chat,updated)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+        self.assertEqual(self.m.metrics(self.chat)['age'],33)
+        Clock.instant=datetime(2026,10,20,12,tzinfo=timezone.utc)
+        self.assertEqual(self.m.metrics(self.chat)['age'],34)
+        # A stale signed client must not overwrite the new birthday with a guessed date.
+        self.m.save_onboarding(self.chat,old)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM workouts WHERE chat_id=%s",
+                (self.chat,)).fetchone()[0],0)
+        for invalid in ('2026-10-26','2020-02-29','1992-02-30','garbage','1900-01-01'):
+            candidate=self.body()
+            candidate['metrics']['birth_date']=invalid
+            with self.assertRaises(ValueError,msg=invalid):
+                self.m.save_onboarding(self.chat,candidate)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+
+    def test_tz3_birthday_one_greeting_per_year_and_opt_in_only(self):
+        old=self.body()
+        old['metrics']['birth_date']='1992-10-20'
+        self.m.save_onboarding(self.chat,old)
+        Clock.instant=datetime(2026,10,20,12,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.birthday_offer(self.chat+1,{}))
+        first=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        second=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertTrue(first['show_congratulations'])
+        self.assertFalse(second['show_congratulations'])
+        self.assertEqual(first['coach_price_rub'],900)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("""SELECT COUNT(*),COUNT(telegram_claimed_at)
+                FROM birthday_greetings WHERE chat_id=%s""",(self.chat,)).fetchone(),(1,0))
+        changed=self.body()
+        changed['metrics']['birth_date']='1991-10-20'
+        changed['birthday_telegram_consent']=True
+        self.m.save_onboarding(self.chat,changed)
+        with patch.object(self.m.WORKERS,'submit') as submit:
+            third=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+            fourth=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertFalse(third['show_congratulations'])
+        self.assertFalse(fourth['show_congratulations'])
+        submit.assert_called_once()
+        Clock.instant=datetime(2026,10,21,12,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.birthday_offer(self.chat,self.m.metrics(self.chat)))
+        Clock.instant=datetime(2027,10,20,12,tzinfo=timezone.utc)
+        with patch.object(self.m.WORKERS,'submit') as next_submit:
+            following=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertTrue(following['show_congratulations'])
+        next_submit.assert_called_once()
+
+    def test_tz3_feb29_has_explicit_nonleap_policy(self):
+        born=date(2000,2,29)
+        self.assertEqual(self.m._birthday_civil_date(born,2026),(2,28))
+        self.assertEqual(self.m._birthday_civil_date(born,2028),(2,29))
+        self.assertEqual(self.m.years_old(born,date(2026,2,27)),25)
+        self.assertEqual(self.m.years_old(born,date(2026,2,28)),26)
+        self.assertEqual(self.m.years_old(born,date(2028,2,29)),28)
+
     def test_tz3_optional_health_note_does_not_require_obsolete_questionnaire(self):
         data=self.body()
         data['health_profile']=None
