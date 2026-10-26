@@ -694,9 +694,9 @@ async function requestFoodDaily(){
  // Any edit or re-fetch invalidates guidance for the previous food snapshot.
  ++foodRevision;aiNutritionTip='';
  const expected=foodDate,seq=++foodDailySeq;
- const hasLinked=(foodHistory?.meals||[]).some(m=>(m.items||[]).some(x=>x.nutrition_source==='fatsecret'));
+ const hasFood=(foodHistory?.meals||[]).some(m=>(m.items||[]).length);
  foodDaily=null;foodDailyError='';
- foodDailyBusy=!!(state?.food_catalog_available&&hasLinked);
+ foodDailyBusy=hasFood;
  if(!foodDailyBusy){draw();return}
  draw();
  try{
@@ -717,9 +717,26 @@ function syncFoodDraft(){
 }
 function nutritionLabel(row){
  const current=foodDaily?.date===foodDate?foodDaily.items?.find(x=>x.id===row.id):null;
- const hit=catalogRecent[row.id],n=current?.nutrition||(hit?.grams===row.grams?hit.nutrients:null);
- if(n)return '≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' · Ж '+esc(n.fat_g)+' · У '+esc(n.carbs_g)+' г · FatSecret';
+ const hit=catalogRecent[row.id],m=row.nutrition_100g;
+ const local=m?Object.fromEntries(['kcal','protein_g','fat_g','carbs_g'].map(k=>[k,Math.round(Number(m[k])*Number(row.grams))/100])):null;
+ const n=current?.nutrition||(hit?.grams===row.grams?hit.nutrients:null)||local;
+ if(n){
+  const origin=current?.source||row.nutrition_source;
+  return esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' · Ж '+esc(n.fat_g)+' · У '+esc(n.carbs_g)+' г · '+(origin==='manual'?'введено вручную':'FatSecret');
+ }
  return row.nutrition_source==='fatsecret'?'FatSecret · КБЖУ по запросу':'КБЖУ нет данных';
+}
+function userMacrosFromInputs(read){
+ const fields=['kcal','protein_g','fat_g','carbs_g'];
+ const raw=Object.fromEntries(fields.map(key=>[key,String(read(key)??'').trim()]));
+ if(fields.every(k=>!raw[k]))return null;
+ if(fields.some(k=>!raw[k]||!/^[0-9]+(?:[.,][0-9]{1,2})?$/.test(raw[k])))throw Error('Введи все четыре значения КБЖУ на 100 г или оставь пустыми.');
+ for(const key of fields){
+  const n=Number(raw[key].replace(',','.'));
+  if(!Number.isFinite(n)||n<0||n>(key==='kcal'?1000:100))throw Error('КБЖУ на 100 г: 0–1000 ккал, БЖУ 0–100 г.');
+  raw[key]=n;
+ }
+ return raw;
 }
 async function loadFatSecretAccount(){
  if(!state?.fatsecret_diary_configured)return;
@@ -756,6 +773,10 @@ function food(){
   '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
   '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
+  '<details class="fq-food-manual"><summary>КБЖУ вручную на 100 г (необязательно)</summary>'+
+  '<div class="fq-food-manual-grid">'+[['kcal','Ккал'],['protein_g','Белки'],['fat_g','Жиры'],['carbs_g','Углеводы']].map(([key,label])=>
+   '<label class="field"><span>'+label+'</span><input type="number" step="0.01" min="0" data-food-draft="'+i+'" data-field="'+key+'" value="'+esc(row[key]??'')+'"></label>').join('')+'</div>'+
+  '<p class="input-note">Твои значения, не подтверждённые базой продуктов.</p></details>'+
   button('Убрать строку','food-draft-remove',false,'data-index="'+i+'"')+'</div>').join('');
  const editor='<section class="surface"><h2>Добавить приём пищи</h2>'+
   '<label class="field"><span>Приём пищи</span><select id="food-meal">'+
