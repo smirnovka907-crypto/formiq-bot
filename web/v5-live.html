@@ -426,6 +426,35 @@ body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-are
 .fq-onboard-actions{display:flex;flex-direction:column;gap:9px;margin-top:18px}
 .fq-onboard-actions .button-main{min-height:56px}
 .field select{width:100%;min-height:50px;border:1px solid #b9c6c3;border-radius:12px;padding:11px 12px;background:#fdfefe;color:var(--ink)}
+
+/* Female profile: observed days only on the monthly grid; forecast stays separate. */
+.fq-cycle-navigation{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:13px 0}
+.fq-cycle-navigation strong{font-size:16px;text-transform:capitalize;text-align:center}
+.fq-cycle-navigation button{width:44px;height:44px;flex:none;border-radius:12px;border:1px solid var(--line);background:#fff9;font-size:28px;line-height:1}
+.fq-cycle-month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;align-items:center;width:100%}
+.fq-cycle-weekday{font-size:11px;font-weight:740;color:var(--secondary);text-align:center;padding:7px 0}
+.fq-cycle-day,.fq-cycle-empty{min-width:0;aspect-ratio:1 / 1;display:flex;align-items:center;justify-content:center;border-radius:11px;position:relative}
+.fq-cycle-day{background:rgba(255,255,255,.5);border:1px solid rgba(160,150,155,.12);font-size:13px;font-weight:650}
+.fq-cycle-day.today{box-shadow:inset 0 0 0 1.5px var(--orange)}
+.fq-cycle-day.recorded{background:#e5a9c5;border-color:#c784a7;color:#4a263c;font-weight:800}
+.fq-cycle-day.recorded.today{box-shadow:inset 0 0 0 2px #7c4467}
+.fq-cycle-legend{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--secondary);margin:12px 0 17px}
+.fq-cycle-swatch{display:inline-block;width:13px;height:13px;border-radius:4px;background:#e5a9c5;border:1px solid #c784a7}
+.fq-cycle-forecast{margin:15px 0;padding:10px 12px;background:rgba(230,217,225,.38);border:1px dashed #b68daa;border-radius:12px;font-size:13px}
+.fq-cycle-forecast strong{display:block;margin:3px 0;font-size:17px}
+.fq-cycle-forecast small{display:block;color:var(--secondary);font-size:12px;line-height:1.4}
+.fq-cycle-history{max-height:290px;overflow-y:auto;overscroll-behavior:contain}
+.fq-cycle-actions,.fq-cycle-confirm{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.fq-cycle .fq-period-row button{min-height:38px;padding:7px 9px;font-size:12px}
+.fq-cycle-confirm button:first-child{border-color:#ac4e73;color:#922b54}
+.fq-cycle .fq-period-row>span:first-child{min-width:0;overflow-wrap:anywhere}
+.fq-cycle .fq-period-row small{display:block;font-size:11px;color:var(--secondary);margin-top:3px}
+@media(max-width:360px){
+ .fq-cycle-month{gap:2px}
+ .fq-cycle-day{font-size:12px;border-radius:8px}
+ .fq-cycle .fq-period-row{align-items:flex-start;flex-direction:column}
+ .fq-cycle-actions,.fq-cycle-confirm{width:100%}
+}
 .fq-period-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
 .fq-period-row span{font-size:14px;line-height:1.5}
 .fq-period-row button{min-height:40px;border:1px solid var(--line);border-radius:10px;background:#fff9;padding:8px 10px}
