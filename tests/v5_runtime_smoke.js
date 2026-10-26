@@ -54,7 +54,7 @@ function createClient(auth=true,shared={}){
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
-    workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
+    workout,history,birthday:shared.birthday||null,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
@@ -86,6 +86,12 @@ function createClient(auth=true,shared={}){
    else if(p.action==='garmin_disconnect'){
     shared.garminConnected=false;response={ok:true,connected:false};
    }
+   else if(p.action==='integrations_status'){
+    response={ok:true,fatsecret:{available:!!shared.fatsecretReady,
+     connected:!!shared.fatsecretConnected,last_sync_at:shared.fatsecretConnected?'2026-10-24T09:00:00Z':null},
+     garmin:{available:false,connected:!!shared.garminConnected,
+      last_sync_at:shared.garminConnected?'2026-10-25T09:00:00Z':null}};
+   }
    else if(p.action==='fatsecret_account_status')
     response={ok:true,available:!!shared.fatsecretReady,
       connected:!!shared.fatsecretConnected,last_sync_at:null};
@@ -106,7 +112,7 @@ function createClient(auth=true,shared={}){
         user_name_override:own.name||null,user_meal_override:own.meal||null,
         kcal:200,protein:7,fat:4,carbs:32}]};
    }else if(p.action==='fatsecret_diary_import'){
-    assert.equal(p.date,'2026-10-25');shared.fatsecretImported=true;
+    assert.equal(p.date,'2026-10-25');assert.deepEqual(Array.from(p.expected_ids),['17']);shared.fatsecretImported=true;
     response={ok:true,date:p.date,imported_ids:['17'],imported_count:1};
    }else if(p.action==='fatsecret_diary_import_edit'){
     assert.equal(p.external_id,'17');
@@ -183,7 +189,7 @@ function createClient(auth=true,shared={}){
      response={ok:true,data:state()};
     }
     else if(p.action==='save_metrics'){
-    assert.ok(Object.keys(p.metrics).every(k=>['age','height_cm','weight_kg'].includes(k)));
+    assert.ok(Object.keys(p.metrics).every(k=>['age','birth_date','height_cm','weight_kg'].includes(k)));
     Object.assign(metrics,p.metrics);response={ok:true,patch:{metrics:{...metrics},zones:[]}};
    }
    else if(p.action==='finish'){workout=null;shared.workout=null;response={ok:true,data:state()}}
@@ -341,7 +347,11 @@ async function run(){
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
  const garminClient=createClient(true,{garminConnected:true,
    now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
- await settle();await garminClient.click({nav:'progress'});await settle();
+ await settle();await garminClient.click({nav:'profile'});await settle();
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.match(garminClient.root.innerHTML,/Последняя успешная синхронизация/);
+ assert.doesNotMatch(garminClient.root.innerHTML,/data-cmd="garmin-connect"/,'Garmin OAuth does not exist');
+ await garminClient.click({nav:'progress'});await settle();
  assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
  assert.match(garminClient.root.innerHTML,/Garmin Connect/);
  assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
@@ -380,17 +390,32 @@ async function run(){
 
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
- assert.match(app.root.innerHTML,/data-onboard="age"/);
+ assert.match(app.root.innerHTML,/data-onboard="birth_date"/);
+ assert.doesNotMatch(app.root.innerHTML,/data-onboard="age"/,'Birth date replaces age input');
+ assert.match(app.root.innerHTML,/Ранее сохранён только возраст/);
+ assert.match(app.root.innerHTML,/birthday_telegram_consent/);
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
  assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
- assert.match(app.root.innerHTML,/100 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/Бесплатно/);
  assert.match(app.root.innerHTML,/1 000 ₽\/мес\./);
  assert.match(app.root.innerHTML,/data-cmd="tier-select" data-tier="max"/);
  assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
  await app.click({nav:'home'});
  assert.match(app.root.innerHTML,/Доброе|Добрый|Доброй/);
+ const birthday=createClient(true,{now:'2026-10-26T08:00:00Z',profileRaw:{weekdays:[0,2,4]},metrics:{timezone:'UTC',sex:'male',birth_date:'1992-10-26'},
+   birthday:{show_congratulations:true,discount_percent:10,coach_price_rub:900}});
+ await settle();assert.match(birthday.root.innerHTML,/С днём рождения/);
+ assert.match(birthday.root.innerHTML,/900 ₽ вместо 1 000 ₽/);
+ await birthday.click({nav:'profile'});
+ assert.match(birthday.root.innerHTML,/data-onboard="birth_date"/);
+ assert.match(birthday.root.innerHTML,/value="1992-10-26"/);
+ birthday.handlers.change({target:{dataset:{onboard:'birth_date'},type:'date',value:'1992-10-25'}});
+ birthday.handlers.change({target:{dataset:{onboard:'birthday_telegram_consent'},type:'checkbox',checked:true}});
+ await birthday.click({cmd:'onboard-save'});
+ assert.equal(birthday.requests.filter(x=>x.action==='onboarding')[0].metrics.birth_date,'1992-10-25');
+ assert.equal(birthday.requests.filter(x=>x.action==='onboarding')[0].birthday_telegram_consent,true);
  assert.match(app.root.innerHTML,/Отзывы и предложения/);
  await app.click({cmd:'feedback-open'});
  assert.match(app.root.innerHTML,/id="feedback-text"/);
@@ -482,14 +507,20 @@ async function run(){
  const noOAuth=createClient(true,{fatsecretReady:false});
  await settle();await noOAuth.click({nav:'food'});await settle();
  assert.doesNotMatch(noOAuth.root.innerHTML,/Подключить FatSecret/);
+ await noOAuth.click({nav:'profile'});await settle();
+ assert.match(noOAuth.root.innerHTML,/Временно недоступен/);
+ assert.doesNotMatch(noOAuth.root.innerHTML,/data-cmd="fatsecret-connect"/);
  assert.ok(!noOAuth.requests.some(x=>x.action==='fatsecret_account_connect'));
  const oauthClient=createClient(true,{fatsecretReady:true,fatsecretConnected:false});
- await settle();await oauthClient.click({nav:'food'});await settle();
- assert.match(oauthClient.root.innerHTML,/Подключить FatSecret/);
+ await settle();await oauthClient.click({nav:'profile'});await settle();
+ assert.match(oauthClient.root.innerHTML,/Подключения/);
+ assert.match(oauthClient.root.innerHTML,/Не подключён/);
+ assert.match(oauthClient.root.innerHTML,/Временно недоступен/,'Garmin must not offer fake authorization');
+ assert.match(oauthClient.root.innerHTML,/data-cmd="fatsecret-connect"/);
  await oauthClient.click({cmd:'fatsecret-connect'});
  assert.ok(oauthClient.requests.some(x=>x.action==='fatsecret_account_connect'));
  assert.match(oauthClient.root.innerHTML,/authentication.fatsecret.com\/oauth\/authorize/);
- const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true});
+ const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true,now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
  await settle();await linkedClient.click({nav:'food'});await settle();
  assert.match(linkedClient.root.innerHTML,/Аккаунт подключён/);
  await linkedClient.click({cmd:'fatsecret-diary-day'});
@@ -497,6 +528,10 @@ async function run(){
  assert.match(linkedClient.root.innerHTML,/370.*ккал/);
  assert.match(linkedClient.root.innerHTML,/Овсянка/);
  await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/Подтвердить импорт/);
+ assert.equal(linkedClient.requests.filter(x=>x.action==='fatsecret_diary_import').length,0,
+  'Preview must not persist before explicit confirmation');
+ await linkedClient.click({cmd:'fatsecret-import-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import'));
  assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
  await linkedClient.click({cmd:'fatsecret-entry-edit',id:'17'});
@@ -507,29 +542,35 @@ async function run(){
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_edit'&&x.name_override==='Моя овсянка'));
  assert.match(linkedClient.root.innerHTML,/Моя овсянка/);
  await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/уже импортировано/);
+ await linkedClient.click({cmd:'fatsecret-import-confirm'});
  assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
  await linkedClient.click({cmd:'fatsecret-entry-unlink',id:'17'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_unlink'));
  assert.doesNotMatch(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({nav:'profile'});await settle();
+ assert.match(linkedClient.root.innerHTML,/Подключения/);
+ assert.match(linkedClient.root.innerHTML,/Последняя успешная синхронизация/);
  await linkedClient.click({cmd:'fatsecret-disconnect-open'});
  assert.match(linkedClient.root.innerHTML,/Отключить FatSecret\?/);
  await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
- assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
- const ownerCoach=createClient(true,{tier:'max',
+ assert.match(linkedClient.root.innerHTML,/Не подключён/);
+ assert.match(linkedClient.root.innerHTML,/data-cmd="fatsecret-connect"/);
+ const ownerCoach=createClient(true,{tier:'max',now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'},
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();
-  assert.match(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
     'Trainer AI should expose a recommendation below the four-week plan');
   await ownerCoach.click({cmd:'ai-tip-training'});await settle();
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
     x.purpose==='training'));
   await ownerCoach.click({nav:'food'});await settle();
-  assert.match(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
   await ownerCoach.click({cmd:'ai-tip-nutrition'});await settle();
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
     x.purpose==='nutrition'&&x.date==='2026-10-25'));
-  assert.match(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
   await ownerCoach.click({cmd:'food-parse'});await settle();
   await ownerCoach.click({cmd:'food-save'});await settle();
   assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/,
@@ -656,38 +697,16 @@ async function run(){
   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
   await ai.click({onboardPick:'sex',value:'male'});
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
-  const finishAnalysis=ai.deferOnce('health_analyze');
-  const pendingAnalysis=ai.click({cmd:'onboard-ai'});await settle();
-  ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Теперь беспокоит спина, не колено'}});
-  finishAnalysis();await pendingAnalysis;
-  assert.match(ai.root.innerHTML,/изменились во время анализа/);
-  assert.doesNotMatch(ai.root.innerHTML,/data-onboard="aiReviewed"/);
-  await ai.click({cmd:'onboard-ai'});
-  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
-  assert.ok(ai.requests.filter(x=>x.action==='health_analyze')
-    .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
-  assert.match(ai.root.innerHTML,/Применить результат/);
+  assert.doesNotMatch(ai.root.innerHTML,/Уточнить с Yandex AI|Применить результат|Yandex AI выделил/);
   await ai.click({cmd:'onboard-save'});
   const optionalSaves=ai.requests.filter(x=>x.action==='onboarding');
-  assert.equal(optionalSaves.length,1,'Unreviewed optional Yandex AI must not block saving');
+  assert.equal(optionalSaves.length,1,'Free-text health note can save without AI analysis');
   assert.ok(optionalSaves[0].health_profile.affected.includes('knee'),
-    'Explicit knee mention receives conservative region restriction without Yandex AI');
+    'Literal knee mention is preserved as a conservative load restriction');
+  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,
+    'Saving an ordinary health note never transmits it to Yandex AI');
   assert.equal(optionalSaves[0].timezone_confirmed,true);
 
-  const reviewed=createClient(true,{storage:new Map(),
-    aiPermissions:{profile:true,health:true,cycle:false}});await settle();
-  await reviewed.click({nav:'profile'});
-  await reviewed.click({onboardWeekday:'1'});await reviewed.click({onboardWeekday:'4'});
-  await reviewed.click({onboardPick:'sex',value:'male'});
-  reviewed.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',
-    value:'Беспокоит колено после пробежки'}});
-  await reviewed.click({cmd:'onboard-ai'});
-  await reviewed.click({cmd:'onboard-ai-apply'});
-  await reviewed.click({cmd:'onboard-save'});
-  const reviewedSaves=reviewed.requests.filter(x=>x.action==='onboarding');
-  assert.equal(reviewedSaves.length,1);
-  assert.equal(reviewedSaves[0].health_profile.pain_score,3,
-    'Confirmed Yandex result is used only after explicit acceptance');
    const diary=createClient(true,{trackHistory:true});await settle();
    await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});

@@ -80,6 +80,12 @@ async function run(){
      assert.ok(record);record.start=data.start;record.end=data.end;
     }else periodHistory.unshift({id:periodHistory.length+1,start:data.start,end:data.end});
     response={ok:true,periods:periodHistory,next_period:null};
+   }else if(data.action==='period_delete'){
+    assert.equal(profileState.metrics.sex,'female');
+    const index=periodHistory.findIndex(x=>x.id===data.id);
+    assert.ok(index>=0,'Only an existing owner period can be deleted');
+    periodHistory.splice(index,1);
+    response={ok:true,periods:periodHistory,next_period:null};
    }else if(data.action==='detail'){
     const item=profileState.history.find(x=>x.id===data.id);
     response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
@@ -550,7 +556,7 @@ async function run(){
    'A synthetic header click must not bypass mandatory onboarding');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No tabs after attempted onboarding bypass');
   await onboarding.screenshot({path:path.join(OUT,'first-launch.png')});
-  await onboarding.locator('[data-onboard="age"]').fill('34');
+  await onboarding.locator('[data-onboard="birth_date"]').fill('1992-10-20');
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
   for(const field of ['terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
@@ -571,6 +577,7 @@ async function run(){
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
   assert.equal(posts.find(p=>p.action==='onboarding').answers.days,'3');
   assert.equal(posts.find(p=>p.action==='onboarding').metrics.sex,'female');
+   assert.equal(posts.find(p=>p.action==='onboarding').metrics.birth_date,'1992-10-20','Full DOB used instead of old age field');
   assert.equal(posts.find(p=>p.action==='onboarding').answers.minutes,'120');
   assert.equal(await onboarding.locator('body.theme-female').count(),1,'Pink theme persists after save');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
@@ -588,12 +595,28 @@ async function run(){
   await onboarding.locator('#period-end').fill('2026-09-05');
   await onboarding.getByRole('button',{name:'Добавить период'}).click();
   await onboarding.getByText('01.09.2026 — 05.09.2026',{exact:true}).waitFor();
-  assert.equal(await onboarding.locator('#period-month').inputValue(),'2026-09','Monthly private history selector');
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),5,'Only actual period days highlighted');
+  assert.equal(await onboarding.locator('.fq-cycle-month [role="columnheader"]').count(),7);
+  await onboarding.getByRole('button',{name:'Предыдущий месяц'}).click();
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),0,'August has no false highlights');
+  await onboarding.getByRole('button',{name:'Следующий месяц'}).click();
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),5,'Saved days restored on September');
   await onboarding.getByRole('button',{name:'Изменить',exact:true}).click();
   await onboarding.locator('#period-end').fill('2026-09-06');
   await onboarding.getByRole('button',{name:'Сохранить исправление'}).click();
   await onboarding.getByText('01.09.2026 — 06.09.2026',{exact:true}).waitFor();
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),6,'Edit repaints observed days');
   await onboarding.screenshot({path:path.join(OUT,'female-period-calendar.png')});
+  const deletions=posts.filter(p=>p.action==='period_delete').length;
+  await onboarding.getByRole('button',{name:'Удалить',exact:true}).click();
+  assert.equal(posts.filter(p=>p.action==='period_delete').length,deletions,'No deletion without confirmation');
+  await onboarding.getByRole('button',{name:'Отмена',exact:true}).click();
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),6,'Cancellation preserves history');
+  await onboarding.getByRole('button',{name:'Удалить',exact:true}).click();
+  await onboarding.getByRole('button',{name:'Удалить запись'}).click();
+  await onboarding.getByText('Записей пока нет.',{exact:true}).waitFor();
+  assert.equal(await onboarding.locator('.fq-cycle-day.recorded').count(),0);
+  assert.equal(posts.filter(p=>p.action==='period_delete').length,deletions+1);
   await onboarding.close();
   process.stdout.write('PASS browser: 3 tabs, nested plan, screen layout, fullscreen stub, profile, first launch (2 mobile sizes)\n');
  }finally{

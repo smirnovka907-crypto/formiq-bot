@@ -426,6 +426,35 @@ body.cardio-typing .cardio-inline{scroll-margin-top:calc(18px + max(env(safe-are
 .fq-onboard-actions{display:flex;flex-direction:column;gap:9px;margin-top:18px}
 .fq-onboard-actions .button-main{min-height:56px}
 .field select{width:100%;min-height:50px;border:1px solid #b9c6c3;border-radius:12px;padding:11px 12px;background:#fdfefe;color:var(--ink)}
+
+/* Female profile: observed days only on the monthly grid; forecast stays separate. */
+.fq-cycle-navigation{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:13px 0}
+.fq-cycle-navigation strong{font-size:16px;text-transform:capitalize;text-align:center}
+.fq-cycle-navigation button{width:44px;height:44px;flex:none;border-radius:12px;border:1px solid var(--line);background:#fff9;font-size:28px;line-height:1}
+.fq-cycle-month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;align-items:center;width:100%}
+.fq-cycle-weekday{font-size:11px;font-weight:740;color:var(--secondary);text-align:center;padding:7px 0}
+.fq-cycle-day,.fq-cycle-empty{min-width:0;aspect-ratio:1 / 1;display:flex;align-items:center;justify-content:center;border-radius:11px;position:relative}
+.fq-cycle-day{background:rgba(255,255,255,.5);border:1px solid rgba(160,150,155,.12);font-size:13px;font-weight:650}
+.fq-cycle-day.today{box-shadow:inset 0 0 0 1.5px var(--orange)}
+.fq-cycle-day.recorded{background:#e5a9c5;border-color:#c784a7;color:#4a263c;font-weight:800}
+.fq-cycle-day.recorded.today{box-shadow:inset 0 0 0 2px #7c4467}
+.fq-cycle-legend{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--secondary);margin:12px 0 17px}
+.fq-cycle-swatch{display:inline-block;width:13px;height:13px;border-radius:4px;background:#e5a9c5;border:1px solid #c784a7}
+.fq-cycle-forecast{margin:15px 0;padding:10px 12px;background:rgba(230,217,225,.38);border:1px dashed #b68daa;border-radius:12px;font-size:13px}
+.fq-cycle-forecast strong{display:block;margin:3px 0;font-size:17px}
+.fq-cycle-forecast small{display:block;color:var(--secondary);font-size:12px;line-height:1.4}
+.fq-cycle-history{max-height:290px;overflow-y:auto;overscroll-behavior:contain}
+.fq-cycle-actions,.fq-cycle-confirm{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.fq-cycle .fq-period-row button{min-height:38px;padding:7px 9px;font-size:12px}
+.fq-cycle-confirm button:first-child{border-color:#ac4e73;color:#922b54}
+.fq-cycle .fq-period-row>span:first-child{min-width:0;overflow-wrap:anywhere}
+.fq-cycle .fq-period-row small{display:block;font-size:11px;color:var(--secondary);margin-top:3px}
+@media(max-width:360px){
+ .fq-cycle-month{gap:2px}
+ .fq-cycle-day{font-size:12px;border-radius:8px}
+ .fq-cycle .fq-period-row{align-items:flex-start;flex-direction:column}
+ .fq-cycle-actions,.fq-cycle-confirm{width:100%}
+}
 .fq-period-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
 .fq-period-row span{font-size:14px;line-height:1.5}
 .fq-period-row button{min-height:40px;border:1px solid var(--line);border-radius:10px;background:#fff9;padding:8px 10px}
@@ -549,4 +578,58 @@ body.theme-female .fq-tier-choice button{background:#fff8fc}
 .fq-catalog-candidate small{font-size:13px;color:var(--secondary)}
 .fq-catalog-candidate button{width:100%;text-align:left;font-size:13px;min-height:42px}
 .fq-live-dialog:has(.fq-catalog-candidate){max-height:85dvh;overflow-y:auto}
+
+/* TZ3: Telegram overlay safe areas, keyboard viewport and balanced history controls. */
+.profile-open{top:calc(19px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
+.fq-live-overlay{
+ padding-top:calc(16px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));
+ padding-bottom:calc(14px + max(env(safe-area-inset-bottom),var(--fq-content-safe-bottom,0px)));
+ min-height:0;overflow-y:auto;overscroll-behavior:contain
+}
+.fq-live-dialog{max-height:calc(100dvh - max(90px,var(--fq-content-safe-top,0px)) - 34px);overscroll-behavior:contain}
+/* Keep tabs accessible during generic field focus; cardio has its own typing guard. */
+input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));scroll-margin-bottom:28px}
+#history-root .heading-row{flex-wrap:wrap;row-gap:10px}
+.fq-history-controls{display:flex;align-items:center;gap:8px;max-width:100%}
+#history-root .fq-history-controls .button-subtle{width:104px;min-width:104px;flex:0 0 104px;min-height:46px;height:46px;padding:9px 7px;font-size:13px;font-weight:740;border-radius:13px}
+.fq-food-product{flex-wrap:nowrap}
+.fq-food-product .fq-food-pencil{width:43px;min-width:43px;min-height:43px;height:43px;padding:4px;font-size:22px;flex:0 0 43px;border-radius:12px}
+.summary-grid>.metric{min-width:0;min-height:105px;display:flex;flex-direction:column;justify-content:space-between}
+.summary-grid>.metric strong{font-size:28px}
+@media(max-width:370px){#history-root .fq-history-controls .button-subtle{width:96px;min-width:96px;flex-basis:96px}}
+
+
+/* Only expanded on demand: user-entered product values per 100 grams. */
+.fq-food-manual{margin:10px 0 5px;padding:11px;border-radius:13px;border:1px solid var(--line);background:rgba(250,252,251,.43)}
+.fq-food-manual summary{cursor:pointer;color:var(--secondary);font-weight:690;min-height:26px;line-height:1.5}
+.fq-food-manual-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:13px 0 7px}
+.fq-food-manual-grid .field{min-width:0;font-size:12px}
+.fq-food-manual-grid .field input{font-size:16px;min-height:43px}
+
+
+/* Real food and finished-workout local-date markers, not planned sessions. */
+.fq-food-calendar{padding:15px}
+.fq-food-calendar-days,.fq-food-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.fq-food-calendar-days span{font-size:11px;color:var(--secondary);padding:6px 0}
+.fq-food-calendar-grid button{border:1px solid transparent;background:rgba(255,255,255,.12);border-radius:10px;padding:5px 0 4px;min-height:43px;font-size:13px;font-weight:730;display:flex;flex-direction:column;align-items:center;justify-content:space-between}
+.fq-food-calendar-grid button.selected{background:rgba(145,169,140,.2);border-color:rgba(95,120,96,.45)}
+.fq-food-calendar-grid button:focus-visible{outline-offset:1px}
+.fq-calendar-dots{display:flex;gap:3px;align-items:center;justify-content:center;min-height:7px}
+.fq-calendar-dots i,.fq-food-legend-dot{display:inline-block;width:6px;height:6px;border-radius:50%}
+.fq-calendar-dots i.food,.fq-food-legend-dot.food{background:#5f9872}
+.fq-calendar-dots i.workout,.fq-food-legend-dot.workout{background:#c48046}
+.fq-food-legend-dot{margin:0 3px 0 6px;vertical-align:middle}
+
+
+/* TZ3: private connection controls, always reflecting verified server state. */
+.fq-connection-row{display:flex;align-items:center;gap:12px;border-top:1px solid var(--line,rgba(140,150,148,.25));padding:14px 0;flex-wrap:wrap}
+.fq-connection-mark{flex:0 0 78px;min-height:46px;padding:8px 4px;border-radius:12px;background:rgba(149,168,156,.13);border:1px solid rgba(139,155,147,.23);display:flex;align-items:center;justify-content:center;font-weight:820;font-size:13px;letter-spacing:-.5px;color:var(--primary,#3a4942)}
+.fq-connection-copy{flex:1 1 130px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.fq-connection-copy strong{font-size:15px;font-weight:760}
+.fq-connection-copy small{font-size:12px;line-height:1.45;color:var(--secondary,#607069)}
+.fq-connection-actions{display:flex;gap:8px;flex-wrap:wrap}
+.fq-connection-actions:empty{display:none}
+.fq-connection-actions button{min-height:43px;white-space:nowrap}
+@media(max-width:410px){.fq-connection-actions{flex:1 0 100%;padding-left:90px}}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
