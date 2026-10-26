@@ -250,7 +250,7 @@ async function run(){
  assert.equal(writes.length,1);
  assert.deepEqual(writes[0].items.map(x=>x.name),['Яйца','Арахис']);
  assert.ok(writes[0].items.every(x=>x.kind==='allergy'));
- assert.match(allergy.root.innerHTML,/Ограничения сохранены/);
+ assert.match(allergy.root.innerHTML,/Пищевые ограничения сохранены/);
  const legacy=createClient(true);
  await settle();await legacy.click({nav:'food'});await settle();
  assert.doesNotMatch(legacy.root.innerHTML,/Ответить в профиле/);
