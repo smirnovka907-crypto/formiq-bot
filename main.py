@@ -3420,18 +3420,25 @@ def scheduled_calendar(chat,p,cycle):
             FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
             AND schedule_state IS DISTINCT FROM 'retired'
             ORDER BY planned_date,week_no,day_code''',(chat,cycle)).fetchall()
-        done=conn.execute('''SELECT week_no,plan_day,COUNT(*) FROM workouts
-            WHERE chat_id=%s AND cycle_id=%s AND status='finished' AND source='template'
-            GROUP BY week_no,plan_day''',(chat,cycle)).fetchall()
-    remaining={(week,day):total for week,day,total in done}
+        closed=conn.execute('''SELECT week_no,plan_day,status FROM workouts
+            WHERE chat_id=%s AND cycle_id=%s
+            AND status IN ('finished','finished_empty','skipped') AND source='template'
+            ORDER BY CASE status WHEN 'finished' THEN 0
+                WHEN 'finished_empty' THEN 1 ELSE 2 END,finished_at DESC''',
+            (chat,cycle)).fetchall()
+    closed_slots={}
+    for week,day,status in closed:
+        closed_slots.setdefault((week,day),status)
     today=local_today(chat)
     items=[]
     for sid,week,day,dt in rows:
-        count_done=remaining.get((week,day),0)
-        if count_done>0:remaining[(week,day)]-=1
+        closed_status=closed_slots.get((week,day))
         items.append({'id':sid,'week':week,'day':day,'date':dt.isoformat(),
           'date_ru':dt.strftime('%d.%m.%Y'),'title':day_title(p,day),
-          'status':'done' if count_done>0 else ('past' if dt<today else 'planned')})
+          'status':('done' if closed_status=='finished' else
+                    'empty' if closed_status=='finished_empty' else
+                    'skipped' if closed_status=='skipped' else
+                    'past' if dt<today else 'planned')})
     return items
 
 
@@ -4328,7 +4335,7 @@ def mini_training_preview(chat, body):
         sid,cycle,week,day,planned=slot
         completed_row=conn.execute("""SELECT id FROM workouts WHERE chat_id=%s
             AND cycle_id=%s AND week_no=%s AND plan_day=%s
-            AND source='template' AND status='finished'
+            AND source='template' AND status IN ('finished','finished_empty','skipped')
             ORDER BY finished_at DESC NULLS LAST,id DESC LIMIT 1""",
             (chat,cycle,week,day)).fetchone()
         completed=completed_row is not None
