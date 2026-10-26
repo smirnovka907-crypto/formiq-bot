@@ -3377,7 +3377,7 @@ def save_onboarding(chat,body):
     allergy_declined=body.get('food_allergies_declined',False)
     if type(allergy_declined) is not bool or (allergy_declined and pending_food_allergies is not None):
         raise ValueError('Проверь отказ от передачи пищевых ограничений')
-    if type(revoke_food_allergies) is not bool or (revoke_food_allergies and pending_food_allergies is not None):
+    if type(revoke_food_allergies) is not bool or (revoke_food_allergies and (pending_food_allergies is not None or allergy_declined)):
         raise ValueError('Проверь действие с пищевыми ограничениями')
     if pending_food_allergies is not None:
         if not food_allergy_ready():
@@ -3398,7 +3398,8 @@ def save_onboarding(chat,body):
                 raise ValueError('Ответь на вопрос о пищевых ограничениях или выбери дневник без сведений')
         if pending_food_allergies is not None:
             food_allergy_write_in(c,chat,pending_food_allergies)
-        elif revoke_food_allergies:
+        elif revoke_food_allergies or allergy_declined:
+            # Explicit opt-out must not retain previously consented health data.
             c.execute("""INSERT INTO food_allergy_preferences
                (chat_id,choice,restrictions_enc,consent_version,consented_at,revoked_at)
                VALUES(%s,'unknown',NULL,NULL,NULL,NOW())
