@@ -191,7 +191,7 @@ function foodAllergyPanel(){
     '<option value="allergy"'+(x.kind==='allergy'?' selected':'')+'>Аллергия</option>'+
     '<option value="intolerance"'+(x.kind==='intolerance'?' selected':'')+'>Непереносимость</option></select>'+
     '<button type="button" class="button-subtle" data-cmd="food-allergy-remove" data-index="'+i+'">×</button></div>').join(''):'')+
-  (ch==='unknown'&&!state?.agreed?
+  (!state?.agreed&&!d.foodConsent?
    '<p class="input-note">При первом заполнении ответь на вопрос или явно выбери продолжение без медицинских сведений.</p>'+
    button(d.foodSkip?'Продолжу без сведений ✓':'Не сообщать — только дневник','food-allergy-skip'):'')+
   (ch!=='unknown'?onboardCheckbox('foodConsent',
@@ -305,7 +305,7 @@ function onboardingPayload(){
  const staged=state?.food_allergies?.available&&d.foodDirty&&d.foodConsent&&d.foodChoice!=='unknown'?
   {food_allergies:{choice:d.foodChoice,items:d.foodChoice==='declared'?collectFoodRows():[],
     consent:true,consent_version:state.food_allergies.consent_version}}:{};
- return {...staged,...(revoke?{food_allergies_revoke:true}:{}),answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
+ return {...staged,...(revoke?{food_allergies_revoke:true}:{}),...(d.foodSkip?{food_allergies_declined:true}:{}),answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},birthday_telegram_consent:!!d.birthday_telegram_consent,
   timezone,timezone_confirmed:true,
