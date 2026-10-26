@@ -3069,7 +3069,12 @@ def food_allergy_state(chat):
         try:
             items=json.loads(food_allergy_cipher().decrypt(bytes(ciphertext)).decode('utf-8'))
         except (InvalidToken,ValueError,UnicodeError,json.JSONDecodeError):
-            raise ValueError('Невозможно подтвердить пищевые ограничения. Подбор недоступен') from None
+            # Do not expose a corrupted/deprecated health record to AI, but
+            # never prevent the owner from opening their ordinary food diary.
+            return {'available':True,'choice':'unknown','items':[],
+                'consent_version':FOOD_ALLERGY_CONSENT_VERSION,
+                'recommendations_allowed':False,
+                'warning':'Сохранённые ограничения не удалось прочитать. Подбор недоступен; дневник работает.'}
     else:
         items=[]
     return {'available':True,'choice':choice,'items':items,
