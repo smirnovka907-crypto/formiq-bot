@@ -488,7 +488,7 @@ async function run(){
  await oauthClient.click({cmd:'fatsecret-connect'});
  assert.ok(oauthClient.requests.some(x=>x.action==='fatsecret_account_connect'));
  assert.match(oauthClient.root.innerHTML,/authentication.fatsecret.com\/oauth\/authorize/);
- const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true});
+ const linkedClient=createClient(true,{fatsecretReady:true,fatsecretConnected:true,now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
  await settle();await linkedClient.click({nav:'food'});await settle();
  assert.match(linkedClient.root.innerHTML,/Аккаунт подключён/);
  await linkedClient.click({cmd:'fatsecret-diary-day'});
