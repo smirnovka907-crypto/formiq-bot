@@ -44,6 +44,38 @@ class AllergenDictionaryTests(unittest.TestCase):
                                             trusted_server_source=True)
                 self.assertEqual(result['status'],'excluded')
 
+    def test_inflected_egg_proteins_and_unverified_origin(self):
+        for ingredient in ('яичным белком','яичного порошка','овальбумина',
+                           'овомукоида','сушёными яичными компонентами',
+                           'перепелиных яиц'):
+            with self.subTest(ingredient=ingredient):
+                self.assertEqual(evaluate_composition(evidence(['рис',ingredient]),
+                    self.egg,trusted_server_source=True)['status'],'excluded')
+        for ingredient in ('альбумин','лизоцим','ароматизатор',
+                           'растительное масло','смесь специй'):
+            with self.subTest(ingredient=ingredient):
+                self.assertEqual(evaluate_composition(evidence(['вода',ingredient]),
+                    self.egg,trusted_server_source=True)['status'],'needs_review')
+
+    def test_detected_conflict_overrides_missing_trace_list_and_unknown_other_allergen(self):
+        unknown=normalise_restrictions([{'name':'Редкое неизвестное вещество',
+                                        'kind':'allergy'}])
+        ingredient=evidence(['яичный порошок'])
+        ingredient['composition'].pop('may_contain')
+        self.assertEqual(evaluate_composition(ingredient,unknown+self.egg,
+            trusted_server_source=True)['status'],'excluded')
+        warning=evidence(['вода'],traces=['может содержать яичный белок'])
+        warning['composition'].pop('ingredients')
+        self.assertEqual(evaluate_composition(warning,unknown+self.egg,
+            trusted_server_source=True)['status'],'excluded')
+
+    def test_declared_complete_does_not_certify_unknown_placeholder(self):
+        for ingredient in ('неизвестно','прочие компоненты','unknown'):
+            with self.subTest(ingredient=ingredient):
+                self.assertEqual(evaluate_composition(
+                    evidence(['рис',ingredient]),self.egg,
+                    trusted_server_source=True)['status'],'needs_review')
+
     def test_manufacturer_trace_warning_also_excludes(self):
         product=evidence(['вода','рис'],traces=['Может содержать следы яйца'])
         self.assertEqual(evaluate_composition(product,self.egg,
