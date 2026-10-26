@@ -27,7 +27,7 @@ function ageFromBirth(raw,today){
 function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('en-GB',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(now);const val=k=>p.find(x=>x.type===k)?.value||'';return {hour:Number(val('hour')),date:val('year')+'-'+val('month')+'-'+val('day')}}catch(_e){return {hour:now.getHours(),date:now.toISOString().slice(0,10)}}}
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
-let onboardOpen=false,onboard=null,onboardErrors={};
+let onboardOpen=false,onboard=null,onboardErrors={},foodAllergyConfirm=false;
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview',detailOrigin='';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
@@ -193,7 +193,11 @@ function foodAllergyPanel(){
   (ch!=='unknown'?onboardCheckbox('foodConsent',
    'Отдельно разрешаю хранить пищевые ограничения для проверки состава. Без согласия дневник доступен, персональный подбор питания — нет.'):'')+
   '<p class="input-note">Согласие можно отозвать, данные удалить. Без отдельного разрешения ничего не отправляется в Yandex AI. <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>.</p>'+
-  (view==='profile'&&a.choice!=='unknown'?button('Отозвать согласие и удалить данные','food-allergy-revoke'):'')+
+  (view==='profile'&&a.choice!=='unknown'?
+   (foodAllergyConfirm?
+    '<p role="alert" class="input-note">Удалить сохранённые ограничения и отозвать согласие?</p>'+
+    button('Да, удалить','food-allergy-revoke-confirm')+button('Отмена','food-allergy-revoke-cancel'):
+    button('Отозвать согласие и удалить данные','food-allergy-revoke')):'')+
   (view==='profile'&&ch!=='unknown'&&d.foodConsent?button('Сохранить ограничения','food-allergy-save'):'')+
   onboardError('foodInput'));
 }
@@ -291,10 +295,11 @@ function onboardingPayload(){
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=d.timezone||deviceZone();
+ const revoke=!!(d.foodDirty&&!d.foodConsent&&state?.food_allergies?.recommendations_allowed);
  const staged=state?.food_allergies?.available&&d.foodDirty&&d.foodConsent&&d.foodChoice!=='unknown'?
   {food_allergies:{choice:d.foodChoice,items:d.foodChoice==='declared'?collectFoodRows():[],
     consent:true,consent_version:state.food_allergies.consent_version}}:{};
- return {...staged,answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
+ return {...staged,...(revoke?{food_allergies_revoke:true}:{}),answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},birthday_telegram_consent:!!d.birthday_telegram_consent,
   timezone,timezone_confirmed:true,
@@ -1455,13 +1460,15 @@ app.addEventListener('click',async e=>{
    onboard.foodInput='';onboard.foodDirty=false;profileNotice='Пищевые ограничения сохранены.';error='';draw();
   }catch(ex){fail(ex.message)}return;
  }
- if(cmd==='food-allergy-revoke'){
-  if(!window.confirm?.('Отозвать согласие и удалить сведения о пищевых ограничениях?'))return;
+ if(cmd==='food-allergy-revoke'){foodAllergyConfirm=true;draw();return}
+ if(cmd==='food-allergy-revoke-cancel'){foodAllergyConfirm=false;draw();return}
+ if(cmd==='food-allergy-revoke-confirm'){
+  if(!foodAllergyConfirm)return;
   try{
    const result=await request('food_allergy_revoke');
    state.food_allergies=result.food_allergies;
    onboard.foodChoice='unknown';onboard.foodRows=[];onboard.foodInput='';
-   onboard.foodConsent=false;onboard.foodDirty=false;
+   onboard.foodConsent=false;onboard.foodDirty=false;foodAllergyConfirm=false;
    profileNotice='Согласие отозвано, сведения удалены.';error='';draw();
   }catch(ex){fail(ex.message)}return;
  }
