@@ -1925,6 +1925,54 @@ class SchedulePostgresTests(unittest.TestCase):
         with patch.object(self.m,'mini_auth',return_value=None):
             self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,401)
 
+    def test_tz3_period_delete_requires_female_owner_and_existing_record(self):
+        self.m.save_onboarding(self.chat,{**self.body(), 'metrics':{
+            **self.body()['metrics'],'sex':'female'}})
+        first=self.m.period_save(self.chat,{'start':'2026-09-01','end':'2026-09-05'})
+        rid=first['periods'][0]['id']
+        self.m.save_onboarding(999,{**self.body(), 'metrics':{
+            **self.body()['metrics'],'sex':'female'}})
+        self.m.period_save(999,{'start':'2026-09-12','end':'2026-09-15'})
+        client=self.m.APP.test_client()
+        for bad in (None,True,1.0,'1',-1,0):
+            with patch.object(self.m,'mini_auth',return_value=self.chat):
+                invalid=client.post('/mini/api',json={'action':'period_delete','id':bad})
+                self.assertEqual(invalid.status_code,400)
+        with patch.object(self.m,'mini_auth',return_value=999):
+            stolen=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(stolen.status_code,400,'Another account cannot delete it')
+        self.assertEqual(len(self.m.period_history(self.chat)['periods']),1)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            deleted=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(deleted.status_code,200,deleted.get_json())
+            self.assertEqual(deleted.json['periods'],[])
+            repeated=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(repeated.status_code,400,'No success for a missing record')
+        self.assertEqual(len(self.m.period_history(999)['periods']),1,
+                         'Deleting a single owner period does not erase other history')
+        changed=self.body();changed['metrics']['sex']='male'
+        self.m.save_onboarding(self.chat,changed)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            denial=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(denial.status_code,400)
+
+    def test_tz3_period_forecast_uses_saved_calendar_timezone_at_midnight(self):
+        data=self.body(zone='Europe/Helsinki')
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        for day in ('2026-07-05','2026-08-02','2026-08-30'):
+            self.m.period_save(self.chat,{'start':day,
+                'end':(date.fromisoformat(day)+timedelta(days=4)).isoformat()})
+        Clock.instant=datetime(2026,9,26,21,30,tzinfo=timezone.utc)
+        expected=self.m.period_history(self.chat)['next_period']
+        self.assertEqual(expected['date'],'2026-09-27')
+        Clock.instant=datetime(2026,9,27,21,30,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.period_history(self.chat)['next_period'],
+                          '28 September in Helsinki: 27 Sept estimate is already past')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM menstrual_periods WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],3,'Forecast does not create fake history')
+
     def test_v6_onboarding_frontend_contract(self):
         from pathlib import Path
         root=Path(__file__).resolve().parents[1]
