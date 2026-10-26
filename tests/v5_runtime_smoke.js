@@ -86,6 +86,12 @@ function createClient(auth=true,shared={}){
    else if(p.action==='garmin_disconnect'){
     shared.garminConnected=false;response={ok:true,connected:false};
    }
+   else if(p.action==='integrations_status'){
+    response={ok:true,fatsecret:{available:!!shared.fatsecretReady,
+     connected:!!shared.fatsecretConnected,last_sync_at:shared.fatsecretConnected?'2026-10-24T09:00:00Z':null},
+     garmin:{available:false,connected:!!shared.garminConnected,
+      last_sync_at:shared.garminConnected?'2026-10-25T09:00:00Z':null}};
+   }
    else if(p.action==='fatsecret_account_status')
     response={ok:true,available:!!shared.fatsecretReady,
       connected:!!shared.fatsecretConnected,last_sync_at:null};
@@ -341,7 +347,11 @@ async function run(){
  assert.equal((app.requests.filter(x=>x.action==='progress_series')).length>=1,true);
  const garminClient=createClient(true,{garminConnected:true,
    now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'}});
- await settle();await garminClient.click({nav:'progress'});await settle();
+ await settle();await garminClient.click({nav:'profile'});await settle();
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.match(garminClient.root.innerHTML,/Последняя успешная синхронизация/);
+ assert.doesNotMatch(garminClient.root.innerHTML,/data-cmd="garmin-connect"/,'Garmin OAuth does not exist');
+ await garminClient.click({nav:'progress'});await settle();
  assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
  assert.match(garminClient.root.innerHTML,/Garmin Connect/);
  assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
@@ -497,10 +507,16 @@ async function run(){
  const noOAuth=createClient(true,{fatsecretReady:false});
  await settle();await noOAuth.click({nav:'food'});await settle();
  assert.doesNotMatch(noOAuth.root.innerHTML,/Подключить FatSecret/);
+ await noOAuth.click({nav:'profile'});await settle();
+ assert.match(noOAuth.root.innerHTML,/Временно недоступен/);
+ assert.doesNotMatch(noOAuth.root.innerHTML,/data-cmd="fatsecret-connect"/);
  assert.ok(!noOAuth.requests.some(x=>x.action==='fatsecret_account_connect'));
  const oauthClient=createClient(true,{fatsecretReady:true,fatsecretConnected:false});
- await settle();await oauthClient.click({nav:'food'});await settle();
- assert.match(oauthClient.root.innerHTML,/Подключить FatSecret/);
+ await settle();await oauthClient.click({nav:'profile'});await settle();
+ assert.match(oauthClient.root.innerHTML,/Подключения/);
+ assert.match(oauthClient.root.innerHTML,/Не подключён/);
+ assert.match(oauthClient.root.innerHTML,/Временно недоступен/,'Garmin must not offer fake authorization');
+ assert.match(oauthClient.root.innerHTML,/data-cmd="fatsecret-connect"/);
  await oauthClient.click({cmd:'fatsecret-connect'});
  assert.ok(oauthClient.requests.some(x=>x.action==='fatsecret_account_connect'));
  assert.match(oauthClient.root.innerHTML,/authentication.fatsecret.com\/oauth\/authorize/);
@@ -526,11 +542,15 @@ async function run(){
  await linkedClient.click({cmd:'fatsecret-entry-unlink',id:'17'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_unlink'));
  assert.doesNotMatch(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
+ await linkedClient.click({nav:'profile'});await settle();
+ assert.match(linkedClient.root.innerHTML,/Подключения/);
+ assert.match(linkedClient.root.innerHTML,/Последняя успешная синхронизация/);
  await linkedClient.click({cmd:'fatsecret-disconnect-open'});
  assert.match(linkedClient.root.innerHTML,/Отключить FatSecret\?/);
  await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
- assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
+ assert.match(linkedClient.root.innerHTML,/Не подключён/);
+ assert.match(linkedClient.root.innerHTML,/data-cmd="fatsecret-connect"/);
  const ownerCoach=createClient(true,{tier:'max',now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'},
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();
