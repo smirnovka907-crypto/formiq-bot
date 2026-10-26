@@ -65,6 +65,9 @@ function initOnboard(){
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
+  foodChoice:state?.food_allergies?.choice||'unknown',
+  foodRows:(state?.food_allergies?.items||[]).map(x=>({name:x.name,kind:x.kind})),
+  foodInput:'',foodDirty:false,foodConsent:state?.food_allergies?.recommendations_allowed===true,
   adult:true,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
@@ -160,6 +163,40 @@ async function loadConnections(){
   if(seq===connectionsSeq){connectionsBusy=false;if(view==='profile')draw()}
  }
 }
+function collectFoodRows(){
+ const incoming=String(onboard?.foodInput||'').split(',').map(x=>x.trim()).filter(Boolean);
+ const rows=[...(onboard?.foodRows||[])];
+ if(rows.length+incoming.length>30)throw Error('Не более 30 продуктов.');
+ for(const name of incoming){
+  if(name.length>70||/[<>\\r\\n]/.test(name))throw Error('Проверь название продукта.');
+  if(!rows.some(x=>x.name.toLowerCase()===name.toLowerCase()))rows.push({name,kind:'allergy'});
+ }
+ return rows;
+}
+function foodAllergyPanel(){
+ const a=state?.food_allergies||{};
+ if(!a.available)return block('<h2>Пищевые аллергии</h2><p class="input-note">Функция включится после юридической проверки согласия и настройки шифрования. Дневник работает.</p>');
+ const d=onboard,ch=d.foodChoice;
+ return block('<h2>Пищевые аллергии и непереносимость</h2>'+
+  '<p>Есть ли у вас аллергия или непереносимость продуктов?</p>'+
+  '<div class="option-grid">'+[['Нет','none'],['Есть','declared']].map(([label,value])=>
+   '<button type="button" class="choice'+(ch===value?' on':'')+
+   '" data-onboard-pick="foodChoice" data-value="'+value+'">'+label+'</button>').join('')+'</div>'+
+  (ch==='declared'?'<label class="field"><span>Укажите продукты через запятую</span>'+
+   '<input type="text" data-onboard="foodInput" maxlength="500" value="'+esc(d.foodInput)+
+   '" placeholder="Яйца, арахис, молоко"></label>'+button('Добавить в список','food-allergy-add')+
+   d.foodRows.map((x,i)=>'<div class="fq-food-allergy-row"><span>'+esc(x.name)+'</span>'+
+    '<select data-food-allergy-kind="'+i+'" aria-label="Тип '+esc(x.name)+'">'+
+    '<option value="allergy"'+(x.kind==='allergy'?' selected':'')+'>Аллергия</option>'+
+    '<option value="intolerance"'+(x.kind==='intolerance'?' selected':'')+'>Непереносимость</option></select>'+
+    '<button type="button" class="button-subtle" data-cmd="food-allergy-remove" data-index="'+i+'">×</button></div>').join(''):'')+
+  (ch!=='unknown'?onboardCheckbox('foodConsent',
+   'Отдельно разрешаю хранить пищевые ограничения для проверки состава. Без согласия дневник доступен, персональный подбор питания — нет.'):'')+
+  '<p class="input-note">Согласие можно отозвать, данные удалить. Без отдельного разрешения ничего не отправляется в Yandex AI. <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>.</p>'+
+  (view==='profile'&&a.choice!=='unknown'?button('Отозвать согласие и удалить данные','food-allergy-revoke'):'')+
+  (view==='profile'&&ch!=='unknown'&&d.foodConsent?button('Сохранить ограничения','food-allergy-save'):'')+
+  onboardError('foodInput'));
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
@@ -203,7 +240,7 @@ function onboardForm(){
   '<p class="input-note">'+(state.tier_demo?'Тестовое переключение прав без списаний.':'Оплата пока не подключена.')+'</p>'+
   '</section>':'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
-  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal+tiers;
+  (view==='profile'?'':intro)+block(personal+training)+health+foodAllergyPanel()+calendar+connections+legal+tiers;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
