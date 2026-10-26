@@ -2296,7 +2296,7 @@ def ai_personalized_guidance(chat,body):
     nutrition_day=(food_day(body['date']) if purpose=='nutrition' and body.get('date') is not None
                    else local_today(chat) if purpose=='nutrition' else None)
     # No AI-generated foods without verified compositions, regardless of prompt.
-    if purpose=='nutrition':
+    if purpose=='nutrition' and food_allergy_ready():
         food_allergy_recommendation_gate(chat)
         raise ValueError('AI-подбор питания отключён до проверки состава блюд')
     # Only bounded facts from this authenticated user's PostgreSQL rows.
@@ -4754,6 +4754,12 @@ def mini_ai(chat,question):
     if not has_agreement(chat):raise ValueError('Сначала прими условия использования')
     if not isinstance(question,str) or not 1<=len(question.strip())<=1000:
         raise ValueError('Вопрос: от 1 до 1000 символов')
+    # Unstructured AI chat has no verified ingredient evidence. While the
+    # allergy feature is enabled, free-form recommendations must fail closed
+    # instead of trusting the user's wording or the model's assurances.
+    if food_allergy_ready():
+        food_allergy_recommendation_gate(chat)
+        raise ValueError('Свободные AI-рекомендации временно отключены до проверки состава питания')
     if not consume_ai_request(chat):
         raise ValueError('Лимит 10 вопросов в сутки исчерпан')
     try:answer=call_ai(chat,question)
