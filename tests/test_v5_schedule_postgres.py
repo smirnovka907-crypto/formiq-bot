@@ -743,6 +743,9 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(preview['actual']['duration_minutes'],37)
         self.assertEqual(preview['actual']['result'],'ok')
         self.assertIn('11 повт.',preview['actual']['items'][0]['result'])
+        self.assertIn('/Leg_Press/0.jpg',preview['actual']['items'][0]['image_url'])
+        self.assertEqual(preview['actual']['items'][0]['image_license_url'],
+                         'https://creativecommons.org/licenses/by-sa/4.0/')
         self.assertRegex(preview['actual']['items'][0]['result'],r'42[.]50? кг')
         self.assertEqual(self.snapshot_history(),history_before)
         with self.assertRaises(ValueError):
