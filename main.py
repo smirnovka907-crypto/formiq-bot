@@ -3817,6 +3817,14 @@ def fatsecret_user_import(chat,body):
     if len(ids)>150 or any(not isinstance(i,str) or
          not i.isdecimal() or len(i)>40 for i in ids):
         raise ValueError('FatSecret вернул недопустимый идентификатор записи')
+    expected=body.get('expected_ids')
+    if expected is not None:
+        if (not isinstance(expected,list) or len(expected)>150 or
+            any(not isinstance(i,str) or not i.isdecimal() or len(i)>40
+                for i in expected)):
+            raise ValueError('Некорректный предварительный просмотр FatSecret')
+        if sorted(set(expected)) != sorted(set(ids)):
+            raise ValueError('Отчёт FatSecret изменился после просмотра. Обнови данные перед импортом')
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         valid=conn.execute("""SELECT 1 FROM fatsecret_user_connections
