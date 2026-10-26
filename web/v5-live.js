@@ -994,9 +994,10 @@ app.addEventListener('focusin',e=>{
  shift();setTimeout(shift,180);setTimeout(shift,430);
 });
 app.addEventListener('focusout',e=>{
- if(['cardio-min','cardio-hr'].includes(e.target?.id))document.body.classList.remove('cardio-typing');
  if(e.target?.matches?.('input,textarea,select,[contenteditable="true"]')){
-  setTimeout(()=>{if(!document.activeElement?.matches?.('input,textarea,select,[contenteditable="true"]'))document.body.classList.remove('fq-typing','cardio-typing')},60);
+  // Restore navigation immediately when the keyboard field blurs.
+  // Focusing another field activates typing mode again via focusin.
+  document.body.classList.remove('fq-typing','cardio-typing');
  }
 });
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
