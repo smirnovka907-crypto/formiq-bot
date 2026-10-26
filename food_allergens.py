@@ -16,12 +16,17 @@ MAX_EVIDENCE_AGE = timedelta(days=30)
 # Terms refer to food allergens / confirmed protein derivatives, not product categories.
 ALIASES = {
     'egg': (
-        'яйцо','яйца','яиц','яйц','яичный','яичная','яичные','яичного',
+        'яйцо','яйца','яиц','яйц','яйцу','яйцом','яйцами','яйцах',
+        'яичный','яичная','яичные','яичного','яичной','яичным',
+        'яичными','яичную','яичное','яичном','яичному','яичных',
         'желток','желтки','белок яйца','яичный белок','яичный порошок',
-        'альбумин яйца','яичный альбумин','овальбумин','овомукоид',
+        'альбумин яйца','яичный альбумин',
+        'овальбумин','овальбумина','овальбумином',
+        'овомукоид','овомукоида','овомукоидом',
         'лизоцим e1105','лизоцим e 1105','e1105','e 1105','egg','eggs','egg white',
         'egg yolk','egg powder','ovalbumin','ovomucoid','egg albumin',
-        'lysozyme e1105','quail egg','перепелиные яйца','перепелиное яйцо'),
+        'lysozyme e1105','quail egg','перепелиные яйца',
+        'перепелиное яйцо','перепелиных яиц','куриных яиц'),
     'peanut': ('арахис','арахисовый','арахисовая','peanut','groundnut'),
     'milk': ('молоко','молочный белок','казеин','казеинат','сыворотка молочная',
              'whey protein','milk','casein','caseinate','lactalbumin'),
@@ -145,6 +150,14 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
                 return {'status':'excluded','reason':'Указано предупреждение о возможных следах аллергена'}
     if not evidence.get('complete'):
         return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
+    # Placeholder, unclear or omitted ingredient origins are not independent
+    # evidence of absence. A provider claim of complete=True cannot override it.
+    incomplete_markers=('неизвестно','неизвестный','не указан','неизвестного',
+        'прочие компоненты','компоненты неизвестны','?','unknown',
+        'not specified','unspecified','other ingredients')
+    if any(_has_alias(ingredient,marker) for ingredient in items
+           for marker in incomplete_markers):
+        return {'status':'needs_review','reason':'Состав содержит неопределённые компоненты'}
     if not trusted_server_source or not _verified(evidence):
         return {'status':'needs_review','reason':'Состав не подтверждён проверенным актуальным источником'}
     # Unknown manufacturer cross-contact information is not a green state.
@@ -155,7 +168,11 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
     uncertain=('майонез','соус','выпечка','булочка','хлеб','макароны',
                'паста','панировка','начинка','крем','лецитин','эмульгатор',
                'mayonnaise','sauce','noodle','bread','lecithin','emulsifier',
-               'альбумин','albumin','protein isolate')
+               'альбумин','albumin','protein isolate','лизоцим','lysozyme',
+               'растительное масло','растительный белок','растительные жиры',
+               'vegetable oil','vegetable protein','ароматизатор','ароматизаторы',
+               'natural flavouring','natural flavor','специи','смесь специй',
+               'seasoning mix','food additive')
     if any(_has_alias(ingredient,alias) for ingredient in items for alias in uncertain):
         return {'status':'needs_review','reason':'Не раскрыт полный состав составного или неоднозначного компонента'}
     return {'status':'no_conflicts_detected',
