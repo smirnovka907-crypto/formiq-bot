@@ -287,8 +287,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.m.save_onboarding(self.chat,self.body())
         per100={'kcal':57,'protein_g':0.7,'fat_g':0.3,'carbs_g':14.5}
         curd={'kcal':121,'protein_g':17,'fat_g':5,'carbs_g':3}
-        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), \\
-             patch.object(self.m,'FATSECRET_CLIENT_SECRET',''):
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), patch.object(self.m,'FATSECRET_CLIENT_SECRET',''):
             meal=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
                 'items':[{'name':'Голубика','grams':70,'nutrition_100g':per100},
                          {'name':'Творог 5%','grams':200,'nutrition_100g':curd}]})
