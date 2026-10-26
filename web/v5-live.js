@@ -980,12 +980,13 @@ app.addEventListener('focusin',e=>{
  const field=e.target;
  if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
  document.body.classList.add('fq-typing');
+ if(['cardio-min','cardio-hr'].includes(field.id))document.body.classList.add('cardio-typing');
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
  shift();setTimeout(shift,180);setTimeout(shift,430);
 });
 app.addEventListener('focusout',e=>{
  if(e.target?.matches?.('input,textarea,select,[contenteditable="true"]')){
-  setTimeout(()=>{if(!document.activeElement?.matches?.('input,textarea,select,[contenteditable="true"]'))document.body.classList.remove('fq-typing')},60);
+  setTimeout(()=>{if(!document.activeElement?.matches?.('input,textarea,select,[contenteditable="true"]'))document.body.classList.remove('fq-typing','cardio-typing')},60);
  }
 });
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
