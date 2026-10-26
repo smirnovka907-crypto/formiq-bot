@@ -1110,6 +1110,23 @@ function modalHTML(){
   content='<h2>Отключить Garmin?</h2><p>Доступ к показателям будет прекращён. История тренировок и существующие записи останутся.</p>'+
    button('Отключить','garmin-disconnect-confirm')+button('Отмена','close');
  }
+ if(modal==='fatsecret-import-preview'&&fatsecretDaily?.date===foodDate){
+  const items=(fatsecretDaily.entries||[]);
+  content='<h2>Импорт из FatSecret</h2>'+
+   '<p class="input-note">Проверь записи за '+esc(prettyDate(foodDate))+'. FORMIQ сохранит только разрешённые ссылки на записи, не копируя данные каталога.</p>'+
+   items.map(e=>'<div class="fq-live-row"><span><strong>'+esc(e.name)+'</strong><small>'+
+     esc(mealLabels[e.meal?.toLowerCase()]||e.meal||'')+
+     ' · '+(e.grams!=null?esc(e.grams)+' г':'размер порции недоступен')+
+     (e.imported?' · уже импортировано':'')+'</small></span><span>'+
+     (e.kcal!=null?esc(e.kcal)+' ккал':'КБЖУ не получены')+
+     (e.protein!=null&&e.fat!=null&&e.carbs!=null?
+       '<small>Б '+esc(e.protein)+' · Ж '+esc(e.fat)+' · У '+esc(e.carbs)+'</small>':'')+
+     '</span></div>').join('')+
+   (fatsecretDaily.complete?'<p class="input-note">Полный отчёт за день получен.</p>':
+    '<p class="input-note">Отчёт неполный: отсутствующие КБЖУ не подставляем.</p>')+
+   button(fatsecretBusy?'Импортируем…':'Подтвердить импорт','fatsecret-import-confirm',true,fatsecretBusy?'disabled':'')+
+   button('Отмена','close');
+ }
  if(modal==='fatsecret-entry-edit'&&fatsecretEntry){
    content='<h2>Исправление импортированной записи</h2>'+
     '<p class="input-note">Оригинал FatSecret не изменяется. Здесь сохраняется только твоя собственная правка.</p>'+
@@ -1500,17 +1517,25 @@ app.addEventListener('click',async e=>{
   return;
  }
  if(cmd==='fatsecret-import-day'){
-  if(!fatsecretAccount?.connected||fatsecretBusy||!fatsecretDaily)return;
+  if(!fatsecretAccount?.connected||fatsecretBusy||!fatsecretDaily||
+      fatsecretDaily.date!==foodDate)return;
+  modal='fatsecret-import-preview';draw();return;
+ }
+ if(cmd==='fatsecret-import-confirm'){
+  if(modal!=='fatsecret-import-preview'||!fatsecretAccount?.connected||
+     fatsecretBusy||fatsecretDaily?.date!==foodDate)return;
   const expected=foodDate;
+  const expectedIds=(fatsecretDaily.entries||[]).map(e=>e.external_id);
   fatsecretBusy=true;fatsecretError='';draw();
   try{
-   const result=await request('fatsecret_diary_import',{date:expected});
+   const result=await request('fatsecret_diary_import',{date:expected,expected_ids:expectedIds});
    if(expected===foodDate&&fatsecretDaily?.date===expected){
      const saved=new Set(result.imported_ids||[]);
      for(const e of fatsecretDaily.entries||[])if(saved.has(e.external_id))e.imported=true;
-     foodNotice='Импортированы ссылки на '+esc(result.imported_count)+' записей FatSecret.';
+     foodNotice='Импортировано в FORMIQ: '+esc(result.imported_count)+' ссылок на записи FatSecret.';
+     modal='';
    }
-  }catch(ex){if(expected===foodDate)fatsecretError=ex.message||'Импорт не выполнен'}
+  }catch(ex){fatsecretError=ex.message||'Импорт не выполнен';modal=''}
   finally{fatsecretBusy=false;draw()}
   return;
  }
