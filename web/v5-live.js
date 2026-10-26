@@ -956,6 +956,7 @@ function food(){
     nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
   meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
   '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
+ const rawNotes=(foodHistory?.unparsed_texts||[]).filter(x=>x.text).map(x=>'<section class="surface soft"><h3>Исходная запись</h3><p>'+esc(x.text)+'</p><p class="input-note">Нераспознанные позиции сохранены без выдуманного веса и КБЖУ.</p></section>').join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
   '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
   '<details class="fq-food-manual"><summary>КБЖУ вручную на 100 г (необязательно)</summary>'+
