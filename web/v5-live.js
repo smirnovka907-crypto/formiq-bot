@@ -709,7 +709,7 @@ function foodCalendar(){
    const hasFood=foodDays.has(date),hasActivity=activityDays.has(date);
    const status=(hasFood?'питание':'')+(hasFood&&hasActivity?' и ':'')+(hasActivity?'тренировка':'');
    return '<button type="button" class="fq-food-calendar-day'+(foodDate===date?' selected':'')+
-    '" data-cmd="food-calendar-date" data-date="'+date+'" aria-label="'+esc(date+(status?' · '+status:''))+'">'+(i+1)+
+    '" data-cmd="food-calendar-date" data-food-date="'+date+'" aria-label="'+esc(date+(status?' · '+status:''))+'">'+(i+1)+
     '<span class="fq-calendar-dots">'+(hasFood?'<i class="food" aria-hidden="true"></i>':'')+
     (hasActivity?'<i class="workout" aria-hidden="true"></i>':'')+'</span></button>';
   }).join('');
@@ -1076,8 +1076,21 @@ window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
  if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.foodDate){
+  const chosen=element.dataset.foodDate;
+  if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chosen))return;
+  ++foodDailySeq;fatsecretDaily=null;fatsecretError='';
+  foodDate=chosen;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';
+  foodDraft=[];foodUnparsed=[];void loadFoodHistory();return;
+ }
  if(element.dataset.date){date=element.dataset.date;dayRows=null;calendarOpen=false;partialHistory();await loadDay();return}
  const cmd=element.dataset.cmd;
+ if(cmd==='food-month-prev'||cmd==='food-month-next'){
+  const [year,month]=(foodMonth||foodDate.slice(0,7)).split('-').map(Number);
+  const shift=cmd==='food-month-prev'?-1:1;
+  foodMonth=new Date(Date.UTC(year,month-1+shift,1)).toISOString().slice(0,7);
+  foodMonthMarks=null;void loadFoodMonth();draw();return;
+ }
  if(['ai-profile-revoke','ai-health-revoke','ai-cycle-revoke'].includes(cmd)){
   const field={'ai-profile-revoke':'profile','ai-health-revoke':'health','ai-cycle-revoke':'cycle'}[cmd];
   try{
@@ -1260,7 +1273,7 @@ app.addEventListener('click',async e=>{
    const items=foodDraft.map(row=>{const nutrition=userMacrosFromInputs(key=>row[key]);return {
     name:row.name,grams:row.grams,...(nutrition?{nutrition_100g:nutrition}:{})};});
    const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items});
-   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';void requestFoodDaily();
+   foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';void requestFoodDaily();void loadFoodMonth();
    foodNotice='Приём пищи сохранён в дневнике.';error='';
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
   draw();return;
@@ -1424,7 +1437,7 @@ app.addEventListener('click',async e=>{
   if(!foodEdit)return;
   try{
    const result=await request('food_delete',{id:foodEdit.id});
-   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';void requestFoodDaily();
+   foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт удалён.';modal='';foodEdit=null;error='';void requestFoodDaily();void loadFoodMonth();
   }catch(ex){error=ex.message||'Не удалось удалить продукт'}
   draw();return;
  }
