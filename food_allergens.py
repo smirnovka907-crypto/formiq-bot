@@ -124,7 +124,7 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
         return {'status':'needs_review','reason':'Неизвестный состав продукта'}
     items=evidence.get('ingredients')
     traces=evidence.get('may_contain')
-    if not isinstance(items,list) or not isinstance(traces,list) or not evidence.get('complete'):
+    if not isinstance(items,list) or not isinstance(traces,list):
         return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
     if not items or any(not isinstance(i,str) or not i.strip() for i in items+traces):
         return {'status':'needs_review','reason':'Некоторые ингредиенты или предупреждения неизвестны'}
@@ -143,6 +143,8 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
         for warning in traces:
             if any(_has_alias(warning,word) for word in words):
                 return {'status':'excluded','reason':'Указано предупреждение о возможных следах аллергена'}
+    if not evidence.get('complete'):
+        return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
     if not trusted_server_source or not _verified(evidence):
         return {'status':'needs_review','reason':'Состав не подтверждён проверенным актуальным источником'}
     # Unknown manufacturer cross-contact information is not a green state.
