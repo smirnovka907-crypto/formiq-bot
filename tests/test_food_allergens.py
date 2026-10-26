@@ -38,6 +38,7 @@ class AllergenDictionaryTests(unittest.TestCase):
           ['овальбумин'],['овомукоид'],['лизоцим E1105'],
           ['egg yolk'],['quail egg'],['ovalbumin'],['lysozyme E1105'],['E1105'],
           ['яичный меланж'],['меланж яичный'],['меланж'],
+          ['меланжа'],['сухого меланжа'],
           ['яичная масса'],['желточный порошок'],['сухой желток'],
           ['E-1105'],['лизоцим E-1105'],['egg solids'],['dried egg'],
           ['egg wash'],['whole egg powder'],['egg lecithin']
