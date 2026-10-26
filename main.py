@@ -454,6 +454,15 @@ def init_db():
             weight_kg NUMERIC(6,2), resting_hr INT, sex TEXT,
             timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
             updated_at TIMESTAMPTZ DEFAULT NOW())""")
+        # New fields are additive: never manufacture birthdays for legacy ages.
+        c.execute("ALTER TABLE profile_metrics ADD COLUMN IF NOT EXISTS birth_date DATE")
+        c.execute("""ALTER TABLE profile_metrics ADD COLUMN IF NOT EXISTS
+            birthday_telegram_consent BOOLEAN NOT NULL DEFAULT FALSE""")
+        c.execute("""CREATE TABLE IF NOT EXISTS birthday_greetings(
+            chat_id BIGINT NOT NULL, birthday_year INT NOT NULL,
+            shown_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            telegram_claimed_at TIMESTAMPTZ, telegram_sent_at TIMESTAMPTZ,
+            PRIMARY KEY(chat_id,birthday_year))""")
         c.execute("""CREATE TABLE IF NOT EXISTS scheduled_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             cycle_id BIGINT NOT NULL,week_no INT NOT NULL,
@@ -3134,6 +3143,27 @@ def analyze_equipment_description(chat,body):
         raise ValueError('Не получилось разобрать список. Проверь описание и попробуй ещё раз')
 
 
+def _birthday_civil_date(birth, year):
+    """29 February is celebrated on 28 February in non-leap years."""
+    leap=year%4==0 and (year%100!=0 or year%400==0)
+    return (2,28) if birth.month==2 and birth.day==29 and not leap else (birth.month,birth.day)
+
+
+def years_old(birth, today):
+    return today.year-birth.year-(_birthday_civil_date(birth,today.year)>(today.month,today.day))
+
+
+def parse_birth_date(raw, today):
+    if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
+        raise ValueError('Укажи полную дату рождения')
+    try:born=date.fromisoformat(raw)
+    except ValueError:raise ValueError('Проверь дату рождения')
+    age=years_old(born,today)
+    if not 18<=age<=100:
+        raise ValueError('FORMIQ доступен с 18 лет; проверь дату рождения')
+    return born,age
+
+
 def save_onboarding(chat,body):
     require_schedule_writes_enabled()
     vals=body.get('answers')
@@ -3164,7 +3194,12 @@ def save_onboarding(chat,body):
         if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
-    age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
+    birth_raw=raw.get('birth_date')
+    birth_date,age=(parse_birth_date(birth_raw,datetime.now(ZoneInfo(user_tz)).date())
+        if birth_raw is not None else (None,onboarding_number(raw.get('age'),'возраст',18,100,whole=True)))
+    birthday_optin=body.get('birthday_telegram_consent')
+    if birthday_optin is not None and type(birthday_optin) is not bool:
+        raise ValueError('Проверь согласие на поздравление в Telegram')
     height=onboarding_number(raw.get('height_cm'),'рост',100,240)
     weight=onboarding_number(raw.get('weight_kg'),'вес',25,300)
     hr=onboarding_number(raw.get('resting_hr'),'пульс в покое',35,120,required=False,whole=True)
@@ -3220,13 +3255,17 @@ def save_onboarding(chat,body):
             VALUES(%s,%s,NOW(),NOW(),NOW()) ON CONFLICT(chat_id) DO UPDATE SET
             version=EXCLUDED.version,terms_accepted_at=NOW(),privacy_ack_at=NOW(),
             health_notice_ack_at=NOW()''',(chat,AGREEMENT_VERSION))
-        c.execute('''INSERT INTO profile_metrics(chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone)
-            VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
+        c.execute('''INSERT INTO profile_metrics(
+            chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone,birth_date,birthday_telegram_consent)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
             age=EXCLUDED.age,height_cm=EXCLUDED.height_cm,weight_kg=EXCLUDED.weight_kg,
             resting_hr=COALESCE(EXCLUDED.resting_hr,profile_metrics.resting_hr),
-            sex=EXCLUDED.sex,
-            timezone=EXCLUDED.timezone,updated_at=NOW()''',
-            (chat,age,height,weight,hr,sex,user_tz))
+            sex=EXCLUDED.sex,timezone=EXCLUDED.timezone,
+            birth_date=COALESCE(EXCLUDED.birth_date,profile_metrics.birth_date),
+            birthday_telegram_consent=CASE WHEN %s THEN EXCLUDED.birthday_telegram_consent
+                 ELSE profile_metrics.birthday_telegram_consent END,updated_at=NOW()''',
+            (chat,age,height,weight,hr,sex,user_tz,birth_date,
+             birthday_optin is True,birthday_optin is not None))
         c.execute('''INSERT INTO health_limits(chat_id,affected,pain_score,symptom_course,
             danger_signs,activity_cleared) VALUES(%s,%s::jsonb,%s,%s,%s,%s)
             ON CONFLICT(chat_id) DO UPDATE SET affected=EXCLUDED.affected,
@@ -4332,11 +4371,58 @@ def mini_training_preview(chat, body):
 
 def metrics(chat):
     with db() as conn:
-        row=conn.execute('''SELECT age,height_cm,weight_kg,resting_hr,sex,timezone
+        row=conn.execute('''SELECT age,height_cm,weight_kg,resting_hr,sex,timezone,
+            birth_date,birthday_telegram_consent
             FROM profile_metrics WHERE chat_id=%s''',(chat,)).fetchone()
     if not row:return {}
-    cols=('age','height_cm','weight_kg','resting_hr','sex','timezone')
-    return {name:float(v) if isinstance(v,Decimal) else v for name,v in zip(cols,row)}
+    cols=('age','height_cm','weight_kg','resting_hr','sex','timezone','birth_date',
+          'birthday_telegram_consent')
+    result={name:float(v) if isinstance(v,Decimal) else v for name,v in zip(cols,row)}
+    born=result.get('birth_date')
+    if isinstance(born,date):
+        try:today=datetime.now(ZoneInfo(result.get('timezone') or 'Europe/Moscow')).date()
+        except (ValueError,KeyError,TypeError):today=datetime.now(timezone.utc).date()
+        result['age']=years_old(born,today)
+        result['birth_date']=born.isoformat()
+    return result
+
+def _send_birthday_telegram(chat, year):
+    try:
+        BOT.send_message(chat,'🎉 С днём рождения! FORMIQ желает крепкого здоровья и новых достижений. '
+            'Сегодня тебе доступно предложение: 10% на один месяц «Тренера AI» — 900 ₽ вместо 1 000 ₽. '
+            'Оплата пока не подключена, предложение информационное.')
+        with db() as conn:
+            conn.execute('''UPDATE birthday_greetings SET telegram_sent_at=NOW()
+                WHERE chat_id=%s AND birthday_year=%s''',(chat,year))
+    except Exception:
+        LOG.exception('Birthday greeting delivery failed for year=%s',year)
+
+
+def birthday_offer(chat, m):
+    """Idempotent local-calendar greeting, never inferred from a legacy integer age."""
+    raw=m.get('birth_date')
+    if not raw:return None
+    try:
+        born=date.fromisoformat(raw)
+        today=datetime.now(ZoneInfo(m.get('timezone') or 'Europe/Moscow')).date()
+    except (ValueError,KeyError,TypeError):return None
+    if _birthday_civil_date(born,today.year)!=(today.month,today.day):
+        return None
+    with db() as conn:
+        first=conn.execute('''INSERT INTO birthday_greetings(chat_id,birthday_year)
+            VALUES(%s,%s) ON CONFLICT DO NOTHING RETURNING 1''',
+            (chat,today.year)).fetchone()
+        send=False
+        if m.get('birthday_telegram_consent'):
+            claim=conn.execute('''UPDATE birthday_greetings SET telegram_claimed_at=NOW()
+                WHERE chat_id=%s AND birthday_year=%s AND telegram_claimed_at IS NULL
+                RETURNING 1''',(chat,today.year)).fetchone()
+            send=bool(claim)
+    if send:WORKERS.submit(_send_birthday_telegram,chat,today.year)
+    return {'show_congratulations':bool(first),'discount_percent':10,
+        'coach_price_rub':900,'regular_price_rub':1000,'billing_available':False,
+        'one_period_only':True}
+
 
 
 def heart_zones(m):
@@ -4874,6 +4960,7 @@ def mini_state(chat, just_finished=False):
     result['history']=combined[:20]
     result['stats']['cardio7']=cardio
     result['metrics']=metrics(chat)
+    result['birthday']=birthday_offer(chat,result['metrics']) if result['agreed'] else None
     with db() as c:
         private_note=c.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
                                (chat,)).fetchone()
