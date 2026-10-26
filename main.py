@@ -488,6 +488,10 @@ def init_db():
         # values and names returned by the provider are not persisted.
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_food_id TEXT')
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_serving_id TEXT')
+        # Only explicitly user-supplied nutrient values may be persisted.
+        # FatSecret provider nutrient contents remain transient/licence-bound.
+        for field in ('kcal','protein_g','fat_g','carbs_g'):
+            c.execute(f'ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS manual_{field}_100g NUMERIC(8,2)')
         # Official Garmin Business API: zero connected accounts until its
         # approved OAuth2 user mapping and consent have actually succeeded.
         # Tokens deliberately do not exist in this schema.
@@ -3830,6 +3834,31 @@ def food_item(name,grams):
     return name,amount
 
 
+FOOD_MANUAL_KEYS = ('kcal','protein_g','fat_g','carbs_g')
+
+
+def food_user_nutrition(raw):
+    """Explicit owner-entered values per 100 g, never derived from AI or name."""
+    if raw is None:
+        return None
+    if not isinstance(raw,dict) or set(raw)!=set(FOOD_MANUAL_KEYS):
+        raise ValueError('Укажи все четыре значения КБЖУ на 100 г или оставь пустыми')
+    values=[]
+    for key in FOOD_MANUAL_KEYS:
+        value=raw[key]
+        if type(value) is bool or value is None or value=='':
+            raise ValueError('Укажи все четыре значения КБЖУ на 100 г')
+        try:
+            n=Decimal(str(value).strip().replace(',','.'))
+        except (TypeError,ValueError,InvalidOperation):
+            raise ValueError('КБЖУ на 100 г должны быть числами') from None
+        limit=Decimal('1000') if key=='kcal' else Decimal('100')
+        if not n.is_finite() or n<0 or n>limit or n.as_tuple().exponent < -2:
+            raise ValueError('Проверь значения КБЖУ на 100 г (0–1000 ккал, БЖУ 0–100 г)')
+        values.append(n)
+    return tuple(values)
+
+
 def food_parse(body):
     text=body.get('text')
     if not isinstance(text,str) or not 2<=len(text.strip())<=2000:
@@ -3865,7 +3894,8 @@ def food_history(chat,body):
     day=food_day(body.get('date'))
     with db() as conn:
         rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams,
-                i.source_food_id,i.source_serving_id
+                i.source_food_id,i.source_serving_id,
+                i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
             FROM manual_food_meals m LEFT JOIN manual_food_items i
               ON i.meal_id=m.id AND i.chat_id=%s
             WHERE m.chat_id=%s AND m.eaten_on=%s
@@ -3873,12 +3903,16 @@ def food_history(chat,body):
     # Older releases allowed multiple rows for the same meal/day. Combine
     # their visible cards without rewriting, merging or deleting any history.
     meals={}
-    for mid,meal_type,iid,name,grams,food_id,serving_id in rows:
+    for mid,meal_type,iid,name,grams,food_id,serving_id,*manual in rows:
         entry=meals.setdefault(meal_type,{'id':mid,'type':meal_type,'items':[]})
         if iid is not None:
+            user_values=(dict(zip(FOOD_MANUAL_KEYS,(float(v) for v in manual)))
+                         if all(v is not None for v in manual) else None)
             entry['items'].append({'id':iid,'name':name,'grams':float(grams),
                 'kcal':None,'protein':None,'fat':None,'carbs':None,
-                'nutrition_source':'fatsecret' if food_id and serving_id else None})
+                'nutrition_100g':user_values,
+                'nutrition_source':'manual' if user_values is not None
+                     else 'fatsecret' if food_id and serving_id else None})
     return {'date':day.isoformat(),'meals':list(meals.values()),
         'nutrients_available':False}
 
@@ -3897,7 +3931,9 @@ def food_add(chat,body):
     for row in raw:
         if not isinstance(row,dict):
             raise ValueError('Некорректная строка продукта')
-        items.append(food_item(row.get('name'),row.get('grams')))
+        name,grams=food_item(row.get('name'),row.get('grams'))
+        values=food_user_nutrition(row.get('nutrition_100g'))
+        items.append((name,grams,values))
     with db() as conn:
         # Transaction-scoped per-user lock prevents two simultaneous saves
         # from creating duplicate meal groups. Existing duplicate rows stay
@@ -3911,9 +3947,12 @@ def food_add(chat,body):
         else:
             meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
                 VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
-        for name,grams in items:
-            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
-                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+        for name,grams,values in items:
+            conn.execute("""INSERT INTO manual_food_items(
+                meal_id,chat_id,name,grams,manual_kcal_100g,
+                manual_protein_g_100g,manual_fat_g_100g,manual_carbs_g_100g)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (meal_id,chat,name,grams,*(values or (None,)*4)))
     return food_history(chat,{'date':day.isoformat()})
 
 
@@ -3923,6 +3962,7 @@ def food_change(chat,body,delete=False):
         raise ValueError('Выбери продукт')
     if not delete:
         name,grams=food_item(body.get('name'),body.get('grams'))
+        manual_input=food_user_nutrition(body['nutrition_100g']) if 'nutrition_100g' in body else 'keep'
     with db() as conn:
         if delete:
             changed=conn.execute("""DELETE FROM manual_food_items i
@@ -3936,15 +3976,28 @@ def food_change(chat,body,delete=False):
                     SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
                     (changed[0],chat))
         else:
+            old=conn.execute("""SELECT i.name,i.manual_kcal_100g,
+                i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
+                FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
+                WHERE i.id=%s AND i.chat_id=%s AND m.chat_id=%s FOR UPDATE OF i""",
+                (iid,chat,chat)).fetchone()
+            if not old:
+                raise ValueError('Продукт не найден')
+            keep_name=old[0]==name
+            user_values=(tuple(old[1:]) if keep_name else (None,)*4) if manual_input=='keep' else (
+                manual_input if manual_input is not None else (None,)*4)
+            clear_provider=(not keep_name) or (manual_input!='keep' and manual_input is not None)
             changed=conn.execute("""UPDATE manual_food_items i
                 SET name=%s,grams=%s,
-                    source_food_id=CASE WHEN name=%s THEN source_food_id ELSE NULL END,
-                    source_serving_id=CASE WHEN name=%s THEN source_serving_id ELSE NULL END,
+                    manual_kcal_100g=%s,manual_protein_g_100g=%s,
+                    manual_fat_g_100g=%s,manual_carbs_g_100g=%s,
+                    source_food_id=CASE WHEN %s THEN NULL ELSE i.source_food_id END,
+                    source_serving_id=CASE WHEN %s THEN NULL ELSE i.source_serving_id END,
                     updated_at=NOW()
                 FROM manual_food_meals m WHERE i.id=%s AND i.chat_id=%s
                 AND m.id=i.meal_id AND m.chat_id=%s
                 RETURNING m.id,m.eaten_on""",
-                (name,grams,name,name,iid,chat,chat)).fetchone()
+                (name,grams,*user_values,clear_provider,clear_provider,iid,chat,chat)).fetchone()
     if not changed:
         raise ValueError('Продукт не найден')
     return food_history(chat,{'date':changed[1].isoformat()})
