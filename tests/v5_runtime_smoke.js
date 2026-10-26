@@ -716,3 +716,9 @@ async function run(){
    console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
+
+// TZ5 P0: zero-set closure must be discoverable without deleting a profile.
+const tz5Ui = require('fs').readFileSync(require('path').join(__dirname,'../web/v5-live.js'),'utf8');
+for(const marker of ["cmd==='skip-workout'", "send('skip_workout')", "Подходы не выполнены", "Завершить досрочно"]){
+  if(!tz5Ui.includes(marker))throw Error('TZ5 zero-set UI regression: '+marker);
+}
