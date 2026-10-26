@@ -620,4 +620,16 @@ input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top)
 .fq-calendar-dots i.workout,.fq-food-legend-dot.workout{background:#c48046}
 .fq-food-legend-dot{margin:0 3px 0 6px;vertical-align:middle}
 
+
+/* TZ3: private connection controls, always reflecting verified server state. */
+.fq-connection-row{display:flex;align-items:center;gap:12px;border-top:1px solid var(--line,rgba(140,150,148,.25));padding:14px 0;flex-wrap:wrap}
+.fq-connection-mark{flex:0 0 78px;min-height:46px;padding:8px 4px;border-radius:12px;background:rgba(149,168,156,.13);border:1px solid rgba(139,155,147,.23);display:flex;align-items:center;justify-content:center;font-weight:820;font-size:13px;letter-spacing:-.5px;color:var(--primary,#3a4942)}
+.fq-connection-copy{flex:1 1 130px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.fq-connection-copy strong{font-size:15px;font-weight:760}
+.fq-connection-copy small{font-size:12px;line-height:1.45;color:var(--secondary,#607069)}
+.fq-connection-actions{display:flex;gap:8px;flex-wrap:wrap}
+.fq-connection-actions:empty{display:none}
+.fq-connection-actions button{min-height:43px;white-space:nowrap}
+@media(max-width:410px){.fq-connection-actions{flex:1 0 100%;padding-left:90px}}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
