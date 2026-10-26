@@ -124,7 +124,7 @@ function connectionsPanel(){
   const status=!r?'Проверяем статус…':
    connected&&(available||id==='garmin')?'Подключён':
    available?'Не подключён':'Временно недоступен';
-  const sync=r?.last_sync_at&&/^\\d{4}-\\d{2}-\\d{2}T/.test(r.last_sync_at)?
+  const sync=r?.last_sync_at&&/^\d{4}-\d{2}-\d{2}T/.test(r.last_sync_at)?
    '<small>Последняя успешная синхронизация: '+esc(connectionSyncDate(r.last_sync_at))+'</small>':
    '<small>Успешная синхронизация пока не зарегистрирована</small>';
   let actions='';
