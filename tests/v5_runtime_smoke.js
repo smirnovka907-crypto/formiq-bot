@@ -394,7 +394,7 @@ async function run(){
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
  await app.click({nav:'home'});
  assert.match(app.root.innerHTML,/Доброе|Добрый|Доброй/);
- const birthday=createClient(true,{now:'2026-10-26T08:00:00Z',metrics:{timezone:'UTC',birth_date:'1992-10-26'},
+ const birthday=createClient(true,{now:'2026-10-26T08:00:00Z',profileRaw:{weekdays:[0,2,4]},metrics:{timezone:'UTC',sex:'male',birth_date:'1992-10-26'},
    birthday:{show_congratulations:true,discount_percent:10,coach_price_rub:900}});
  await settle();assert.match(birthday.root.innerHTML,/С днём рождения/);
  assert.match(birthday.root.innerHTML,/900 ₽ вместо 1 000 ₽/);
