@@ -112,7 +112,7 @@ function createClient(auth=true,shared={}){
         user_name_override:own.name||null,user_meal_override:own.meal||null,
         kcal:200,protein:7,fat:4,carbs:32}]};
    }else if(p.action==='fatsecret_diary_import'){
-    assert.equal(p.date,'2026-10-25');shared.fatsecretImported=true;
+    assert.equal(p.date,'2026-10-25');assert.deepEqual(Array.from(p.expected_ids),['17']);shared.fatsecretImported=true;
     response={ok:true,date:p.date,imported_ids:['17'],imported_count:1};
    }else if(p.action==='fatsecret_diary_import_edit'){
     assert.equal(p.external_id,'17');
@@ -528,6 +528,10 @@ async function run(){
  assert.match(linkedClient.root.innerHTML,/370.*ккал/);
  assert.match(linkedClient.root.innerHTML,/Овсянка/);
  await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/Подтвердить импорт/);
+ assert.equal(linkedClient.requests.filter(x=>x.action==='fatsecret_diary_import').length,0,
+  'Preview must not persist before explicit confirmation');
+ await linkedClient.click({cmd:'fatsecret-import-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import'));
  assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
  await linkedClient.click({cmd:'fatsecret-entry-edit',id:'17'});
@@ -538,6 +542,8 @@ async function run(){
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_edit'&&x.name_override==='Моя овсянка'));
  assert.match(linkedClient.root.innerHTML,/Моя овсянка/);
  await linkedClient.click({cmd:'fatsecret-import-day'});
+ assert.match(linkedClient.root.innerHTML,/уже импортировано/);
+ await linkedClient.click({cmd:'fatsecret-import-confirm'});
  assert.match(linkedClient.root.innerHTML,/Импортировано в FORMIQ/);
  await linkedClient.click({cmd:'fatsecret-entry-unlink',id:'17'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_diary_import_unlink'));
