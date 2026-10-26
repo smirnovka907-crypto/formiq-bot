@@ -1,5 +1,8 @@
 name: Integrations (offline)
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - feature/health-integrations-38.1.0
