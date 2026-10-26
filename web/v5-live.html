@@ -549,4 +549,24 @@ body.theme-female .fq-tier-choice button{background:#fff8fc}
 .fq-catalog-candidate small{font-size:13px;color:var(--secondary)}
 .fq-catalog-candidate button{width:100%;text-align:left;font-size:13px;min-height:42px}
 .fq-live-dialog:has(.fq-catalog-candidate){max-height:85dvh;overflow-y:auto}
+
+/* TZ3: Telegram overlay safe areas, keyboard viewport and balanced history controls. */
+.profile-open{top:calc(19px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)))}
+.fq-live-overlay{
+ padding-top:calc(16px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));
+ padding-bottom:calc(14px + max(env(safe-area-inset-bottom),var(--fq-content-safe-bottom,0px)));
+ min-height:0;overflow-y:auto;overscroll-behavior:contain
+}
+.fq-live-dialog{max-height:calc(100dvh - max(90px,var(--fq-content-safe-top,0px)) - 34px);overscroll-behavior:contain}
+body.fq-typing .bottom-nav{visibility:hidden;pointer-events:none}
+input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));scroll-margin-bottom:28px}
+#history-root .heading-row{flex-wrap:wrap;row-gap:10px}
+.fq-history-controls{display:flex;align-items:center;gap:8px;max-width:100%}
+#history-root .fq-history-controls .button-subtle{width:104px;min-width:104px;flex:0 0 104px;min-height:46px;height:46px;padding:9px 7px;font-size:13px;font-weight:740;border-radius:13px}
+.fq-food-product{flex-wrap:nowrap}
+.fq-food-product .fq-food-pencil{width:43px;min-width:43px;min-height:43px;height:43px;padding:4px;font-size:22px;flex:0 0 43px;border-radius:12px}
+.summary-grid>.metric{min-width:0;min-height:105px;display:flex;flex-direction:column;justify-content:space-between}
+.summary-grid>.metric strong{font-size:28px}
+@media(max-width:370px){#history-root .fq-history-controls .button-subtle{width:96px;min-width:96px;flex-basis:96px}}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
