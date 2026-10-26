@@ -120,14 +120,16 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
     if not isinstance(candidate,dict):
         return {'status':'needs_review','reason':'Неизвестный состав продукта'}
     evidence=candidate.get('composition')
-    if not trusted_server_source or not _verified(evidence):
-        return {'status':'needs_review','reason':'Состав не подтверждён проверенным актуальным источником'}
+    if not isinstance(evidence,dict):
+        return {'status':'needs_review','reason':'Неизвестный состав продукта'}
     items=evidence.get('ingredients')
     traces=evidence.get('may_contain')
     if not isinstance(items,list) or not isinstance(traces,list) or not evidence.get('complete'):
         return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
     if not items or any(not isinstance(i,str) or not i.strip() for i in items+traces):
         return {'status':'needs_review','reason':'Некоторые ингредиенты или предупреждения неизвестны'}
+    # A definite ingredient or warning conflict excludes even if the data is
+    # incomplete; unverifiable data may NEVER lead to a green decision.
     for restriction in restrictions:
         if not isinstance(restriction,dict):
             return {'status':'needs_review','reason':'Ограничения требуют подтверждения'}
@@ -141,8 +143,18 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
         for warning in traces:
             if any(_has_alias(warning,word) for word in words):
                 return {'status':'excluded','reason':'Указано предупреждение о возможных следах аллергена'}
-    if evidence.get('cross_contact_unknown',False):
+    if not trusted_server_source or not _verified(evidence):
+        return {'status':'needs_review','reason':'Состав не подтверждён проверенным актуальным источником'}
+    # Unknown manufacturer cross-contact information is not a green state.
+    if evidence.get('cross_contact_unknown',True) is not False:
         return {'status':'needs_review','reason':'Нельзя исключить перекрёстный контакт'}
+    # Compound ingredients without unfolded recipe, and origin-ambiguous
+    # additives, cannot be cleared on a simplistic word match.
+    uncertain=('майонез','соус','выпечка','булочка','хлеб','макароны',
+               'паста','панировка','начинка','крем','лецитин','эмульгатор',
+               'mayonnaise','sauce','noodle','bread','lecithin','emulsifier')
+    if any(_has_alias(ingredient,alias) for ingredient in items for alias in uncertain):
+        return {'status':'needs_review','reason':'Не раскрыт полный состав составного или неоднозначного компонента'}
     return {'status':'no_conflicts_detected',
             'reason':'В проверенном составе известных противоречий не обнаружено'}
 
