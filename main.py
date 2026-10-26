@@ -4771,7 +4771,7 @@ def mini_history_detail(chat,wid):
         return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
                 'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
@@ -4820,7 +4820,7 @@ def mini_history_page(chat, body):
         "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
         "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
         "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
-        "WHERE chat_id=%s AND status='finished' " + filter_w +
+        "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
         "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
