@@ -4742,8 +4742,17 @@ def mini_history_month(chat, body):
             "SELECT DISTINCT (performed_at AT TIME ZONE %s)::date FROM cardio_sessions "
             "WHERE chat_id=%s AND performed_at >= %s AND performed_at < %s",
             (zone.key, chat, utc_start, utc_end)).fetchall()
+        dates_food = conn.execute("""SELECT DISTINCT m.eaten_on FROM manual_food_meals m
+            WHERE m.chat_id=%s AND m.eaten_on >= %s AND m.eaten_on < %s
+            AND EXISTS(SELECT 1 FROM manual_food_items i
+                       WHERE i.meal_id=m.id AND i.chat_id=m.chat_id)
+            ORDER BY m.eaten_on""",(chat,start,end)).fetchall()
     marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
-    return {'month': raw, 'dates': marked}
+    saved_food = sorted({value.isoformat() for (value,) in dates_food})
+    # Backward-compatible dates list for the Progress history, with separate
+    # true-result markers for the Nutrition calendar. Planned slots are excluded.
+    return {'month': raw, 'dates': marked, 'workout_dates':marked,
+            'food_dates':saved_food}
 
 
 def mini_state(chat, just_finished=False):
