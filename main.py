@@ -3398,8 +3398,12 @@ def save_onboarding(chat,body):
                 raise ValueError('Ответь на вопрос о пищевых ограничениях или выбери дневник без сведений')
         if pending_food_allergies is not None:
             food_allergy_write_in(c,chat,pending_food_allergies)
-        elif revoke_food_allergies or allergy_declined:
-            # Explicit opt-out must not retain previously consented health data.
+        elif allergy_declined:
+            # Opt-out clears an existing record without creating a medical record for new users.
+            c.execute("""UPDATE food_allergy_preferences SET choice='unknown',
+                restrictions_enc=NULL,consent_version=NULL,consented_at=NULL,
+                revoked_at=NOW(),updated_at=NOW() WHERE chat_id=%s""",(chat,))
+        elif revoke_food_allergies:
             c.execute("""INSERT INTO food_allergy_preferences
                (chat_id,choice,restrictions_enc,consent_version,consented_at,revoked_at)
                VALUES(%s,'unknown',NULL,NULL,NULL,NOW())
