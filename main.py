@@ -3065,7 +3065,10 @@ def food_allergy_state(chat):
     choice,ciphertext=row[0],row[1]
     if choice=='declared':
         if not ciphertext:
-            raise ValueError('Не удалось прочитать сохранённые ограничения')
+            return {'available':True,'choice':'unknown','items':[],
+                'consent_version':FOOD_ALLERGY_CONSENT_VERSION,
+                'recommendations_allowed':False,
+                'warning':'Сохранённые ограничения не удалось прочитать. Подбор недоступен; дневник работает.'}
         try:
             items=json.loads(food_allergy_cipher().decrypt(bytes(ciphertext)).decode('utf-8'))
         except (InvalidToken,ValueError,UnicodeError,json.JSONDecodeError):
