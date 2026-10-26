@@ -515,7 +515,7 @@ async function run(){
  await linkedClient.click({cmd:'fatsecret-disconnect-confirm'});
  assert.ok(linkedClient.requests.some(x=>x.action==='fatsecret_account_disconnect'));
  assert.match(linkedClient.root.innerHTML,/Подключить FatSecret/);
- const ownerCoach=createClient(true,{tier:'max',
+ const ownerCoach=createClient(true,{tier:'max',now:'2026-10-25T12:00:00Z',metrics:{timezone:'UTC'},
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();
   assert.doesNotMatch(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
