@@ -1426,6 +1426,37 @@ app.addEventListener('click',async e=>{
   await send('set_demo_tier',{tier});
   draw();return;
  }
+ if(cmd==='food-allergy-add'){
+  try{onboard.foodRows=collectFoodRows();onboard.foodInput='';onboard.foodDirty=true;delete onboardErrors.foodInput;error=''}
+  catch(ex){onboardErrors.foodInput=ex.message}draw();return;
+ }
+ if(cmd==='food-allergy-remove'){
+  const index=Number(element.dataset.index);
+  if(Number.isInteger(index)&&index>=0&&index<onboard.foodRows.length){
+   onboard.foodRows.splice(index,1);onboard.foodDirty=true;draw();
+  }return;
+ }
+ if(cmd==='food-allergy-save'){
+  if(!state?.food_allergies?.available||!onboard.foodConsent||onboard.foodChoice==='unknown')return;
+  try{
+   const result=await request('food_allergy_save',{choice:onboard.foodChoice,
+    items:onboard.foodChoice==='declared'?collectFoodRows():[],
+    consent:true,consent_version:state.food_allergies.consent_version});
+   state.food_allergies=result.food_allergies;
+   onboard.foodRows=result.food_allergies.items.map(x=>({name:x.name,kind:x.kind}));
+   onboard.foodInput='';onboard.foodDirty=false;profileNotice='Пищевые ограничения сохранены.';error='';draw();
+  }catch(ex){fail(ex.message)}return;
+ }
+ if(cmd==='food-allergy-revoke'){
+  if(!window.confirm?.('Отозвать согласие и удалить сведения о пищевых ограничениях?'))return;
+  try{
+   const result=await request('food_allergy_revoke');
+   state.food_allergies=result.food_allergies;
+   onboard.foodChoice='unknown';onboard.foodRows=[];onboard.foodInput='';
+   onboard.foodConsent=false;onboard.foodDirty=false;
+   profileNotice='Согласие отозвано, сведения удалены.';error='';draw();
+  }catch(ex){fail(ex.message)}return;
+ }
  if(cmd==='onboard-save'){
   if(!onboard)return;let payload;
   try{payload=onboardingPayload()}catch(e){fail(e.message);return}
