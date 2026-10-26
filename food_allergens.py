@@ -127,27 +127,31 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
     evidence=candidate.get('composition')
     if not isinstance(evidence,dict):
         return {'status':'needs_review','reason':'Неизвестный состав продукта'}
-    items=evidence.get('ingredients')
-    traces=evidence.get('may_contain')
-    if not isinstance(items,list) or not isinstance(traces,list):
-        return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
-    if not items or any(not isinstance(i,str) or not i.strip() for i in items+traces):
-        return {'status':'needs_review','reason':'Некоторые ингредиенты или предупреждения неизвестны'}
-    # A definite ingredient or warning conflict excludes even if the data is
-    # incomplete; unverifiable data may NEVER lead to a green decision.
+    ingredient_list=evidence.get('ingredients')
+    trace_list=evidence.get('may_contain')
+    items=ingredient_list if isinstance(ingredient_list,list) else []
+    traces=trace_list if isinstance(trace_list,list) else []
+    # First detect every known contraindication, even if other parts of the
+    # package statement are missing or a different allergy lacks mapping.
+    incomplete_restrictions=False
     for restriction in restrictions:
-        if not isinstance(restriction,dict):
-            return {'status':'needs_review','reason':'Ограничения требуют подтверждения'}
-        words=ALIASES.get(restriction.get('canonical'))
-        if words is None:
-            # Unknown allergy cannot be safely matched without verified taxonomy.
-            return {'status':'needs_review','reason':'Для одного из ограничений нет проверенного справочника ингредиентов'}
+        words=(ALIASES.get(restriction.get('canonical'))
+               if isinstance(restriction,dict) else None)
+        if not words:
+            incomplete_restrictions=True
+            continue
         for ingredient in items:
             if any(_has_alias(ingredient,word) for word in words):
                 return {'status':'excluded','reason':'В составе найден запрещённый аллерген или производный компонент'}
         for warning in traces:
             if any(_has_alias(warning,word) for word in words):
                 return {'status':'excluded','reason':'Указано предупреждение о возможных следах аллергена'}
+    if incomplete_restrictions:
+        return {'status':'needs_review','reason':'Не все пищевые ограничения распознаны справочником'}
+    if not isinstance(ingredient_list,list) or not isinstance(trace_list,list):
+        return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
+    if not items or any(not isinstance(i,str) or not i.strip() for i in items+traces):
+        return {'status':'needs_review','reason':'Некоторые ингредиенты или предупреждения неизвестны'}
     if not evidence.get('complete'):
         return {'status':'needs_review','reason':'Состав или предупреждения изготовителя неполные'}
     # Placeholder, unclear or omitted ingredient origins are not independent
