@@ -969,7 +969,7 @@ function food(){
   '</select></label>'+
   '<label class="field"><span>Продукты и количество</span><textarea id="food-text" rows="3" maxlength="2000" placeholder="Овсянка 70 грамм, творог 5% 200 грамм">'+esc(foodText)+'</textarea></label>'+
   '<p class="input-note">Для продуктов, которые готовятся, указывайте вес до приготовления. Для готовых продуктов — фактический вес.</p>'+
-  button('Разобрать список','food-parse',true)+
+  button('Сохранить','food-save-text',true)+
   (foodUnparsed.length?'<p role="alert" class="input-note">Не распознано: '+esc(foodUnparsed.map(x=>x.text).join('; '))+'. Добавь вручную ниже.</p>':'')+
   (foodDraft.length?'<h3>Проверь перед сохранением</h3>'+editRows+
     button('Добавить строку вручную','food-draft-add')+
@@ -1441,6 +1441,18 @@ app.addEventListener('click',async e=>{
    error=ex.name==='AbortError'?'Анализ занимает слишком много времени. Попробуй позже.':ex.message;
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
+ }
+ if(cmd==='food-save-text'){
+  foodText=String(document.getElementById('food-text')?.value??foodText).trim();
+  foodMeal=document.getElementById('food-meal')?.value||foodMeal;
+  if(!foodText){fail('Напиши продукты и количество');return}
+  try{
+   const saved=await request('food_add_text',{date:foodDate,meal_type:foodMeal,text:foodText});
+   foodHistory=saved;foodUnparsed=saved.unparsed||[];
+   foodText='';foodDraft=[];foodNotice=saved.notice||'Запись сохранена.';
+   error='';void requestFoodDaily();void loadFoodMonth();
+  }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты. Текст сохранён на экране.'}
+  draw();return;
  }
  if(cmd==='food-parse'){
   foodText=String(document.getElementById('food-text')?.value??foodText).trim();
