@@ -550,7 +550,7 @@ async function run(){
    'A synthetic header click must not bypass mandatory onboarding');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),0,'No tabs after attempted onboarding bypass');
   await onboarding.screenshot({path:path.join(OUT,'first-launch.png')});
-  await onboarding.locator('[data-onboard="age"]').fill('34');
+  await onboarding.locator('[data-onboard="birth_date"]').fill('1992-10-20');
   await onboarding.locator('[data-onboard="height_cm"]').fill('181');
   await onboarding.locator('[data-onboard="weight_kg"]').fill('82');
   for(const field of ['terms','privacy','health'])await onboarding.locator('[data-onboard="'+field+'"]').check();
@@ -571,6 +571,7 @@ async function run(){
   assert.deepEqual(posts.find(p=>p.action==='onboarding').answers.weekdays,[0,2,4]);
   assert.equal(posts.find(p=>p.action==='onboarding').answers.days,'3');
   assert.equal(posts.find(p=>p.action==='onboarding').metrics.sex,'female');
+   assert.equal(posts.find(p=>p.action==='onboarding').metrics.birth_date,'1992-10-20','Full DOB used instead of old age field');
   assert.equal(posts.find(p=>p.action==='onboarding').answers.minutes,'120');
   assert.equal(await onboarding.locator('body.theme-female').count(),1,'Pink theme persists after save');
   assert.equal(await onboarding.locator('.bottom-nav button').count(),3,'Three tabs after onboarding save');
