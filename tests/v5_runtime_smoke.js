@@ -383,7 +383,7 @@ async function run(){
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
  assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
- assert.match(app.root.innerHTML,/100 ₽\/мес\./);
+ assert.match(app.root.innerHTML,/Бесплатно/);
  assert.match(app.root.innerHTML,/1 000 ₽\/мес\./);
  assert.match(app.root.innerHTML,/data-cmd="tier-select" data-tier="max"/);
  assert.doesNotMatch(app.root.innerHTML,/Редактировать анкету|Изменить параметры/);
@@ -518,17 +518,17 @@ async function run(){
  const ownerCoach=createClient(true,{tier:'max',
     aiPermissions:{profile:true,health:true,cycle:false}});
   await settle();
-  assert.match(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Персональный совет Yandex AI/,
     'Trainer AI should expose a recommendation below the four-week plan');
   await ownerCoach.click({cmd:'ai-tip-training'});await settle();
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
     x.purpose==='training'));
   await ownerCoach.click({nav:'food'});await settle();
-  assert.match(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет Yandex AI по рациону/);
   await ownerCoach.click({cmd:'ai-tip-nutrition'});await settle();
   assert.ok(ownerCoach.requests.some(x=>x.action==='ai_personalized_guidance'&&
     x.purpose==='nutrition'&&x.date==='2026-10-25'));
-  assert.match(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
+  assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/);
   await ownerCoach.click({cmd:'food-parse'});await settle();
   await ownerCoach.click({cmd:'food-save'});await settle();
   assert.doesNotMatch(ownerCoach.root.innerHTML,/Совет по реальному дневнику питания/,
