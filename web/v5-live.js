@@ -263,6 +263,9 @@ function onboardingPayload(){
  // An unreviewed Yandex AI analysis is optional; its structured fields are
  // applied only after confirmation. Saving can proceed with conservative limits.
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
+ if(state?.food_allergies?.available&&d.foodChoice==='declared'&&d.foodConsent){
+  try{if(!collectFoodRows().length)errs.foodInput='Укажи продукты.'}catch(ex){errs.foodInput=ex.message}
+ }
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
  const count=d.weekdays.length;
@@ -288,7 +291,10 @@ function onboardingPayload(){
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=d.timezone||deviceZone();
- return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
+ const staged=state?.food_allergies?.available&&d.foodDirty&&d.foodConsent&&d.foodChoice!=='unknown'?
+  {food_allergies:{choice:d.foodChoice,items:d.foodChoice==='declared'?collectFoodRows():[],
+    consent:true,consent_version:state.food_allergies.consent_version}}:{};
+ return {...staged,answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},birthday_telegram_consent:!!d.birthday_telegram_consent,
   timezone,timezone_confirmed:true,
@@ -400,6 +406,13 @@ async function onboardChanged(e){
   draw();return;
  }
  if(!onboard||!target)return;
+ if(target.dataset?.foodAllergyKind!==undefined){
+  const index=Number(target.dataset.foodAllergyKind);
+  if(Number.isInteger(index)&&onboard.foodRows[index]&&['allergy','intolerance'].includes(target.value)){
+   onboard.foodRows[index].kind=target.value;onboard.foodDirty=true;
+  }
+  return;
+ }
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
@@ -411,6 +424,7 @@ async function onboardChanged(e){
  }
  if(field==='aiConsent'&&!target.checked){onboard.aiResult=null;onboard.aiReviewed=false}
  if(field==='equipment'||field==='profileAiConsent')draw();
+ if(['foodInput','foodConsent'].includes(field)){onboard.foodDirty=true;if(field==='foodConsent')draw()}
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -1387,8 +1401,8 @@ app.addEventListener('click',async e=>{
  if(element.dataset.onboardPick){
   if(!(onboardOpen||view==='profile')||!onboard)return;
   const key=element.dataset.onboardPick,value=element.dataset.value;
-  if(!['goal','equipment','sex'].includes(key))return;
-  onboard[key]=value;delete onboardErrors[key];
+  if(!['goal','equipment','sex','foodChoice'].includes(key))return;
+  onboard[key]=value;if(key==='foodChoice'){onboard.foodDirty=true;if(value==='none'){onboard.foodRows=[];onboard.foodInput=''}}delete onboardErrors[key];
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
   draw();return;
  }
