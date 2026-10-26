@@ -1030,7 +1030,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(next_slot[0],second['day'])
         self.assertEqual(next_slot[1],second['week'])
         refreshed=self.m.scheduled_calendar(self.chat,p,cycle)
-        self.assertNotEqual(refreshed[0]['status'],'done')
+        self.assertEqual(refreshed[0]['status'],'skipped')
         self.assertNotEqual(refreshed[1]['status'],'done')
 
     def test_active_workout_overview_uses_saved_set_rows(self):
