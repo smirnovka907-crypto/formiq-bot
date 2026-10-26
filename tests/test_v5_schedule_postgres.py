@@ -174,6 +174,31 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertIsNotNone(row[2])
             self.assertEqual(self.snapshot_history(),before)
 
+    def test_tz4_explicit_decline_after_consent_erases_ciphertext(self):
+        from cryptography.fernet import Fernet
+        with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
+             patch.object(self.m,'FORMIQ_HEALTH_ENCRYPTION_KEY',
+                          Fernet.generate_key().decode('ascii')):
+            first=self.body()
+            first['food_allergies']={'choice':'declared','items':[
+                {'name':'Яйца','kind':'allergy'}],
+                'consent':True,'consent_version':self.m.FOOD_ALLERGY_CONSENT_VERSION}
+            self.m.save_onboarding(self.chat,first)
+            before=self.snapshot_history()
+            declined=self.body()
+            declined['food_allergies_declined']=True
+            self.m.save_onboarding(self.chat,declined)
+            state=self.m.food_allergy_state(self.chat)
+            self.assertEqual(state['choice'],'unknown')
+            self.assertFalse(state['recommendations_allowed'])
+            with self.connect() as conn:
+                row=conn.execute('''SELECT restrictions_enc,consented_at,revoked_at
+                    FROM food_allergy_preferences WHERE chat_id=%s''',
+                    (self.chat,)).fetchone()
+            self.assertIsNone(row[0]);self.assertIsNone(row[1])
+            self.assertIsNotNone(row[2])
+            self.assertEqual(self.snapshot_history(),before)
+
     def test_tz4_food_allergy_capture_in_onboarding_is_atomic(self):
         from cryptography.fernet import Fernet
         with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
