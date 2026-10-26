@@ -982,6 +982,9 @@ async function loadFatSecretAccount(){
 }
 function food(){
  if(!foodDate)foodDate=localClock().date;
+ const allergyNotice=state?.food_allergies?.available&&state.food_allergies.choice==='unknown'?
+  '<section class="surface"><h2>Пищевые ограничения</h2><p class="input-note">Для персонального подбора питания укажи, есть ли аллергии. Пока ответ не получен, нельзя считать продукты подходящими.</p>'+
+  button('Ответить в профиле','food-allergy-open')+'</section>':'';
  const saved=(foodHistory?.meals||[]);
  const dateField='<label class="field"><span>Дата дневника</span><input type="date" id="food-date" value="'+esc(foodDate)+'"></label>';
  const totals=foodDaily?.date===foodDate?foodDaily:null;
@@ -1056,7 +1059,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+allergyNotice+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function exerciseThumb(x){
@@ -1425,6 +1428,11 @@ app.addEventListener('click',async e=>{
   if(!['start','max'].includes(tier))return;
   await send('set_demo_tier',{tier});
   draw();return;
+ }
+ if(cmd==='food-allergy-open'){
+  onboardOpen=false;view='profile';onboard=null;initOnboard();draw();
+  window.setTimeout(()=>app.querySelector('[data-onboard-pick="foodChoice"]')?.scrollIntoView?.({block:'center',behavior:'smooth'}),100);
+  return;
  }
  if(cmd==='food-allergy-add'){
   try{onboard.foodRows=collectFoodRows();onboard.foodInput='';onboard.foodDirty=true;delete onboardErrors.foodInput;error=''}
