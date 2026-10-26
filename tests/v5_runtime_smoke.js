@@ -655,38 +655,16 @@ async function run(){
   await ai.click({onboardWeekday:'1'});await ai.click({onboardWeekday:'4'});
   await ai.click({onboardPick:'sex',value:'male'});
   ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Беспокоит колено после пробежки'}});
-  const finishAnalysis=ai.deferOnce('health_analyze');
-  const pendingAnalysis=ai.click({cmd:'onboard-ai'});await settle();
-  ai.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',value:'Теперь беспокоит спина, не колено'}});
-  finishAnalysis();await pendingAnalysis;
-  assert.match(ai.root.innerHTML,/изменились во время анализа/);
-  assert.doesNotMatch(ai.root.innerHTML,/data-onboard="aiReviewed"/);
-  await ai.click({cmd:'onboard-ai'});
-  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,2);
-  assert.ok(ai.requests.filter(x=>x.action==='health_analyze')
-    .every(x=>x.ai_consent===true),'Health analysis requires explicit action and stored permission');
-  assert.match(ai.root.innerHTML,/Применить результат/);
+  assert.doesNotMatch(ai.root.innerHTML,/Уточнить с Yandex AI|Применить результат|Yandex AI выделил/);
   await ai.click({cmd:'onboard-save'});
   const optionalSaves=ai.requests.filter(x=>x.action==='onboarding');
-  assert.equal(optionalSaves.length,1,'Unreviewed optional Yandex AI must not block saving');
+  assert.equal(optionalSaves.length,1,'Free-text health note can save without AI analysis');
   assert.ok(optionalSaves[0].health_profile.affected.includes('knee'),
-    'Explicit knee mention receives conservative region restriction without Yandex AI');
+    'Literal knee mention is preserved as a conservative load restriction');
+  assert.equal(ai.requests.filter(x=>x.action==='health_analyze').length,0,
+    'Saving an ordinary health note never transmits it to Yandex AI');
   assert.equal(optionalSaves[0].timezone_confirmed,true);
 
-  const reviewed=createClient(true,{storage:new Map(),
-    aiPermissions:{profile:true,health:true,cycle:false}});await settle();
-  await reviewed.click({nav:'profile'});
-  await reviewed.click({onboardWeekday:'1'});await reviewed.click({onboardWeekday:'4'});
-  await reviewed.click({onboardPick:'sex',value:'male'});
-  reviewed.handlers.input({target:{dataset:{onboard:'description'},type:'textarea',
-    value:'Беспокоит колено после пробежки'}});
-  await reviewed.click({cmd:'onboard-ai'});
-  await reviewed.click({cmd:'onboard-ai-apply'});
-  await reviewed.click({cmd:'onboard-save'});
-  const reviewedSaves=reviewed.requests.filter(x=>x.action==='onboarding');
-  assert.equal(reviewedSaves.length,1);
-  assert.equal(reviewedSaves[0].health_profile.pain_score,3,
-    'Confirmed Yandex result is used only after explicit acceptance');
    const diary=createClient(true,{trackHistory:true});await settle();
    await diary.click({nav:'progress'});await diary.click({date:'2026-10-23'});
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
