@@ -52,7 +52,7 @@ function createClient(auth=true,shared={}){
    }
    let response;
    const state=()=>({
-    agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
+    agreed:shared.agreed!==false,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
     workout,history,birthday:shared.birthday||null,
     food_allergies:shared.foodAllergies||{available:false,choice:'unknown',items:[],recommendations_allowed:false},ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
@@ -232,6 +232,14 @@ function createClient(auth=true,shared={}){
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
 
 async function run(){
+ // First-time user: answer is required, or explicitly select diary-only refusal.
+ const firstTime=createClient(true,{agreed:false,foodAllergies:{available:true,
+  choice:'unknown',items:[],recommendations_allowed:false,
+  consent_version:'test-allergy-consent-v1'}});
+ await settle();
+ assert.match(firstTime.root.innerHTML,/Не сообщать — только дневник/);
+ await firstTime.click({cmd:'food-allergy-skip'});
+ assert.match(firstTime.root.innerHTML,/Продолжу без сведений/);
  // Existing user: questionnaire is never silently interpreted as "no allergy".
  const allergy=createClient(true,{foodAllergies:{available:true,choice:'unknown',
     items:[],recommendations_allowed:false,consent_version:'test-allergy-consent-v1'}});
