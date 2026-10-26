@@ -283,6 +283,51 @@ class SchedulePostgresTests(unittest.TestCase):
                 FROM manual_food_items WHERE id=%s''',(iid,)).fetchone()
         self.assertEqual(row,('творог 5%',70,None,None))
 
+    def test_tz3_user_supplied_food_macros_recalculate_without_fatsecret(self):
+        self.m.save_onboarding(self.chat,self.body())
+        per100={'kcal':57,'protein_g':0.7,'fat_g':0.3,'carbs_g':14.5}
+        curd={'kcal':121,'protein_g':17,'fat_g':5,'carbs_g':3}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), \\
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET',''):
+            meal=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+                'items':[{'name':'Голубика','grams':70,'nutrition_100g':per100},
+                         {'name':'Творог 5%','grams':200,'nutrition_100g':curd}]})
+            items=meal['meals'][0]['items']
+            self.assertEqual([r['nutrition_source'] for r in items],['manual','manual'])
+            self.assertEqual(items[0]['nutrition_100g']['kcal'],57.0)
+            day=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(day['complete'])
+            self.assertEqual(day['source'],'manual')
+            self.assertEqual(day['totals']['kcal'],281.9)
+            self.assertEqual(day['totals']['protein_g'],34.49)
+            self.assertEqual(day['totals']['carbs_g'],16.15)
+            self.assertEqual(day['items'][0]['source'],'manual')
+            iid=items[0]['id']
+            changed=self.m.food_change(self.chat,{'id':iid,'name':'Голубика','grams':140})
+            self.assertEqual(changed['meals'][0]['items'][0]['nutrition_100g']['kcal'],57.0)
+            refreshed=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(refreshed['totals']['kcal'],321.8)
+            with self.assertRaises(ValueError):
+                self.m.food_change(self.chat+1,{'id':iid,'name':'Голубика','grams':300,
+                    'nutrition_100g':per100})
+            with self.assertRaises(ValueError):
+                self.m.food_change(self.chat,{'id':iid,'name':'Голубика','grams':140,
+                    'nutrition_100g':{'kcal':60}})
+            self.assertEqual(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals']['kcal'],321.8)
+            renamed=self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140})
+            self.assertIsNone(renamed['meals'][0]['items'][0]['nutrition_100g'])
+            partial=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(partial['complete'])
+            self.assertIsNone(partial['totals'])
+            self.assertEqual(partial['known_subtotal']['kcal'],242.0)
+            restored=self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140,
+                'nutrition_100g':per100})
+            self.assertEqual(restored['meals'][0]['items'][0]['nutrition_source'],'manual')
+            self.assertEqual(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals']['kcal'],321.8)
+            # Explicit removal of user-entered macros never invents zero kcal.
+            self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140,'nutrition_100g':None})
+            self.assertIsNone(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals'])
+
     def test_day_kbju_uses_only_owned_verified_portions_and_never_invents_totals(self):
         from unittest.mock import Mock
         self.m.save_onboarding(self.chat,self.body())
