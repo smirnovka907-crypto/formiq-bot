@@ -36,7 +36,10 @@ class AllergenDictionaryTests(unittest.TestCase):
           ['яйца куриные'],['перепелиные яйца'],['яичный белок'],
           ['желток'],['яичный порошок'],['яичный альбумин'],
           ['овальбумин'],['овомукоид'],['лизоцим E1105'],
-          ['egg yolk'],['quail egg'],['ovalbumin'],['lysozyme E1105'],['E1105']
+          ['egg yolk'],['quail egg'],['ovalbumin'],['lysozyme E1105'],['E1105'],
+          ['яичный меланж'],['меланж яичный'],['яичная масса'],
+          ['E-1105'],['лизоцим E-1105'],['egg solids'],['dried egg'],
+          ['egg wash'],['whole egg powder'],['egg lecithin']
         ]
         for ingredients in products:
             with self.subTest(ingredients=ingredients):
