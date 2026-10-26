@@ -54,7 +54,7 @@ function createClient(auth=true,shared={}){
    const state=()=>({
     agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
-    workout,history,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
+    workout,history,birthday:shared.birthday||null,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
@@ -183,7 +183,7 @@ function createClient(auth=true,shared={}){
      response={ok:true,data:state()};
     }
     else if(p.action==='save_metrics'){
-    assert.ok(Object.keys(p.metrics).every(k=>['age','height_cm','weight_kg'].includes(k)));
+    assert.ok(Object.keys(p.metrics).every(k=>['age','birth_date','height_cm','weight_kg'].includes(k)));
     Object.assign(metrics,p.metrics);response={ok:true,patch:{metrics:{...metrics},zones:[]}};
    }
    else if(p.action==='finish'){workout=null;shared.workout=null;response={ok:true,data:state()}}
@@ -380,7 +380,10 @@ async function run(){
 
  await app.click({nav:'profile'});
  assert.match(app.root.innerHTML,/Профиль:/,'Existing profile is an editable questionnaire');
- assert.match(app.root.innerHTML,/data-onboard="age"/);
+ assert.match(app.root.innerHTML,/data-onboard="birth_date"/);
+ assert.doesNotMatch(app.root.innerHTML,/data-onboard="age"/,'Birth date replaces age input');
+ assert.match(app.root.innerHTML,/Ранее сохранён только возраст/);
+ assert.match(app.root.innerHTML,/birthday_telegram_consent/);
  assert.match(app.root.innerHTML,/data-onboard="weight_kg"/);
  assert.doesNotMatch(app.root.innerHTML,/data-onboard="timezone"|Подтверждаю выбранный часовой пояс|Мне исполнилось 18 лет/);
  assert.match(app.root.innerHTML,/Сохранить изменения/);
@@ -391,6 +394,18 @@ async function run(){
  assert.doesNotMatch(app.root.innerHTML,/data-cmd="profile-metrics-edit"/);
  await app.click({nav:'home'});
  assert.match(app.root.innerHTML,/Доброе|Добрый|Доброй/);
+ const birthday=createClient(true,{now:'2026-10-26T08:00:00Z',metrics:{timezone:'UTC',birth_date:'1992-10-26'},
+   birthday:{show_congratulations:true,discount_percent:10,coach_price_rub:900}});
+ await settle();assert.match(birthday.root.innerHTML,/С днём рождения/);
+ assert.match(birthday.root.innerHTML,/900 ₽ вместо 1 000 ₽/);
+ await birthday.click({nav:'profile'});
+ assert.match(birthday.root.innerHTML,/data-onboard="birth_date"/);
+ assert.match(birthday.root.innerHTML,/value="1992-10-26"/);
+ birthday.handlers.change({target:{dataset:{onboard:'birth_date'},type:'date',value:'1992-10-25'}});
+ birthday.handlers.change({target:{dataset:{onboard:'birthday_telegram_consent'},type:'checkbox',checked:true}});
+ await birthday.click({cmd:'onboard-save'});
+ assert.equal(birthday.requests.filter(x=>x.action==='onboarding')[0].metrics.birth_date,'1992-10-25');
+ assert.equal(birthday.requests.filter(x=>x.action==='onboarding')[0].birthday_telegram_consent,true);
  assert.match(app.root.innerHTML,/Отзывы и предложения/);
  await app.click({cmd:'feedback-open'});
  assert.match(app.root.innerHTML,/id="feedback-text"/);
