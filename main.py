@@ -5031,8 +5031,9 @@ def mini_current(conn, chat):
 
 
 def period_history(chat):
-    """Only the authenticated owner's optional private period data."""
-    if metrics(chat).get('sex')!='female':
+    """Read only the authenticated owner's confirmed periods and conservative estimate."""
+    user_metrics=metrics(chat)
+    if user_metrics.get('sex')!='female':
         raise ValueError('Женский календарь доступен только в женском профиле')
     with db() as conn:
         rows=conn.execute("""SELECT id,starts_on,ends_on FROM menstrual_periods
@@ -5046,7 +5047,8 @@ def period_history(chat):
         gaps=[(last[index+1]-last[index]).days for index in range(2)]
         if all(21<=gap<=35 for gap in gaps) and abs(gaps[1]-gaps[0])<=7:
             next_on=last[-1]+timedelta(days=round(sum(gaps)/2))
-            today=datetime.now(timezone.utc).date()
+            try:today=datetime.now(ZoneInfo(user_metrics.get('timezone') or 'Europe/Moscow')).date()
+            except (ValueError,KeyError,TypeError):today=datetime.now(timezone.utc).date()
             # A past estimate is NOT a "next" period. A stale history is not
             # sufficient for a current prediction; never repeatedly project
             # old averages into an assumed diagnosis or future certainty.
@@ -5102,6 +5104,25 @@ def period_save(chat,body):
                     raise ValueError('Запись календаря не найдена')
     except psycopg.errors.UniqueViolation:
         raise ValueError('Запись на эту дату уже существует') from None
+    return period_history(chat)
+
+
+def period_delete(chat,body):
+    """Delete only one confirmed period after explicit UI confirmation.
+    Profile edits and competing saves serialize on the same owner lock.
+    """
+    record=body.get('id') if isinstance(body,dict) else None
+    if type(record) is not int or record<1:
+        raise ValueError('Неверная запись календаря')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+        if not sex_row or sex_row[0]!='female':
+            raise ValueError('Женский календарь доступен только в женском профиле')
+        deleted=conn.execute('''DELETE FROM menstrual_periods WHERE chat_id=%s AND id=%s
+            RETURNING id''',(chat,record)).fetchone()
+        if not deleted:
+            raise ValueError('Запись календаря не найдена')
     return period_history(chat)
 
 
@@ -5967,6 +5988,8 @@ def mini_api():
             payload = {'ok':True, **period_history(chat)}
         elif action == 'period_save':
             payload = {'ok':True, **period_save(chat,data)}
+        elif action == 'period_delete':
+            payload = {'ok':True, **period_delete(chat,data)}
         elif action == 'history_page':
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':
