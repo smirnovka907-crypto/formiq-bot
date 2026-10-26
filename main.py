@@ -3374,6 +3374,9 @@ def save_onboarding(chat,body):
         raise ValueError('Подтверди сохранение описания здоровья через принятие политики конфиденциальности')
     pending_food_allergies=body.get('food_allergies')
     revoke_food_allergies=body.get('food_allergies_revoke',False)
+    allergy_declined=body.get('food_allergies_declined',False)
+    if type(allergy_declined) is not bool or (allergy_declined and pending_food_allergies is not None):
+        raise ValueError('Проверь отказ от передачи пищевых ограничений')
     if type(revoke_food_allergies) is not bool or (revoke_food_allergies and pending_food_allergies is not None):
         raise ValueError('Проверь действие с пищевыми ограничениями')
     if pending_food_allergies is not None:
@@ -3386,6 +3389,13 @@ def save_onboarding(chat,body):
     # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        # Require a first-run response, but never force sensitive-health
+        # consent. Explicit refusal leaves the ordinary training/food diary.
+        if food_allergy_ready() and pending_food_allergies is None and not (allergy_declined or revoke_food_allergies):
+            prior_agreement=c.execute(
+                'SELECT version FROM user_agreements WHERE chat_id=%s',(chat,)).fetchone()
+            if not prior_agreement:
+                raise ValueError('Ответь на вопрос о пищевых ограничениях или выбери дневник без сведений')
         if pending_food_allergies is not None:
             food_allergy_write_in(c,chat,pending_food_allergies)
         elif revoke_food_allergies:
