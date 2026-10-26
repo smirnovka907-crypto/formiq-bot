@@ -161,6 +161,19 @@ class FoodAllergyPrivacyTests(unittest.TestCase):
         self.assertNotIn('Яйца',str(args))
         self.assertIn(b'egg',self.m.food_allergy_cipher().decrypt(args[2]))
 
+    def test_invalid_encryption_key_never_breaks_owner_food_journal(self):
+        fake=MagicMock()
+        fake.__enter__.return_value=fake
+        fake.execute.return_value.fetchone.return_value=(
+            'declared',b'bad encrypted bytes',self.m.FOOD_ALLERGY_CONSENT_VERSION,
+            datetime.now(timezone.utc))
+        with patch.object(self.m,'db',return_value=fake):
+            state=self.m.food_allergy_state(777)
+        self.assertEqual(state['choice'],'unknown')
+        self.assertFalse(state['recommendations_allowed'])
+        self.assertIn('не удалось прочитать',state['warning'])
+        self.assertNotIn('bad encrypted bytes',str(state))
+
     def test_api_requires_telegram_authentication(self):
         for action in ('food_allergy_save','food_allergy_revoke',
                        'food_allergy_check'):
