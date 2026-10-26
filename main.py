@@ -4592,8 +4592,11 @@ def mini_history_detail(chat,wid):
     elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
     return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
       'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
-       {'name':visible_exercise_name(name),'key':key if key in EX else None,'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
-       f' · {kg} кг' if kg is not None else '')} for name,count,kg,unit,key in rows]}
+       {'name':visible_exercise_name(name),'key':key if key in EX else None,
+        'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
+         f' · {kg} кг' if kg is not None else ''),
+        **(exercise_card_details(key) if key in EX else {})}
+       for name,count,kg,unit,key in rows]}
 
 def mini_history_page(chat, body):
     """Read-only, authenticated, owner-scoped history pagination for Aluminium v5."""
