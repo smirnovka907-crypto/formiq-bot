@@ -1448,7 +1448,7 @@ def planned_next_in(c, chat, cycle_id, count):
       AND s.schedule_state IS DISTINCT FROM 'retired'
       AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
         AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
-        AND w.plan_day=s.day_code AND w.status='finished' AND w.source='template')
+        AND w.plan_day=s.day_code AND w.status IN ('finished','finished_empty','skipped') AND w.source='template')
       ORDER BY s.planned_date,s.week_no,s.id LIMIT 1''',
       (chat,cycle_id,chat)).fetchone()
 
@@ -4338,7 +4338,7 @@ def mini_training_preview(chat, body):
               AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
                 AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
                 AND w.plan_day=s.day_code AND w.source='template'
-                AND w.status='finished')
+                AND w.status IN ('finished','finished_empty','skipped'))
             ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
             (chat,cycle,chat)).fetchone()
     if completed_row:
