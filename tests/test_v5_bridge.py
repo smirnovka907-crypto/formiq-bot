@@ -21,6 +21,41 @@ class V5StagingContract(unittest.TestCase):
             cls.mod = importlib.import_module('main')
         cls.client = cls.mod.APP.test_client()
 
+    def test_tz3_profile_connections_use_only_owner_state(self):
+        from datetime import datetime, timezone
+        from unittest.mock import MagicMock
+        stamp=datetime(2026,10,25,8,30,tzinfo=timezone.utc)
+        conn=MagicMock()
+        conn.__enter__.return_value=conn
+        conn.execute.return_value.fetchone.side_effect=[(stamp,),(None,)]
+        with patch.object(self.mod,'has_agreement',return_value=True), \
+             patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'fatsecret_user_oauth_ready',return_value=False):
+            result=self.mod.integrations_status(777)
+        self.assertEqual(result['fatsecret'],{
+            'available':False,'connected':True,'last_sync_at':stamp.isoformat()})
+        self.assertEqual(result['garmin'],{
+            'available':False,'connected':True,'last_sync_at':None})
+        self.assertEqual(len(conn.execute.call_args_list),2)
+        for call in conn.execute.call_args_list:
+            self.assertEqual(call.args[1],(777,))
+            self.assertNotIn('oauth_token',call.args[0])
+            self.assertNotIn('access_token',call.args[0])
+        self.assertIn('health_consent_at IS NOT NULL',conn.execute.call_args_list[1].args[0])
+        self.assertIn('disconnected_at IS NULL',conn.execute.call_args_list[1].args[0])
+        self.assertNotIn('provider_user_id',str(result))
+        self.assertNotIn('access_token',str(result))
+
+    def test_tz3_profile_connections_denied_without_agreement(self):
+        with patch.object(self.mod,'has_agreement',return_value=False), \
+             patch.object(self.mod,'db') as database:
+            with self.assertRaises(ValueError):
+                self.mod.integrations_status(777)
+            database.assert_not_called()
+        with patch.object(self.mod,'mini_auth',return_value=None):
+            response=self.client.post('/mini/api',json={'action':'integrations_status'})
+        self.assertEqual(response.status_code,401)
+
     def test_provider_callback_query_params_are_redacted_from_access_logs(self):
         import logging
         from unittest.mock import patch
