@@ -283,6 +283,32 @@ class SchedulePostgresTests(unittest.TestCase):
                 FROM manual_food_items WHERE id=%s''',(iid,)).fetchone()
         self.assertEqual(row,('творог 5%',70,None,None))
 
+    def test_tz3_food_calendar_only_marks_actual_owner_records(self):
+        p,cycle,slots=self.save((0,2,4))
+        month='2026-10'
+        before=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(before['food_dates'],[])
+        self.assertEqual(before['workout_dates'],[],
+                         'Planned scheduled sessions are not completed workouts')
+        self.m.food_add(self.chat,{'date':'2026-10-19','meal_type':'breakfast',
+            'items':[{'name':'Голубика','grams':70}]})
+        partial=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(partial['food_dates'],['2026-10-19'])
+        self.assertEqual(partial['workout_dates'],[])
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO workouts(chat_id,cycle_id,week_no,plan_day,
+                status,started_at,finished_at,source)
+                VALUES(%s,%s,%s,%s,'finished',%s,%s,'template')""",
+                (self.chat,cycle,slots[0]['week'],slots[0]['day'],
+                 Clock.instant,Clock.instant+timedelta(minutes=32)))
+        both=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(both['workout_dates'],['2026-10-19'])
+        self.assertEqual(both['food_dates'],['2026-10-19'])
+        self.assertEqual(both['dates'],['2026-10-19'])
+        other=self.m.mini_history_month(self.chat+1,{'month':month})
+        self.assertFalse(other['food_dates'])
+        self.assertFalse(other['workout_dates'])
+
     def test_tz3_user_supplied_food_macros_recalculate_without_fatsecret(self):
         self.m.save_onboarding(self.chat,self.body())
         per100={'kcal':57,'protein_g':0.7,'fat_g':0.3,'carbs_g':14.5}
