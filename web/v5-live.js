@@ -464,7 +464,7 @@ function workout(){
   '<p class="intro workout-intro">Выполнено '+done+' из '+total+' подходов · результат хранится в дневнике.</p>';
  let content='';
  if(!c){
-  content='<section class="surface workout-entry"><span class="eyebrow">ТРЕНИРОВКА ЗАВЕРШЕНА</span>'+
+  content='<section class="surface workout-entry"><span class="eyebrow">РЕЗУЛЬТАТ ЗАНЯТИЯ</span>'+
     '<h2 class="workout-exercise" style="font-size:25px">'+(done?'Подходы обработаны':'Подходы не выполнены')+'</h2>'+
     '<p class="input-note">Сохрани результаты в истории тренировок.</p>'+
     button('Завершить тренировку','finish-confirm',true)+button('Пропустить тренировку','skip-workout-confirm')+'</section>';
