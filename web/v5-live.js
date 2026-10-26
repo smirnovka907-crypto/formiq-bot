@@ -96,7 +96,8 @@ function onboardWeekdays(){
 function onboardBirthInput(){
  const clock=localClock().date;
  const bounds=clock.split('-'),year=Number(bounds[0])||new Date().getFullYear();
- const max=String(year-18)+'-'+bounds[1]+'-'+bounds[2];
+ // Native picker must allow a 29-Feb birthday; adulthood is validated by ageFromBirth/server.
+ const max=clock;
  return '<label class="field fq-birth-date"><span>Дата рождения</span>'+
    '<input type="date" data-onboard="birth_date" min="'+(year-101)+'-01-01" max="'+max+
    '" value="'+esc(onboard.birth_date||'')+'" autocomplete="bday" aria-label="Дата рождения: день, месяц, год">'+
