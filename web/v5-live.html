@@ -558,7 +558,7 @@ body.theme-female .fq-tier-choice button{background:#fff8fc}
  min-height:0;overflow-y:auto;overscroll-behavior:contain
 }
 .fq-live-dialog{max-height:calc(100dvh - max(90px,var(--fq-content-safe-top,0px)) - 34px);overscroll-behavior:contain}
-body.fq-typing .bottom-nav{visibility:hidden;pointer-events:none}
+/* Keep tabs accessible during generic field focus; cardio has its own typing guard. */
 input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top),var(--fq-content-safe-top,0px)));scroll-margin-bottom:28px}
 #history-root .heading-row{flex-wrap:wrap;row-gap:10px}
 .fq-history-controls{display:flex;align-items:center;gap:8px;max-width:100%}
