@@ -276,7 +276,7 @@ function updateViewportPosition(){
  const field=document.activeElement;
  if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
  const viewport=window.visualViewport;
- const safeTop=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fq-content-safe-top'))||0;
+ const safeTop=typeof getComputedStyle==='function'?(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fq-content-safe-top'))||0):0;
  const top=(viewport?.offsetTop||0)+Math.min(safeTop+12,130);
  const bottom=(viewport?.offsetTop||0)+(viewport?.height||window.innerHeight)-18;
  const rect=field.getBoundingClientRect();
@@ -1479,7 +1479,7 @@ function syncTelegramInsets(){
   const controls=Math.max(0,Math.min(Number(content[side])||0,180));
   // On clients that report a late/zero content inset, protect the close/menu
   // overlay immediately when fullscreen is requested (until Telegram updates).
-  const fallback=(side==='top'&&(tg?.isFullscreen||fullscreenRequested))?device+64:0;
+  const fallback=(side==='top'&&controls===0&&(tg?.isFullscreen||fullscreenRequested))?device+64:0;
   const inset=side==='top'?Math.max(device+controls,fallback):Math.max(device,controls);
   document.documentElement?.style?.setProperty('--fq-content-safe-'+side,Math.min(inset,240)+'px');
  }
