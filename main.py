@@ -23,6 +23,7 @@ from collections import Counter
 from weight_import import parse_report, MAX_FILE_SIZE
 from integrations.fatsecret import FatSecretCatalogClient, FatSecretClient, normalize_diary
 from integrations.garmin import normalize_garmin_webhook
+from food_allergens import normalise_restrictions, evaluate_composition, select_automatic_candidates
 
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
@@ -65,6 +66,10 @@ FATSECRET_CLIENT_SECRET = os.getenv('FATSECRET_CLIENT_SECRET','').strip()
 FATSECRET_OAUTH_CONSUMER_KEY = os.getenv('FATSECRET_OAUTH_CONSUMER_KEY','').strip()
 FATSECRET_OAUTH_CONSUMER_SECRET = os.getenv('FATSECRET_OAUTH_CONSUMER_SECRET','').strip()
 FORMIQ_INTEGRATION_ENCRYPTION_KEY = os.getenv('FORMIQ_INTEGRATION_ENCRYPTION_KEY','').strip()
+FORMIQ_HEALTH_ENCRYPTION_KEY = os.getenv('FORMIQ_HEALTH_ENCRYPTION_KEY','').strip()
+# Special-category health data remains disabled until legal/privacy sign-off.
+FOOD_ALLERGY_PROCESSING_ENABLED = os.getenv('FORMIQ_FOOD_ALLERGY_PROCESSING_ENABLED','').strip().lower() == 'true'
+FOOD_ALLERGY_CONSENT_VERSION = '2026-10-26-v1-review-required'
 MODEL = os.getenv('YANDEX_MODEL', 'yandexgpt/latest').strip()
 AI_URL = 'https://ai.api.cloud.yandex.net/foundationModels/v1/completion'
 SECRET = hashlib.sha256(TOKEN.encode()).hexdigest()
@@ -501,6 +506,15 @@ def init_db():
         # FatSecret provider nutrient contents remain transient/licence-bound.
         for field in ('kcal','protein_g','fat_g','carbs_g'):
             c.execute(f'ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS manual_{field}_100g NUMERIC(8,2)')
+        c.execute("""CREATE TABLE IF NOT EXISTS food_allergy_preferences(
+            chat_id BIGINT PRIMARY KEY,
+            choice TEXT NOT NULL DEFAULT 'unknown'
+                CHECK (choice IN ('unknown','none','declared')),
+            restrictions_enc BYTEA,consent_version TEXT,
+            consented_at TIMESTAMPTZ,revoked_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK(choice!='declared' OR (restrictions_enc IS NOT NULL
+                 AND consented_at IS NOT NULL)))""")
         # Official Garmin Business API: zero connected accounts until its
         # approved OAuth2 user mapping and consent have actually succeeded.
         # Tokens deliberately do not exist in this schema.
@@ -2281,6 +2295,10 @@ def ai_personalized_guidance(chat,body):
         raise ValueError('Нагрузка ограничена правилами безопасности. При необходимости обратись к специалисту')
     nutrition_day=(food_day(body['date']) if purpose=='nutrition' and body.get('date') is not None
                    else local_today(chat) if purpose=='nutrition' else None)
+    # No AI-generated foods without verified compositions, regardless of prompt.
+    if purpose=='nutrition':
+        food_allergy_recommendation_gate(chat)
+        raise ValueError('AI-подбор питания отключён до проверки состава блюд')
     # Only bounded facts from this authenticated user's PostgreSQL rows.
     with db() as conn:
         count,last=conn.execute("""SELECT COUNT(*),MAX(finished_at)
@@ -2980,6 +2998,130 @@ def mini_auth(raw):
 # Короткая анкета и пользовательские документы
 # =============================================
 
+def food_allergy_ready():
+    if not FOOD_ALLERGY_PROCESSING_ENABLED:
+        return False
+    try:
+        Fernet(FORMIQ_HEALTH_ENCRYPTION_KEY.encode('ascii'))
+        return True
+    except (ValueError,UnicodeError,TypeError):
+        return False
+
+
+def food_allergy_cipher():
+    if not food_allergy_ready():
+        raise ValueError('Хранение пищевых ограничений пока недоступно')
+    return Fernet(FORMIQ_HEALTH_ENCRYPTION_KEY.encode('ascii'))
+
+
+def food_allergy_input(payload):
+    if not isinstance(payload,dict):
+        raise ValueError('Ответь на вопрос о пищевых ограничениях')
+    choice=payload.get('choice')
+    if choice not in ('none','declared'):
+        raise ValueError('Выбери «Нет» или «Есть»')
+    if (payload.get('consent') is not True or
+        payload.get('consent_version') != FOOD_ALLERGY_CONSENT_VERSION):
+        raise ValueError('Нужно отдельное действующее согласие на хранение пищевых ограничений')
+    raw=payload.get('items',[])
+    if choice=='declared':
+        parsed=normalise_restrictions(raw)
+    else:
+        if raw not in ([],None):
+            raise ValueError('Для «Нет» список ограничений должен быть пустым')
+        parsed=[]
+    return choice,parsed
+
+
+def food_allergy_write_in(conn,chat,payload):
+    if not food_allergy_ready():
+        raise ValueError('Хранение пищевых ограничений пока недоступно')
+    choice,entries=food_allergy_input(payload)
+    ciphertext=food_allergy_cipher().encrypt(json.dumps(entries,
+        ensure_ascii=False,separators=(',',':')).encode('utf-8')) if entries else None
+    conn.execute("""INSERT INTO food_allergy_preferences
+            (chat_id,choice,restrictions_enc,consent_version,consented_at,revoked_at)
+        VALUES(%s,%s,%s,%s,NOW(),NULL)
+        ON CONFLICT(chat_id) DO UPDATE SET choice=EXCLUDED.choice,
+            restrictions_enc=EXCLUDED.restrictions_enc,
+            consent_version=EXCLUDED.consent_version,
+            consented_at=NOW(),revoked_at=NULL,updated_at=NOW()""",
+        (chat,choice,ciphertext,FOOD_ALLERGY_CONSENT_VERSION))
+
+
+def food_allergy_state(chat):
+    if not food_allergy_ready():
+        return {'available':False,'choice':'unknown','items':[],
+                'consent_version':FOOD_ALLERGY_CONSENT_VERSION,
+                'recommendations_allowed':False}
+    with db() as conn:
+        row=conn.execute("""SELECT choice,restrictions_enc,consent_version,
+            consented_at FROM food_allergy_preferences WHERE chat_id=%s""",
+            (chat,)).fetchone()
+    if not row or not row[3] or row[2]!=FOOD_ALLERGY_CONSENT_VERSION:
+        return {'available':True,'choice':'unknown','items':[],
+                'consent_version':FOOD_ALLERGY_CONSENT_VERSION,
+                'recommendations_allowed':False}
+    choice,ciphertext=row[0],row[1]
+    if choice=='declared':
+        if not ciphertext:
+            raise ValueError('Не удалось прочитать сохранённые ограничения')
+        try:
+            items=json.loads(food_allergy_cipher().decrypt(bytes(ciphertext)).decode('utf-8'))
+        except (InvalidToken,ValueError,UnicodeError,json.JSONDecodeError):
+            raise ValueError('Невозможно подтвердить пищевые ограничения. Подбор недоступен') from None
+    else:
+        items=[]
+    return {'available':True,'choice':choice,'items':items,
+            'consent_version':FOOD_ALLERGY_CONSENT_VERSION,
+            'recommendations_allowed':choice in ('none','declared')}
+
+
+def food_allergy_save(chat,payload):
+    if not has_agreement(chat):
+        raise ValueError('Сначала сохрани анкету')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        food_allergy_write_in(conn,chat,payload)
+    return {'food_allergies':food_allergy_state(chat)}
+
+
+def food_allergy_revoke(chat):
+    if not has_agreement(chat):
+        raise ValueError('Сначала сохрани анкету')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        conn.execute("""INSERT INTO food_allergy_preferences
+            (chat_id,choice,restrictions_enc,consent_version,consented_at,revoked_at)
+            VALUES(%s,'unknown',NULL,NULL,NULL,NOW())
+            ON CONFLICT(chat_id) DO UPDATE SET choice='unknown',
+                restrictions_enc=NULL,consent_version=NULL,consented_at=NULL,
+                revoked_at=NOW(),updated_at=NOW()""",(chat,))
+    return {'food_allergies':food_allergy_state(chat)}
+
+
+def food_allergy_check(chat,payload):
+    if not has_agreement(chat):
+        raise ValueError('Сначала сохрани анкету')
+    stored=food_allergy_state(chat)
+    if not stored['recommendations_allowed']:
+        return {'result':{'status':'needs_review',
+                 'reason':'Не подтверждены пищевые ограничения или согласие'}}
+    # Client JSON can NEVER certify its own composition or source.
+    candidate=payload.get('candidate') if isinstance(payload,dict) else None
+    return {'result':evaluate_composition(candidate,stored['items'],
+                                          trusted_server_source=False)}
+
+
+def food_allergy_recommendation_gate(chat):
+    stored=food_allergy_state(chat)
+    if not stored['recommendations_allowed']:
+        raise ValueError('Для подбора питания сначала подтверди пищевые ограничения')
+    if stored['choice']=='declared':
+        raise ValueError('Автоматический подбор требует проверенного состава блюд')
+    return True
+
+
 def has_agreement(chat):
     with db() as c:
         row=c.execute('SELECT version FROM user_agreements WHERE chat_id=%s',(chat,)).fetchone()
@@ -3222,10 +3364,19 @@ def save_onboarding(chat,body):
     raw_note=raw_note.strip()
     if raw_note and (body.get('health_storage_consent') is not True or body.get('privacy') is not True):
         raise ValueError('Подтверди сохранение описания здоровья через принятие политики конфиденциальности')
+    pending_food_allergies=body.get('food_allergies')
+    if pending_food_allergies is not None:
+        if not food_allergy_ready():
+            raise ValueError('Сохранение пищевых ограничений пока недоступно')
+        food_allergy_input(pending_food_allergies)
+    # Legacy profiles and people declining sensitive-data consent retain
+    # their ordinary journal with restrictions UNKNOWN, never "none".
     # No automatic diagnosis: text alone cannot override existing health limits.
     # The structured safety gate stays in force unless the user reviews an AI result.
     with db() as c:
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        if pending_food_allergies is not None:
+            food_allergy_write_in(c,chat,pending_food_allergies)
         previous = profile_in(c,chat)
         previous_zone = c.execute('SELECT timezone FROM profile_metrics WHERE chat_id=%s',
             (chat,)).fetchone()
@@ -4892,6 +5043,7 @@ def mini_state(chat, just_finished=False):
         'needs_health_profile': not bool(h),
         'agreed': has_agreement(chat),
         'ai_personalization': personalization_consent(chat),
+        'food_allergies':food_allergy_state(chat),
         'agreement_version': AGREEMENT_VERSION,
         'error': error,
         'workout': None,
@@ -6056,6 +6208,12 @@ def mini_api():
             payload = {'ok':True, **fatsecret_user_import_edit(chat,data)}
         elif action == 'fatsecret_diary_import_unlink':
             payload = {'ok':True, **fatsecret_user_import_edit(chat,data,delete=True)}
+        elif action == 'food_allergy_save':
+            payload={'ok':True,**food_allergy_save(chat,data)}
+        elif action == 'food_allergy_revoke':
+            payload={'ok':True,**food_allergy_revoke(chat)}
+        elif action == 'food_allergy_check':
+            payload={'ok':True,**food_allergy_check(chat,data)}
         elif action == 'food_parse':
             payload = {'ok': True, **food_parse(data)}
         elif action == 'food_nutrition_day':
