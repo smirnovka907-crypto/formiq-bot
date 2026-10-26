@@ -129,6 +129,19 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIn('Другое',result['plan_warning'])
         self.assertIsNotNone(result['cycle_start'])
 
+    def test_tz5_automatic_catalogue_match_never_guesses_ambiguous_food(self):
+        valid={'food_id':'123','name':'Овсянка сухая','brand':None,
+               'servings':[{'serving_id':'4','grams':100,
+                            'per_serving':{'kcal':370,'protein_g':12,
+                                           'fat_g':6,'carbs_g':62}}]}
+        match=self.m.food_auto_match_candidates
+        self.assertEqual(match('Овсянка сухая',[valid]),('123','4'))
+        self.assertIsNone(match('Овсянка вареная',[valid]))
+        self.assertIsNone(match('Овсянка сухая',[valid,valid]))
+        self.assertIsNone(match('Овсянка',[valid]))
+        self.assertIsNone(match('Овсянка сухая',[{**valid,'brand':'Марка'}]))
+        self.assertIsNone(match('Овсянка сухая',[{**valid,'servings':[]}]))
+
     def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
         self.m.save_onboarding(self.chat,self.body())
         raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
