@@ -1201,29 +1201,71 @@ app.addEventListener('click',async e=>{
   finally{aiTipBusy=false;draw()}
   return;
  }
+ if(cmd==='period-prev'||cmd==='period-next'){
+  periodMonth=periodShiftMonth(periodMonth,cmd==='period-prev'?-1:1);
+  periodError='';draw();return;
+ }
+ if(cmd==='period-delete-ask'){
+  if(periodBusy)return;
+  const id=Number(element.dataset.periodId);
+  if(!Number.isSafeInteger(id)||id===0||![...(periodEntries||[]),...pendingPeriods].some(p=>p.id===id))return;
+  periodDeleteTarget=id;periodError='';draw();return;
+ }
+ if(cmd==='period-delete-cancel'){periodDeleteTarget=null;periodError='';draw();return}
+ if(cmd==='period-delete-confirm'){
+  if(periodBusy)return;
+  const id=Number(element.dataset.periodId);
+  if(!Number.isSafeInteger(id)||id!==periodDeleteTarget)return;
+  if(id<0){
+   pendingPeriods=pendingPeriods.filter(p=>p.id!==id);
+   if(periodEditing===id){periodEditing=null;periodDraft={start:'',end:''}}
+   periodDeleteTarget=null;periodError='';draw();return;
+  }
+  periodBusy=true;
+  try{
+   const response=await request('period_delete',{id});
+   periodEntries=response.periods||[];periodPrediction=response.next_period||null;
+   if(periodEditing===id){periodEditing=null;periodDraft={start:'',end:''}}
+   periodDeleteTarget=null;periodError='';
+  }catch(e){periodError=e.message||'Не удалось удалить запись.'}
+  finally{periodBusy=false;draw()}return;
+ }
  if(cmd==='period-edit'){
   const id=Number(element.dataset.periodId),record=[...(periodEntries||[]),...pendingPeriods].find(x=>x.id===id);
   if(!record)return;
-  periodEditing=id;periodDraft={start:record.start,end:record.end};periodError='';draw();return;
+  periodDeleteTarget=null;periodEditing=id;periodDraft={start:record.start,end:record.end};periodError='';draw();return;
  }
  if(cmd==='period-cancel'){
   periodEditing=null;periodDraft={start:'',end:''};periodError='';draw();return;
  }
  if(cmd==='period-save'){
   if(periodBusy)return;
-  if(!periodDraft.start||!periodDraft.end){periodError='Укажи обе даты.';draw();return}
-  if(periodDraft.end<periodDraft.start){periodError='Окончание не может быть раньше начала.';draw();return}
+  const {start,end}=periodDraft;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(start)||!/^\d{4}-\d{2}-\d{2}$/.test(end)){
+   periodError='Укажи полные даты начала и окончания.';draw();return;
+  }
+  const startDate=new Date(start+'T12:00:00Z'),endDate=new Date(end+'T12:00:00Z');
+  if(startDate.toISOString().slice(0,10)!==start||endDate.toISOString().slice(0,10)!==end){
+   periodError='Проверь даты календаря.';draw();return;
+  }
+  if(end<start||endDate-startDate>14*86400000){
+   periodError='Окончание должно быть не раньше начала, период не больше 15 дней.';draw();return;
+  }
+  if(end>localClock().date){periodError='Указывай только уже прошедшие даты.';draw();return}
+  const collisions=[...(periodEntries||[]),...pendingPeriods];
+  if(collisions.some(p=>p.id!==periodEditing&&p.start<=end&&p.end>=start)){
+   periodError='Эти даты пересекаются с сохранённой записью.';draw();return;
+  }
   if(state?.metrics?.sex!=='female'){
-   if(pendingPeriods.some(p=>p.id!==periodEditing&&p.start<=periodDraft.end&&p.end>=periodDraft.start)){periodError='Даты пересекаются с другой записью.';draw();return}
-   const id=periodEditing&&periodEditing<0?periodEditing:pendingPeriodId--;
+   const id=periodEditing!==null&&periodEditing<0?periodEditing:pendingPeriodId--;
    pendingPeriods=pendingPeriods.filter(p=>p.id!==id);pendingPeriods.push({...periodDraft,id});
-   periodMonth=periodDraft.start.slice(0,7);periodEditing=null;periodDraft={start:'',end:''};periodError='';draw();return;
+   periodMonth=start.slice(0,7);periodEditing=null;periodDraft={start:'',end:''};periodError='';draw();return;
   }
   periodBusy=true;
   try{
-   const response=await request('period_save',{...periodDraft,...(periodEditing?{id:periodEditing}:{})});
+   const response=await request('period_save',{...periodDraft,...(periodEditing!==null&&periodEditing>0?{id:periodEditing}:{})});
    periodEntries=response.periods||[];periodPrediction=response.next_period||null;
-   periodMonth=periodDraft.start.slice(0,7);
+   periodMonth=start.slice(0,7);
    periodEditing=null;periodDraft={start:'',end:''};periodError='';
   }catch(e){periodError=e.message||'Не удалось сохранить даты.'}
   finally{periodBusy=false;draw()}
