@@ -5290,7 +5290,7 @@ def mini_write(chat, action, body):
             raise ValueError(error)
         return {'options':[{'key':k,'name':EX[k][0]} for k in keys]}
 
-    if action not in ('record','skip','replace','finish','cancel','rate'):
+    if action not in ('record','skip','replace','finish','skip_workout','cancel','rate'):
         raise ValueError('Неизвестная операция')
 
     with db() as c:
@@ -5310,13 +5310,15 @@ def mini_write(chat, action, body):
             c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
             c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
             return False
-        if action == 'finish':
+        if action in ('finish','skip_workout'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
                 WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
-            if done == 0:
-                raise ValueError('Сначала запиши хотя бы один подход')
-            c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
+            # A skipped session must never count as a completed workout.
+            # Explicit early finish with no sets is also recorded, not blocked.
+            final_status = ('skipped' if action=='skip_workout' else
+                            'finished' if done else 'finished_empty')
+            c.execute('''UPDATE workouts SET status=%s,finished_at=NOW()
+                WHERE id=%s AND chat_id=%s AND status='active' ''',(final_status,wid,chat))
             affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
                 WHERE workout_id=%s AND state='pending' RETURNING position''',(wid,)).fetchall()
             for pos in {r[0] for r in affected}:
