@@ -4067,16 +4067,76 @@ def food_add_text(chat,body):
                 (chat_id,eaten_on,meal_type,raw_input_text)
                 VALUES(%s,%s,%s,%s) RETURNING id""",
                 (chat,day,meal_type,raw_text)).fetchone()[0]
+        inserted=[]
         for row in parsed['items']:
             name,grams=food_item(row['name'],row['grams'])
-            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
-                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+            item_id=conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s) RETURNING id""",(meal_id,chat,name,grams)).fetchone()[0]
+            inserted.append((item_id,name))
+    linked=food_auto_link_recent(chat,inserted)
     result=food_history(chat,{'date':day.isoformat()})
     result['unparsed']=parsed['unparsed']
+    result['catalog_matches']=linked
     result['notice']=('Запись сохранена. Для некоторых продуктов не указан вес.'
                       if parsed['unparsed'] else
                       'Продукты сохранены. КБЖУ появятся при наличии проверенного источника.')
     return result
+
+
+
+def food_auto_match_candidates(name, options):
+    """Only unambiguous exact catalogue names may receive automatic provider IDs.
+
+    Never infer nutrition from fuzzy names, brands, recipes or cooked/raw variants.
+    """
+    if not isinstance(options,list):
+        return None
+    canon=lambda s:' '.join(str(s).casefold().replace('ё','е').split())
+    exact=[row for row in options if isinstance(row,dict)
+           and canon(row.get('name',''))==canon(name)
+           and not row.get('brand')]
+    if len(exact)!=1:
+        return None
+    option=exact[0]
+    portions=[p for p in option.get('servings',[]) if isinstance(p,dict)
+              and p.get('grams')==100 and p.get('per_serving')]
+    if len(portions)!=1:
+        return None
+    if food_preparation_state(name)!=food_preparation_state(option['name']):
+        return None
+    fid,sid=option.get('food_id'),portions[0].get('serving_id')
+    return (fid,sid) if isinstance(fid,str) and fid.isdecimal() and isinstance(sid,str) and sid.isdecimal() else None
+
+
+def food_auto_link_recent(chat, item_ids):
+    """Optional provider reads happen after durable save; failures never roll back food."""
+    if not (FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET) or not item_ids:
+        return 0
+    try:
+        client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+        token=client.get_token()
+    except Exception:
+        return 0
+    updated=0
+    for item_id,name in item_ids[:30]:
+        try:
+            match=food_auto_match_candidates(name,client.search(name,token))
+            if not match:
+                continue
+            # Re-fetch exact ID: a search result is insufficient to certify a serving.
+            verified=client.food_by_id(match[0],token)
+            if food_auto_match_candidates(name,[verified])!=match:
+                continue
+            with db() as conn:
+                changed=conn.execute("""UPDATE manual_food_items SET
+                    source_food_id=%s,source_serving_id=%s,updated_at=NOW()
+                    WHERE id=%s AND chat_id=%s AND name=%s
+                      AND source_food_id IS NULL AND source_serving_id IS NULL
+                    RETURNING id""",(*match,item_id,chat,name)).fetchone()
+            updated+=bool(changed)
+        except Exception:
+            continue
+    return updated
 
 
 def food_change(chat,body,delete=False):
