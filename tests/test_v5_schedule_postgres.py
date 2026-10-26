@@ -1009,6 +1009,30 @@ class SchedulePostgresTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
                 self.m.mini_write(self.chat,action,{})
 
+    def test_tz5_skip_scheduled_slot_advances_without_marking_done(self):
+        p,cycle,calendar=self.save()
+        first,second=calendar[:2]
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts
+                (chat_id,plan_day,cycle_id,week_no,source,status)
+                VALUES(%s,%s,%s,%s,'template','active') RETURNING id""",
+                (self.chat,first['day'],cycle,first['week'])).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                VALUES(%s,0,'Приседание','10')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets
+                (workout_id,position,set_no,target_min,target_max,unit)
+                VALUES(%s,0,1,8,12,'reps')""",(wid,))
+        with self.connect() as conn:
+            self.assertEqual(self.m.planned_next_in(conn,self.chat,cycle,3)[0],first['day'])
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',{}))
+        with self.connect() as conn:
+            next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
+        self.assertEqual(next_slot[0],second['day'])
+        self.assertEqual(next_slot[1],second['week'])
+        refreshed=self.m.scheduled_calendar(self.chat,p,cycle)
+        self.assertNotEqual(refreshed[0]['status'],'done')
+        self.assertNotEqual(refreshed[1]['status'],'done')
+
     def test_active_workout_overview_uses_saved_set_rows(self):
         rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),
                 (0, 2, 8, 12, 'reps', 'pending', 'Жим ногами', 'leg_press'),
