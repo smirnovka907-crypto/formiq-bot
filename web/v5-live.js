@@ -34,7 +34,7 @@ let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Objec
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let foodMonth='',foodMonthMarks=null,foodMonthBusy=false,foodMonthSeq=0;
 let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='',fatsecretEntry=null;
-let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
+let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',periodDeleteTarget=null,pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,foodRevision=0,feedbackNotice='',feedbackError='';
@@ -217,38 +217,86 @@ async function loadFemalePeriods(){
   const res=await request('period_list');
   periodEntries=Array.isArray(res.periods)?res.periods:[];
   periodPrediction=res.next_period||null;periodError='';
-  if(!periodMonth&&periodEntries.length)periodMonth=periodEntries[0].start.slice(0,7);
- }catch(_e){periodError='Не удалось загрузить приватный календарь.'}
+  if(!periodMonth)periodMonth=localClock().date.slice(0,7);
+ }catch(_e){periodError='Не удалось загрузить женский календарь.'}
  finally{periodBusy=false;draw()}
+}
+function periodPretty(s){
+ const [y,m,d]=String(s||'').split('-');
+ return y&&m&&d?d+'.'+m+'.'+y:'—';
+}
+function periodShiftMonth(month,delta){
+ const [y,m]=String(month||'').split('-').map(Number);
+ if(!Number.isInteger(y)||!Number.isInteger(m)||m<1||m>12)return localClock().date.slice(0,7);
+ return new Date(Date.UTC(y,m-1+delta,1)).toISOString().slice(0,7);
+}
+function periodMonthGrid(month,records){
+ const [year,number]=month.split('-').map(Number);
+ const first=new Date(Date.UTC(year,number-1,1));
+ const length=new Date(Date.UTC(year,number,0)).getUTCDate();
+ const offset=(first.getUTCDay()+6)%7;
+ const marked=new Set();
+ for(const p of records){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(p.start)||!/^\d{4}-\d{2}-\d{2}$/.test(p.end))continue;
+  const begin=new Date(p.start+'T12:00:00Z'),finish=new Date(p.end+'T12:00:00Z');
+  for(let day=new Date(begin);day<=finish&&day<=new Date(begin.getTime()+14*86400000);day.setUTCDate(day.getUTCDate()+1)){
+   const iso=day.toISOString().slice(0,10);
+   if(iso.slice(0,7)===month)marked.add(iso);
+  }
+ }
+ const today=localClock().date;
+ const header=first.toLocaleDateString('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'});
+ const cells=[];
+ for(let pad=0;pad<offset;pad++)cells.push('<span class="fq-cycle-empty" aria-hidden="true"></span>');
+ for(let day=1;day<=length;day++){
+  const date=month+'-'+String(day).padStart(2,'0');
+  const isRecorded=marked.has(date);
+  cells.push('<span class="fq-cycle-day'+(isRecorded?' recorded':'')+(date===today?' today':'')+
+   '" role="gridcell" aria-label="'+esc(periodPretty(date))+(isRecorded?', отмечена менструация':'')+
+   (date===today?', сегодня':'')+'" title="'+esc(periodPretty(date)+(isRecorded?' · сохранённая запись':''))+'">'+
+   '<span class="fq-cycle-number">'+day+'</span></span>');
+ }
+ return '<div class="fq-cycle-navigation">'+
+   '<button type="button" data-cmd="period-prev" aria-label="Предыдущий месяц">‹</button>'+
+   '<strong>'+esc(header)+'</strong>'+
+   '<button type="button" data-cmd="period-next" aria-label="Следующий месяц">›</button></div>'+
+   '<div class="fq-cycle-month" role="grid" aria-label="Женский календарь за '+esc(header)+'">'+
+   ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d=>'<span class="fq-cycle-weekday" role="columnheader">'+d+'</span>').join('')+
+   cells.join('')+'</div>'+
+   '<div class="fq-cycle-legend"><span class="fq-cycle-swatch"></span> Сохранённые дни менструации</div>';
 }
 function femaleCalendar(){
  if(onboard?.sex!=='female')return '';
- const format=s=>{const [y,m,d]=String(s||'').split('-');return y&&m&&d?d+'.'+m+'.'+y:'—'};
- const visiblePeriods=[...(periodEntries||[]),...pendingPeriods];
- const months=[...new Set(visiblePeriods.map(p=>p.start.slice(0,7)))];
- const current=months.includes(periodMonth)?periodMonth:months[0]||'';
- const selector=months.length?'<label class="field" style="margin-top:16px"><span>Месяц истории</span><select id="period-month">'+
-  months.map(v=>'<option value="'+esc(v)+'"'+(v===current?' selected':'')+'>'+esc(v.slice(5,7)+'.'+v.slice(0,4))+'</option>').join('')+
-  '</select></label>':'';
- const entries=visiblePeriods.filter(p=>p.start.slice(0,7)===current).map(p=>
-  '<div class="fq-period-row"><span>'+format(p.start)+' — '+format(p.end)+'</span>'+
-  (p.id<0?'<small>Будет сохранено с анкетой</small>':'')+button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+'</div>').join('');
- const estimate=periodPrediction?'<p class="input-note" role="status">Следующее начало, ориентировочно: <strong>'+
-  esc(format(periodPrediction.date))+'</strong>. Это оценка по истории, не медицинский прогноз.</p>':
-  '<p class="input-note">Примерная дата появится при трёх недавних записях с достаточно устойчивым интервалом.</p>';
- return '<section class="surface"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
-  '<p class="input-note">Приватный дневник. Новые даты можно ввести сразу — они сохранятся вместе с анкетой. Без согласия данные не передаются в Yandex AI.</p>'+
-  '<p class="input-note">Для передачи данных цикла в Yandex AI действует единое согласие анкеты. Отзыв не удаляет записи.</p>'+
-  '<div class="fq-live-grid" style="margin-top:15px">'+
-  '<label class="field"><span>Начало</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
-  '<label class="field"><span>Окончание</span><input id="period-end" type="date" value="'+esc(periodDraft.end)+'"></label></div>'+
+ if(!periodMonth)periodMonth=localClock().date.slice(0,7);
+ const saved=[...(periodEntries||[])];
+ const records=[...saved,...pendingPeriods].sort((a,b)=>b.start.localeCompare(a.start));
+ const rows=records.map(p=>{
+  const target=periodDeleteTarget===p.id;
+  return '<div class="fq-period-row"><span>'+esc(periodPretty(p.start))+' — '+esc(periodPretty(p.end))+
+   (p.id<0?'<small>Сохранится с анкетой</small>':'')+'</span>'+
+   (target?'<span class="fq-cycle-confirm" role="group" aria-label="Подтвердить удаление записи">'+
+    button('Удалить запись','period-delete-confirm',false,'data-period-id="'+p.id+'"')+
+    button('Отмена','period-delete-cancel')+'</span>':
+    '<span class="fq-cycle-actions">'+button('Изменить','period-edit',false,'data-period-id="'+p.id+'"')+
+    button('Удалить','period-delete-ask',false,'data-period-id="'+p.id+'"')+'</span>')+
+   '</div>';
+ }).join('');
+ const estimate=periodPrediction&&!pendingPeriods.length?
+  '<div class="fq-cycle-forecast" role="status">Следующее начало ориентировочно: <strong>'+
+  esc(periodPretty(periodPrediction.date))+'</strong><small>Оценка по истории, не медицинский прогноз.</small></div>':'';
+ return '<section class="surface fq-cycle"><h2 class="section-label" style="margin-top:0">Женский календарь</h2>'+
+  periodMonthGrid(periodMonth,records)+estimate+
+  '<h3 class="section-label">Добавить период</h3>'+
+  '<div class="fq-live-grid">'+
+  '<label class="field"><span>Дата начала</span><input id="period-start" type="date" value="'+esc(periodDraft.start)+'"></label>'+
+  '<label class="field"><span>Дата окончания</span><input id="period-end" type="date" value="'+esc(periodDraft.end)+'"></label></div>'+
   (periodError?'<p role="alert" class="fq-form-error">'+esc(periodError)+'</p>':'')+
-  '<div class="workout-cta">'+button(periodEditing?'Сохранить исправление':'Добавить период','period-save',true)+
-  (periodEditing?button('Отмена','period-cancel'):'')+'</div>'+
-  '<h3 class="section-label">История по месяцам</h3>'+selector+(periodBusy?'<p>Загрузка...</p>':entries||'<p class="empty">Записей пока нет.</p>')+
-  estimate+'</section>';
+  '<div class="workout-cta">'+button(periodEditing!==null?'Сохранить исправление':'Добавить период','period-save',true)+
+  (periodEditing!==null?button('Отмена','period-cancel'):'')+'</div>'+
+  '<h3 class="section-label">История периодов</h3>'+
+  '<div class="fq-cycle-history">'+(periodBusy?'<p>Загрузка...</p>':rows||'<p class="empty">Записей пока нет.</p>')+
+  '</div></section>';
 }
-
 async function onboardChanged(e){
  const target=e.target;
  if(target?.id==='period-ai-consent'){
@@ -1080,7 +1128,7 @@ app.addEventListener('input',e=>{
  onboardChanged(e);
  if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
- if(e.target.id==='period-month'){periodMonth=e.target.value;draw()}
+ // Calendar month changes only through the arrow buttons; do not reset date drafts.
  if(e.target.id==='food-text')foodText=e.target.value;
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
