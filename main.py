@@ -5069,11 +5069,8 @@ def period_save(chat,body):
         raise ValueError('Проверь даты календаря') from None
     if end<start or (end-start).days>14:
         raise ValueError('Дата окончания должна быть не раньше начала, период до 15 дней')
-    # These are *observed* entries, not predictions. Disallow absurd/future
-    # dates, which also prevents out-of-range forecast arithmetic near year 9999.
-    if start>datetime.now(timezone.utc).date() + timedelta(days=1) or \
-       end>datetime.now(timezone.utc).date() + timedelta(days=1):
-        raise ValueError('Указывай только уже начавшиеся периоды')
+    # Validate observed dates against the authenticated profile timezone
+    # INSIDE the user lock; never use UTC + one-day leeway for future dates.
     record=body.get('id')
     if record is not None and (type(record) is not int or record<1):
         raise ValueError('Неверная запись календаря')
@@ -5083,10 +5080,14 @@ def period_save(chat,body):
             # The female access check and write must be atomic relative to
             # changing profile sex, and two simultaneous writes must serialize.
             conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
-            sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',
+            sex_row=conn.execute('SELECT sex,timezone FROM profile_metrics WHERE chat_id=%s',
                                  (chat,)).fetchone()
             if not sex_row or sex_row[0]!='female':
                 raise ValueError('Женский календарь доступен только в женском профиле')
+            try:local_day=datetime.now(ZoneInfo(sex_row[1] or 'Europe/Moscow')).date()
+            except (ValueError,KeyError,TypeError):local_day=datetime.now(timezone.utc).date()
+            if start>local_day or end>local_day:
+                raise ValueError('Указывай только фактические прошедшие дни')
             overlap=conn.execute("""SELECT EXISTS(
                 SELECT 1 FROM menstrual_periods WHERE chat_id=%s
                 AND starts_on<=%s AND ends_on>=%s
