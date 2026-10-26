@@ -577,4 +577,18 @@ input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top)
 .fq-food-manual-grid .field{min-width:0;font-size:12px}
 .fq-food-manual-grid .field input{font-size:16px;min-height:43px}
 
+
+/* Real food and finished-workout local-date markers, not planned sessions. */
+.fq-food-calendar{padding:15px}
+.fq-food-calendar-days,.fq-food-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center}
+.fq-food-calendar-days span{font-size:11px;color:var(--secondary);padding:6px 0}
+.fq-food-calendar-grid button{border:1px solid transparent;background:rgba(255,255,255,.12);border-radius:10px;padding:5px 0 4px;min-height:43px;font-size:13px;font-weight:730;display:flex;flex-direction:column;align-items:center;justify-content:space-between}
+.fq-food-calendar-grid button.selected{background:rgba(145,169,140,.2);border-color:rgba(95,120,96,.45)}
+.fq-food-calendar-grid button:focus-visible{outline-offset:1px}
+.fq-calendar-dots{display:flex;gap:3px;align-items:center;justify-content:center;min-height:7px}
+.fq-calendar-dots i,.fq-food-legend-dot{display:inline-block;width:6px;height:6px;border-radius:50%}
+.fq-calendar-dots i.food,.fq-food-legend-dot.food{background:#5f9872}
+.fq-calendar-dots i.workout,.fq-food-legend-dot.workout{background:#c48046}
+.fq-food-legend-dot{margin:0 3px 0 6px;vertical-align:middle}
+
 </style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
