@@ -251,6 +251,24 @@ async function run(){
  assert.deepEqual(writes[0].items.map(x=>x.name),['Яйца','Арахис']);
  assert.ok(writes[0].items.every(x=>x.kind==='allergy'));
  assert.match(allergy.root.innerHTML,/Пищевые ограничения сохранены/);
+ // Editable allergen type updates are sent only after explicit save.
+ allergy.handlers.change({target:{dataset:{foodAllergyKind:'0'},value:'intolerance'}});
+ await allergy.click({cmd:'food-allergy-save'});
+ const changed=allergy.requests.filter(x=>x.action==='food_allergy_save');
+ assert.equal(changed.length,2);
+ assert.equal(changed[1].items[0].kind,'intolerance');
+ // Revoke is a two-stage explicit confirmation, never immediate deletion.
+ await allergy.click({cmd:'food-allergy-revoke'});
+ assert.match(allergy.root.innerHTML,/Да, удалить/);
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,0);
+ await allergy.click({cmd:'food-allergy-revoke-cancel'});
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,0);
+ await allergy.click({cmd:'food-allergy-revoke'});
+ await allergy.click({cmd:'food-allergy-revoke-confirm'});
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,1);
+ assert.match(allergy.root.innerHTML,/Согласие отозвано/);
+ await allergy.click({nav:'food'});await settle();
+ assert.match(allergy.root.innerHTML,/Ответить в профиле/);
  const legacy=createClient(true);
  await settle();await legacy.click({nav:'food'});await settle();
  assert.doesNotMatch(legacy.root.innerHTML,/Ответить в профиле/);
