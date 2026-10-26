@@ -83,6 +83,70 @@ class SchedulePostgresTests(unittest.TestCase):
         cycle, _ = self.m.get_cycle(self.chat, profile)
         return profile, cycle, self.m.scheduled_calendar(self.chat, profile, cycle)
 
+    def test_tz4_allergy_encrypted_consent_legacy_history_and_revoke(self):
+        from cryptography.fernet import Fernet
+        self.m.save_onboarding(self.chat,self.body())
+        before=self.snapshot_history()
+        key=Fernet.generate_key().decode('ascii')
+        with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
+             patch.object(self.m,'FORMIQ_HEALTH_ENCRYPTION_KEY',key):
+            old=self.m.food_allergy_state(self.chat)
+            self.assertEqual(old['choice'],'unknown')
+            self.assertEqual(old['items'],[])
+            self.assertFalse(old['recommendations_allowed'])
+            payload={'choice':'declared','items':[
+                {'name':'Яйца','kind':'allergy'},
+                {'name':'Молоко','kind':'intolerance'}],
+                'consent':True,'consent_version':self.m.FOOD_ALLERGY_CONSENT_VERSION}
+            stored=self.m.food_allergy_save(self.chat,payload)['food_allergies']
+            self.assertEqual(stored['choice'],'declared')
+            self.assertEqual(len(stored['items']),2)
+            with self.connect() as conn:
+                row=conn.execute('''SELECT restrictions_enc,consent_version,consented_at
+                     FROM food_allergy_preferences WHERE chat_id=%s''',
+                     (self.chat,)).fetchone()
+                self.assertIsNotNone(row[0])
+                self.assertNotIn('Яйца',bytes(row[0]).decode('ascii','ignore'))
+                self.assertEqual(row[1],self.m.FOOD_ALLERGY_CONSENT_VERSION)
+                self.assertIsNotNone(row[2])
+            self.assertEqual(self.m.food_allergy_state(self.chat+1)['choice'],'unknown')
+            with self.assertRaisesRegex(ValueError,'анкету'):
+                self.m.food_allergy_save(self.chat+1,payload)
+            self.m.save_onboarding(self.chat,self.body())
+            self.assertEqual(self.m.food_allergy_state(self.chat)['choice'],'declared')
+            changed={**payload,'items':[{'name':'Яйца','kind':'allergy'}]}
+            self.m.food_allergy_save(self.chat,changed)
+            self.assertEqual(len(self.m.food_allergy_state(self.chat)['items']),1)
+            self.assertEqual(self.snapshot_history(),before)
+            revoked=self.m.food_allergy_revoke(self.chat)['food_allergies']
+            self.assertEqual(revoked['choice'],'unknown')
+            self.assertFalse(revoked['recommendations_allowed'])
+            with self.connect() as conn:
+                row=conn.execute('''SELECT restrictions_enc,consent_version,consented_at,
+                    revoked_at FROM food_allergy_preferences WHERE chat_id=%s''',
+                    (self.chat,)).fetchone()
+            self.assertIsNone(row[0]);self.assertIsNone(row[1])
+            self.assertIsNone(row[2]);self.assertIsNotNone(row[3])
+            self.assertEqual(self.snapshot_history(),before)
+
+    def test_tz4_food_allergy_capture_in_onboarding_is_atomic(self):
+        from cryptography.fernet import Fernet
+        with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
+             patch.object(self.m,'FORMIQ_HEALTH_ENCRYPTION_KEY',
+                          Fernet.generate_key().decode('ascii')):
+            body=self.body()
+            body['food_allergies']={'choice':'declared',
+                 'items':[{'name':'Яйца','kind':'allergy'}],
+                 'consent':True,'consent_version':self.m.FOOD_ALLERGY_CONSENT_VERSION}
+            self.m.save_onboarding(self.chat,body)
+            self.assertEqual(self.m.food_allergy_state(self.chat)['items'][0]['canonical'],'egg')
+            with self.assertRaises(ValueError):
+                invalid=self.body()
+                invalid['food_allergies']={**body['food_allergies'],
+                                          'consent_version':'obsolete'}
+                self.m.save_onboarding(self.chat,invalid)
+            self.assertEqual(self.m.food_allergy_state(self.chat)['choice'],'declared')
+
     def test_initial_onboarding_persists_four_weeks_before_first_state_read(self):
         # The first save must produce a durable calendar even if the next
         # network request fails; no lazy creation in state/get_cycle required.
