@@ -753,13 +753,13 @@ function food(){
  const totalContent=totals?(totals.complete?
    '<p role="status"><strong>КБЖУ за день: '+nutritionLine(totals.totals)+'</strong></p>':
    '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+esc(totals.total_items)+' продуктов.</strong>'+
-   (totals.known_subtotal?' Сумма только проверенных: '+nutritionLine(totals.known_subtotal)+'.':' Нет подтверждённой пищевой ценности.')+'</p>'):'';
+   (totals.known_subtotal?' Сумма известных значений: '+nutritionLine(totals.known_subtotal)+'.':' Нет известных значений КБЖУ.')+'</p>'):'';
  const canRecheck=state?.food_catalog_available&&saved.some(m=>m.items.some(x=>x.nutrition_source==='fatsecret'));
  const nutritionButton=canRecheck?
     button(foodDailyBusy?'Обновляем КБЖУ…':'Обновить КБЖУ','food-nutrition-day',false,foodDailyBusy?'disabled':''):'';
  const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
   '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
-  'Сохраняем только введённые продукты и вес. Калории и БЖУ не подставляем без достоверного источника.</p>'+
+  'КБЖУ — из выбранного FatSecret или указанные тобой вручную. Без источника значения не подставляем.</p>'+
   (foodLoading?'<p role="status">Загружаем записи…</p>':'')+
   dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+
   nutritionButton+(foodDailyError?'<p role="alert" class="input-note">'+esc(foodDailyError)+'</p>':'')+totalContent+'</section>';
@@ -902,6 +902,10 @@ function modalHTML(){
    '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
    '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
    (state?.food_catalog_available?button('Найти в FatSecret','food-catalog-open'):'')+
+   '<details class="fq-food-manual"'+(foodEdit.nutrition_100g?' open':'')+'><summary>КБЖУ вручную на 100 г</summary>'+
+   '<div class="fq-food-manual-grid">'+[['kcal','Ккал'],['protein_g','Белки'],['fat_g','Жиры'],['carbs_g','Углеводы']].map(([key,label])=>
+    '<label class="field"><span>'+label+'</span><input id="food-edit-'+key+'" type="number" min="0" step="0.01" value="'+esc(foodEdit.nutrition_100g?.[key]??'')+'"></label>').join('')+'</div>'+
+   '<p class="input-note">Значения пользователя, не проверены каталогом. Все четыре поля либо заполнены, либо пустые.</p></details>'+
    button('Сохранить','food-edit-save',true)+button('Удалить продукт','food-delete-open')+button('Отмена','close');
  }
  if(modal==='food-catalog'&&foodEdit){
@@ -1207,7 +1211,9 @@ app.addEventListener('click',async e=>{
   syncFoodDraft();
   if(!foodDraft.length){fail('Добавь продукт и граммовку');return}
   try{
-   const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items:foodDraft});
+   const items=foodDraft.map(row=>{const nutrition=userMacrosFromInputs(key=>row[key]);return {
+    name:row.name,grams:row.grams,...(nutrition?{nutrition_100g:nutrition}:{})};});
+   const result=await request('food_add',{date:foodDate,meal_type:foodMeal,items});
    foodHistory=result;foodDraft=[];foodUnparsed=[];foodText='';void requestFoodDaily();
    foodNotice='Приём пищи сохранён в дневнике.';error='';
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
@@ -1362,7 +1368,8 @@ app.addEventListener('click',async e=>{
   try{
    foodEdit.name=document.getElementById('food-edit-name')?.value??foodEdit.name;
    foodEdit.grams=document.getElementById('food-edit-grams')?.value??foodEdit.grams;
-   const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams});
+   const nutrition=userMacrosFromInputs(key=>document.getElementById('food-edit-'+key)?.value);
+   const result=await request('food_update',{id:foodEdit.id,name:foodEdit.name,grams:foodEdit.grams,nutrition_100g:nutrition});
    foodHistory=result;delete catalogRecent[foodEdit.id];foodNotice='Продукт изменён.';modal='';foodEdit=null;error='';void requestFoodDaily();
   }catch(ex){error=ex.message||'Ошибка изменения продукта'}
   draw();return;
