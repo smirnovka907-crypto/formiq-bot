@@ -1079,31 +1079,6 @@ app.addEventListener('click',async e=>{
  if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
    if(cmd==='onboard-open'){onboardOpen=true;initOnboard();error='';draw();window.scrollTo(0,0);return}
  if(cmd==='onboard-cancel'){onboardOpen=false;onboard=null;error='';draw();return}
- if(cmd==='onboard-ai'||cmd==='onboard-ai-clarify'){
-  if(!onboard?.profileAiConsent){fail('Разреши Yandex AI в анкете, затем нажми «Разобрать описание».');return}
-  if(!onboard.privacy||!(Number(onboard.age)>=18)){fail('Для разбора нужны возраст 18+ и ознакомление с политикой конфиденциальности.');return}
-  const original=String(onboard.description||'').trim();
-  const extra=cmd==='onboard-ai-clarify'?String(onboard.clarification||'').trim():'';
-  if(cmd==='onboard-ai-clarify'&&extra.length<2){fail('Ответь на уточняющий вопрос Yandex AI.');return}
-  const txt=extra?original+'\nДополнительное пояснение пользователя: '+extra:original;
-  if(txt.length<8||txt.length>800){fail('Опиши ограничения от 8 до 800 символов.');return}
-  const analyzedForm=onboard;
-  const result=await send('health_analyze',{adult:true,age:Number(onboard.age),privacy_ack:true,ai_consent:true,onboarding_preview:true,text:txt});
-  if(result?.analysis){
-   if(onboard!==analyzedForm||String(onboard.description||'').trim()!==original||
-      (cmd==='onboard-ai-clarify'&&String(onboard.clarification||'').trim()!==extra)||
-      !onboard.profileAiConsent||Number(onboard.age)<18||!onboard.privacy){
-    fail('Описание или согласия изменились во время анализа. Проверь их и запусти разбор заново.');return;
-   }
-   const a=result.analysis;onboard.limitation='yes';
-   onboard.areas=Array.isArray(a.affected)?a.affected.filter(k=>onboardRegions.some(([id])=>id===k)):[];
-   onboard.pain=Number.isInteger(a.pain_score)?String(a.pain_score):'0';
-   onboard.course=['stable','recent','worsening'].includes(a.symptom_course)?a.symptom_course:'';
-   onboard.danger=a.danger_signs===true;onboard.cleared=false;
-   onboard.aiResult=a;onboard.aiReviewed=false;onboard.clarification='';draw();
-  }return;
- }
- if(cmd==='onboard-ai-apply'){if(onboard?.aiResult){onboard.aiReviewed=true;error='';draw()}return}
  if(cmd==='tier-select'){
   if(!state?.tier_demo){fail('Оплата пока не подключена.');return}
   const tier=element.dataset.tier;
