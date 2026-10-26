@@ -106,6 +106,17 @@ function onboardBirthInput(){
    (!onboard.birth_date&&state?.metrics?.age?'<small class="input-note">Ранее сохранён только возраст — дата рождения пока неизвестна.</small>':'')+
    onboardError('birth_date')+'</label>';
 }
+function connectionSyncDate(instant){
+ const when=new Date(instant);
+ if(!Number.isFinite(when.getTime()))return '';
+ try{
+  return new Intl.DateTimeFormat('ru-RU',{timeZone:state?.metrics?.timezone||'UTC',
+   day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(when);
+ }catch(_ex){
+  return new Intl.DateTimeFormat('ru-RU',{timeZone:'UTC',
+   day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(when)+' UTC';
+ }
+}
 function connectionsPanel(){
  if(view!=='profile'||!state?.agreed)return '';
  const service=(id,name,brand)=>{
@@ -114,7 +125,7 @@ function connectionsPanel(){
    connected&&(available||id==='garmin')?'Подключён':
    available?'Не подключён':'Временно недоступен';
   const sync=r?.last_sync_at&&/^\\d{4}-\\d{2}-\\d{2}T/.test(r.last_sync_at)?
-   '<small>Последняя успешная синхронизация: '+esc(r.last_sync_at.slice(0,16).replace('T',' '))+' UTC</small>':
+   '<small>Последняя успешная синхронизация: '+esc(connectionSyncDate(r.last_sync_at))+'</small>':
    '<small>Успешная синхронизация пока не зарегистрирована</small>';
   let actions='';
   if(id==='fatsecret'&&available&&!connected)
@@ -128,7 +139,7 @@ function connectionsPanel(){
    (connected?sync:'')+notes+'</div><div class="fq-connection-actions">'+actions+'</div></div>';
  };
  return '<section class="surface" id="profile-connections"><h2>Подключения</h2>'+
-  '<p class="input-note">Подключаем только официальные сервисы с твоего разрешения. Отображаются только реальные подключения.</p>'+
+  '<p class="input-note">Показываем реальные статусы. Авторизация доступна только через официальные сервисы.</p>'+
   service('fatsecret','FatSecret','fatsecret')+service('garmin','Garmin Connect','GARMIN')+
   (fatsecretAuthUrl?'<p><a href="'+esc(fatsecretAuthUrl)+'" rel="noopener noreferrer" target="_blank">Продолжить подключение на FatSecret</a></p>':'')+
   (connectionsError?'<p role="alert" class="input-note">'+esc(connectionsError)+'</p>':'')+
@@ -970,12 +981,9 @@ function food(){
  const fsSection=state?.fatsecret_diary_configured&&fatsecretAccount?.connected?'<section class="surface">'+
   '<h2>Личный дневник FatSecret</h2>'+
   '<p class="input-note">Записи загружаются из FatSecret и не копируются в ручной дневник.</p>'+
-  (fatsecretAccount?.connected?
-   '<p class="input-note">Аккаунт подключён'+(fatsecretAccount.last_sync_at?' · проверка: '+esc(fatsecretAccount.last_sync_at.slice(0,16).replace('T',' ')):'')+'</p>'+
-   button(fatsecretBusy?'Загружаем…':'Посмотреть день из FatSecret','fatsecret-diary-day',false,fatsecretBusy?'disabled':'')+
-   button('Отключить FatSecret','fatsecret-disconnect-open'):
-   button(fatsecretBusy?'Подключаем…':'Подключить FatSecret','fatsecret-connect',false,fatsecretBusy?'disabled':'')+
-   (fatsecretAuthUrl?'<p><a href="'+esc(fatsecretAuthUrl)+'" rel="noopener noreferrer" target="_blank">Открыть разрешение FatSecret</a></p>':''))+
+  '<p class="input-note">Аккаунт подключён'+
+  (fatsecretAccount.last_sync_at?' · последняя проверка: '+esc(fatsecretAccount.last_sync_at.slice(0,16).replace('T',' ')):'')+'</p>'+
+  button(fatsecretBusy?'Загружаем…':'Посмотреть день из FatSecret','fatsecret-diary-day',false,fatsecretBusy?'disabled':'')+
   (fatsecretError?'<p role="alert" class="input-note">'+esc(fatsecretError)+'</p>':'')+
   (fsEntries?
    (fsTotals?'<p><strong>'+esc(fsTotals.calories_kcal)+' ккал · Б '+esc(fsTotals.protein_g)+
