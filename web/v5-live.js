@@ -465,9 +465,9 @@ function workout(){
  let content='';
  if(!c){
   content='<section class="surface workout-entry"><span class="eyebrow">ТРЕНИРОВКА ЗАВЕРШЕНА</span>'+
-    '<h2 class="workout-exercise" style="font-size:25px">Все подходы обработаны</h2>'+
+    '<h2 class="workout-exercise" style="font-size:25px">'+(done?'Подходы обработаны':'Подходы не выполнены')+'</h2>'+
     '<p class="input-note">Сохрани результаты в истории тренировок.</p>'+
-    button('Завершить тренировку','finish-confirm',true)+'</section>';
+    button('Завершить тренировку','finish-confirm',true)+button('Пропустить тренировку','skip-workout-confirm')+'</section>';
  }else if(restUntil>Date.now()&&restFor===nextKey()){
   const seconds=Math.ceil((restUntil-Date.now())/1000);
   content='<section class="surface rest-panel"><span class="eyebrow">ОТДЫХ ПО ПРОГРАММЕ · '+
@@ -497,7 +497,7 @@ function workout(){
    '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
   '</section>':'';
  const footer=c?'<div class="fq-live-actions workout-secondary-actions" role="group" aria-label="Управление тренировкой" style="margin-top:14px">'+
-  button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
+  button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+button('Пропустить тренировку','skip-workout-confirm')+'</div>':'';
  return h()+summary+content+footer+overview;
 }
 function training(){
@@ -1169,7 +1169,8 @@ function modalHTML(){
  if(modal==='mood')content=state?.metrics?.sex==='female'?
   `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет Yandex AI при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
   `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
- if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>${Number(state?.workout?.done||0)===0?'Ни один подход не выполнен. Запишем завершение без результатов.':'Фактические подходы сохранятся, остальные будут пропущены.'}</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='skip-workout')content=`<h2>Пропустить тренировку?</h2><p>Запишем пропуск отдельно от выполненных тренировок. Прогресс не удалится.</p>${button('Пропустить тренировку','skip-workout',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
  if(modal==='history'){
   const rows=allRows.map(historyRow).join('');
@@ -1721,8 +1722,10 @@ app.addEventListener('click',async e=>{
  }
  if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
+ if(cmd==='skip-workout-confirm'){modal='skip-workout';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
  if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='skip-workout'){modal='';const response=await send('skip_workout');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();progressSeries=null;loadProgressSeries()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
