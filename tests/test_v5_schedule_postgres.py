@@ -129,6 +129,23 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIn('Другое',result['plan_warning'])
         self.assertIsNotNone(result['cycle_start'])
 
+    def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
+        self.m.save_onboarding(self.chat,self.body())
+        raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','text':raw})
+        self.assertEqual(len(saved['meals'][0]['items']),3)
+        self.assertEqual(saved['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(len(saved['unparsed']),1)
+        self.assertTrue(all(item['nutrition_source'] is None
+            for item in saved['meals'][0]['items']))
+        self.assertEqual(self.m.food_history(self.chat+1,
+            {'date':'2026-10-18'})['unparsed_texts'],[])
+        unknown=self.m.food_add_text(self.chat,{'date':'2026-10-19',
+            'meal_type':'snack','text':'стакан молока'})
+        self.assertEqual(unknown['meals'][0]['items'],[])
+        self.assertEqual(unknown['unparsed_texts'][0]['text'],'стакан молока')
+
     def test_manual_food_parse_history_edits_and_owner_isolation(self):
         parsed=self.m.food_parse({'text':'овсянка 70 грамм, творог 5% 200 грамм, яблоко'})
         self.assertEqual([(x['name'],x['grams']) for x in parsed['items']],
