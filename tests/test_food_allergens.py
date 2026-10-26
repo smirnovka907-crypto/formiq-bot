@@ -48,6 +48,12 @@ class AllergenDictionaryTests(unittest.TestCase):
         product=evidence(['вода','рис'],traces=['Может содержать следы яйца'])
         self.assertEqual(evaluate_composition(product,self.egg,
             trusted_server_source=True)['status'],'excluded')
+        self.assertEqual(evaluate_composition(
+            evidence(['вода','яичный порошок'],complete=False),self.egg,
+            trusted_server_source=True)['status'],'excluded')
+        self.assertEqual(evaluate_composition(
+            evidence(['вода'],traces=['Может содержать яйца'],complete=False),
+            self.egg,trusted_server_source=True)['status'],'excluded')
 
     def test_stale_incomplete_and_unknown_composition_are_not_cleared(self):
         candidates=[
