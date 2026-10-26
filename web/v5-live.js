@@ -273,12 +273,18 @@ function restoreRestTimer(){
  storeRestTimer();
 }
 function updateViewportPosition(){
- const activeInput=document.activeElement;
- if(!activeInput||!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(activeInput.id))return;
- const card=activeInput.closest?.('.surface');
- if(!card)return;
- const delta=card.getBoundingClientRect().top-(window.visualViewport?.offsetTop||0)-12;
- if(Math.abs(delta)>15)window.scrollBy({top:delta,behavior:'instant'});
+ const field=document.activeElement;
+ if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
+ const viewport=window.visualViewport;
+ const safeTop=parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fq-content-safe-top'))||0;
+ const top=(viewport?.offsetTop||0)+Math.min(safeTop+12,130);
+ const bottom=(viewport?.offsetTop||0)+(viewport?.height||window.innerHeight)-18;
+ const rect=field.getBoundingClientRect();
+ const delta=rect.bottom>bottom?rect.bottom-bottom:rect.top<top?rect.top-top:0;
+ if(Math.abs(delta)<4)return;
+ const dialog=field.closest('.fq-live-dialog');
+ if(dialog)dialog.scrollTop+=delta;
+ else window.scrollBy({top:delta,behavior:'auto'});
 }
 async function request(action,more={}){
  if(!token)throw Error('Открой FORMIQ через Telegram.');
@@ -459,14 +465,13 @@ async function loadHistoryPage(){
 }
 function history(){
  return '<section class="surface" id="history-root">'+
- '<div class="heading-row"><h2 style="margin:0;font-size:20px">История тренировок</h2>'+
- button('По датам','calendar',false,'aria-expanded="'+calendarOpen+'" aria-controls="history-calendar-grid"')+
- '</div>'+(calendarOpen?calendar():'')+
- (date?'<div class="date-filter-summary"><strong>Дата: '+prettyDate(date)+'</strong>'+
- button('Сбросить','reset-date')+'</div>':'')+
- '<div class="cardio-history">'+(filtered().slice(0,3).map(historyRow).join('')||
- '<p class="empty">За эту дату записей нет.</p>')+'</div>'+
- '<div style="margin-top:13px">'+button('Вся история →','history-all')+'</div></section>';
+  '<div class="heading-row"><h2 style="margin:0;font-size:20px">История тренировок</h2>'+
+  '<div class="fq-history-controls">'+button('По датам','calendar',false,'aria-expanded="'+calendarOpen+'" aria-controls="history-calendar-grid"')+
+  (date?button('Сбросить','reset-date'):'')+'</div></div>'+
+  (calendarOpen?calendar():'')+(date?'<p class="input-note">Дата: '+prettyDate(date)+'</p>':'')+
+  '<div class="cardio-history">'+(filtered().slice(0,3).map(historyRow).join('')||
+  '<p class="empty">За эту дату записей нет.</p>')+'</div>'+
+  '<div style="margin-top:13px">'+button('Вся история →','history-all')+'</div></section>';
 }
 function periodLabel(n){
  const start=state?.cycle_start;
@@ -806,6 +811,7 @@ function previewPanel(){
  if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
  if(!p)return '<h2>Просмотр недоступен</h2>';
  const unit=x=>x.unit==='min'?'мин':x.unit==='sec'?'сек':'повт.';
+ if(p.finished&&p.actual)return '<h2>Выполненная тренировка</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
  return '<h2>'+esc(p.name)+'</h2><p class="subtitle">'+esc(prettyDate(p.date))+
   ' · '+esc(p.duration_minutes)+' мин · неделя '+esc(p.week)+'</p>'+
   '<div class="fq-live-row"><span>Разминка</span><strong>'+esc(p.warmup_minutes)+' мин</strong></div>'+
@@ -850,6 +856,14 @@ function exerciseCardPanel(){
    '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
    (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
    button('Вернуться к тренировке','exercise-back',true);
+}
+function actualWorkoutPanel(row){
+ if(!row)return '<p class="empty">Результат не найден.</p>';
+ const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':'Силовая'].filter(Boolean).join(' · ');
+ return '<h2>'+esc(row.title||'Завершённая тренировка')+'</h2><p class="subtitle">'+esc(summary)+'</p>'+
+  (row.result?'<p class="input-note">Результат: '+esc(row.result)+'</p>':'')+
+  (row.items||[]).map(x=>'<div class="fq-live-row"><span>'+esc(x.name)+'</span><strong>'+esc(x.result)+'</strong></div>').join('')+
+  (!(row.items||[]).length?'<p class="empty">Записанных подходов нет.</p>':'');
 }
 function modalHTML(){
  if(!modal)return '';
@@ -935,7 +949,7 @@ function modalHTML(){
      '<div class="cardio-history">'+body+'</div></div>'+
    (nextOffset!==null?button('Загрузить ещё','history-more'):'');
  }
- if(modal==='detail')content=`<div class="fq-live-topline"><h2>${esc(detail?.title)}</h2>${button('Закрыть','close')}</div><p>${esc(detail?.date)}</p>${(detail?.items||[]).map(x=>`<div class="fq-live-row"><span>${esc(x.name)}</span><strong>${esc(x.result)}</strong></div>`).join('')}`;
+ if(modal==='detail')content=actualWorkoutPanel(detail)+button(detailOrigin==='history'?'К истории':'Закрыть',detailOrigin==='history'?'detail-back':'close',true);
  return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
@@ -964,15 +978,16 @@ app.addEventListener('change',e=>{
  onboardChanged(e);
 });
 app.addEventListener('focusin',e=>{
- if(!['reps','weight','cardio-min','cardio-hr','profile-age','profile-height_cm','profile-weight_kg'].includes(e.target.id))return;
- if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.add('cardio-typing');
- const field=e.target,card=e.target.closest('.surface');
- if(!card)return;
+ const field=e.target;
+ if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
+ document.body.classList.add('fq-typing');
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
- shift();setTimeout(shift,130);setTimeout(shift,320);
+ shift();setTimeout(shift,180);setTimeout(shift,430);
 });
 app.addEventListener('focusout',e=>{
- if(['cardio-min','cardio-hr'].includes(e.target.id))document.body?.classList?.remove('cardio-typing');
+ if(e.target?.matches?.('input,textarea,select,[contenteditable="true"]')){
+  setTimeout(()=>{if(!document.activeElement?.matches?.('input,textarea,select,[contenteditable="true"]'))document.body.classList.remove('fq-typing')},60);
+ }
 });
 window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
@@ -1450,7 +1465,8 @@ app.addEventListener('click',async e=>{
  if(cmd==='reset-date'){date='';dayRows=null;calendarOpen=false;partialHistory();return}
  if(cmd==='history-all'){modal='history';allRows=[];nextOffset=0;draw();await loadHistoryPage();return}
  if(cmd==='history-more'){await loadHistoryPage();return}
- if(cmd==='detail'){const id=Number(element.dataset.id);if(!Number.isSafeInteger(id))return;const result=await send('detail',{id});if(result){detail=result.detail;modal='detail';draw()}return}
+ if(cmd==='detail-back'){modal='history';detail=null;draw();return}
+ if(cmd==='detail'){const id=Number(element.dataset.id);if(!Number.isSafeInteger(id)||id===0)return;detailOrigin=modal==='history'?'history':'';const result=await send('detail',{id});if(result){detail=result.detail;modal='detail';draw()}return}
 });
 setInterval(()=>{const element=document.getElementById('rest-count');if(!element)return;const seconds=Math.max(0,Math.ceil((restUntil-Date.now())/1000));if(!seconds){restUntil=0;restFor='';storeRestTimer();draw();return}element.textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`},500);
 // Telegram's system safe area and its fullscreen content-controls area are
