@@ -497,7 +497,7 @@ function workout(){
    '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
   '</section>':'';
  const footer=c?'<div class="fq-live-actions workout-secondary-actions" role="group" aria-label="Управление тренировкой" style="margin-top:14px">'+
-  button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+button('Пропустить тренировку','skip-workout-confirm')+'</div>':'';
+  button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+(done===0?button('Пропустить тренировку','skip-workout-confirm'):'')+'</div>':'';
  return h()+summary+content+footer+overview;
 }
 function training(){
