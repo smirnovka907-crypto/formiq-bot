@@ -1006,7 +1006,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||(!rawNotes?'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>':''))+rawNotes+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function exerciseThumb(x){
