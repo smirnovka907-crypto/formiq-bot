@@ -805,6 +805,13 @@ function food(){
   '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
+function exerciseThumb(x){
+ const url=String(x?.image_url||'');
+ const approved=/^https:\/\/raw\.githubusercontent\.com\/yuhonas\/free-exercise-db\/main\/exercises\/[A-Za-z0-9_-]+\/[01]\.jpg$/i.test(url)&&
+  x.image_license_url==='https://creativecommons.org/licenses/by-sa/4.0/';
+ return approved?'<img class="fq-exercise-thumb" src="'+esc(url)+'" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="Фото упражнения: '+esc(x.name)+'">':
+  '<span class="fq-exercise-fallback" aria-hidden="true">◎</span>';
+}
 function previewPanel(){
  const p=trainingPreview;
  if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
@@ -818,7 +825,7 @@ function previewPanel(){
   '<p class="input-note">'+esc(p.cardio_note||'')+'</p>'+
   (p.warning?'<p role="alert" class="fq-form-error">'+esc(p.warning)+'</p>':'')+
   (p.recovery_advice?'<p class="input-note" role="status">'+esc(p.recovery_advice)+'</p>':'')+
-  (p.exercises||[]).map((x,i)=>'<button type="button" data-cmd="exercise-card" data-index="'+i+'" class="fq-preview-exercise"><span class="fq-exercise-fallback" aria-hidden="true">◎</span><span><strong>'+
+  (p.exercises||[]).map((x,i)=>'<button type="button" data-cmd="exercise-card" data-index="'+i+'" class="fq-preview-exercise">'+exerciseThumb(x)+'<span><strong>'+
    esc(x.name)+'</strong><small>'+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
    ' '+unit(x)+(x.weight_kg!=null?' · последний рабочий вес '+esc(x.weight_kg)+' кг':' · вес не задан')+
    '</small></span><span>›</span></button>').join('')+
@@ -852,16 +859,18 @@ function exerciseCardPanel(){
    (x.mistakes?'<h3>Частые ошибки</h3><p>'+esc(x.mistakes)+'</p>':'')+
    (alternatives.length?'<h3>Доступные замены</h3><p>'+esc(alternatives.map(y=>y.name).join(', '))+'</p>':'')+
    '<p class="input-note">При боли прекрати упражнение. Нагрузку и амплитуду подбирай с учётом самочувствия.</p>'+
+   (x.result?'<p class="input-note">Фактически: '+esc(x.result)+'</p>':
    '<p class="input-note">По плану: '+esc(x.sets)+' × '+esc(x.low)+(x.high!==x.low?'–'+esc(x.high):'')+
-   (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>'+
-   button('Вернуться к тренировке','exercise-back',true);
+   (x.weight_kg!=null?' · '+esc(x.weight_kg)+' кг (прошлый результат)':' · вес не задан')+'</p>')+
+   button(exerciseOrigin==='history'||exerciseOrigin==='finished-preview'?'Вернуться к результатам':'Вернуться к тренировке','exercise-back',true);
 }
 function actualWorkoutPanel(row){
  if(!row)return '<p class="empty">Результат не найден.</p>';
  const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':'Силовая'].filter(Boolean).join(' · ');
  return '<h2>'+esc(row.title||'Завершённая тренировка')+'</h2><p class="subtitle">'+esc(summary)+'</p>'+
   (row.result?'<p class="input-note">Результат: '+esc(row.result)+'</p>':'')+
-  (row.items||[]).map(x=>'<div class="fq-live-row"><span>'+esc(x.name)+'</span><strong>'+esc(x.result)+'</strong></div>').join('')+
+  (row.items||[]).map((x,i)=>x.key?'<button type="button" class="fq-preview-exercise" data-cmd="exercise-history" data-index="'+i+'">'+exerciseThumb(x)+'<span><strong>'+esc(x.name)+'</strong><small>'+esc(x.result)+'</small></span><span>›</span></button>':
+    '<div class="fq-live-row"><span>'+esc(x.name)+'</span><strong>'+esc(x.result)+'</strong></div>').join('')+
   (!(row.items||[]).length?'<p class="empty">Записанных подходов нет.</p>':'');
 }
 function modalHTML(){
@@ -1371,7 +1380,13 @@ app.addEventListener('click',async e=>{
   exerciseDetails=trainingPreview?.exercises?.[index]||null;
   if(exerciseDetails){exerciseOrigin='preview';modal='exercise-card';draw()}return;
  }
- if(cmd==='exercise-back'){modal=exerciseOrigin==='live'?'':'training-preview';draw();return}
+ if(cmd==='exercise-history'){
+  const index=Number(element.dataset.index);
+  const items=modal==='detail'?detail?.items:trainingPreview?.actual?.items;
+  if(!Number.isInteger(index)||index<0||!items?.[index]?.key)return;
+  exerciseDetails=items[index];exerciseOrigin=modal==='detail'?'history':'finished-preview';modal='exercise-card';draw();return;
+ }
+ if(cmd==='exercise-back'){modal=exerciseOrigin==='live'?'':exerciseOrigin==='history'?'detail':'training-preview';draw();return}
  if(cmd==='preview-start'){
   if(!trainingPreview?.can_start)return;
   modal='mood';draw();return;
