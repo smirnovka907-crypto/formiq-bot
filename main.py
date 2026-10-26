@@ -3606,6 +3606,35 @@ def fatsecret_user_status(chat):
         'last_sync_at':link[1].isoformat() if link and link[1] else None}
 
 
+def integrations_status(chat):
+    """Private, read-only integration state. Do not expose IDs or OAuth secrets.
+
+    Garmin integration receives data only after a provider-authorized identity;
+    there is no public user OAuth entry point to offer for Garmin yet.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    with db() as conn:
+        fs=conn.execute("""SELECT last_sync_at
+            FROM fatsecret_user_connections WHERE chat_id=%s""",(chat,)).fetchone()
+        garmin=conn.execute("""SELECT last_sync_at
+            FROM garmin_authorized_identities
+            WHERE chat_id=%s AND health_consent_at IS NOT NULL
+                AND disconnected_at IS NULL""",(chat,)).fetchone()
+    return {
+        'fatsecret':{
+            'available':fatsecret_user_oauth_ready(),
+            'connected':fs is not None,
+            'last_sync_at':fs[0].isoformat() if fs and fs[0] else None,
+        },
+        'garmin':{
+            'available':False,  # Official OAuth onboarding is not configured.
+            'connected':garmin is not None,
+            'last_sync_at':garmin[0].isoformat() if garmin and garmin[0] else None,
+        },
+    }
+
+
 def fatsecret_user_start(chat):
     """One explicit opt-in per owner; never take a FatSecret password."""
     if not has_agreement(chat):
@@ -6003,6 +6032,8 @@ def mini_api():
             payload = {'ok':True, **garmin_connected_day(chat,data)}
         elif action == 'garmin_disconnect':
             payload = {'ok':True, **garmin_disconnect_owner(chat)}
+        elif action == 'integrations_status':
+            payload = {'ok':True, **integrations_status(chat)}
         elif action == 'fatsecret_account_status':
             payload = {'ok':True, **fatsecret_user_status(chat)}
         elif action == 'fatsecret_account_connect':
