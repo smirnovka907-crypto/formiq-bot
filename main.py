@@ -3373,6 +3373,9 @@ def save_onboarding(chat,body):
     if raw_note and (body.get('health_storage_consent') is not True or body.get('privacy') is not True):
         raise ValueError('Подтверди сохранение описания здоровья через принятие политики конфиденциальности')
     pending_food_allergies=body.get('food_allergies')
+    revoke_food_allergies=body.get('food_allergies_revoke',False)
+    if type(revoke_food_allergies) is not bool or (revoke_food_allergies and pending_food_allergies is not None):
+        raise ValueError('Проверь действие с пищевыми ограничениями')
     if pending_food_allergies is not None:
         if not food_allergy_ready():
             raise ValueError('Сохранение пищевых ограничений пока недоступно')
@@ -3385,6 +3388,13 @@ def save_onboarding(chat,body):
         c.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         if pending_food_allergies is not None:
             food_allergy_write_in(c,chat,pending_food_allergies)
+        elif revoke_food_allergies:
+            c.execute("""INSERT INTO food_allergy_preferences
+               (chat_id,choice,restrictions_enc,consent_version,consented_at,revoked_at)
+               VALUES(%s,'unknown',NULL,NULL,NULL,NOW())
+               ON CONFLICT(chat_id) DO UPDATE SET choice='unknown',
+                 restrictions_enc=NULL,consent_version=NULL,consented_at=NULL,
+                 revoked_at=NOW(),updated_at=NOW()""",(chat,))
         previous = profile_in(c,chat)
         previous_zone = c.execute('SELECT timezone FROM profile_metrics WHERE chat_id=%s',
             (chat,)).fetchone()
