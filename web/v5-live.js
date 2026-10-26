@@ -14,6 +14,16 @@ const ready=()=>!!(state?.agreed&&state?.profile_raw?.goal&&state?.metrics?.age&
 // Server-side safety warnings prevent unsafe sessions, not access to the app.
 const weekdayNames=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 const deviceZone=()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Moscow'}catch(_e){return 'Europe/Moscow'}};
+function ageFromBirth(raw,today){
+ const birth=String(raw||'');
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(birth))return null;
+ const dateValue=new Date(birth+'T12:00:00Z');
+ if(!Number.isFinite(dateValue.getTime())||dateValue.toISOString().slice(0,10)!==birth)return null;
+ const [by,bm,bd]=birth.split('-').map(Number),[ty,tm,td]=String(today).split('-').map(Number);
+ const leap=ty%4===0&&(ty%100!==0||ty%400===0);
+ const actualDay=bm===2&&bd===29&&!leap?28:bd;
+ return ty-by-(tm<bm||(tm===bm&&td<actualDay)?1:0);
+}
 function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('en-GB',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(now);const val=k=>p.find(x=>x.type===k)?.value||'';return {hour:Number(val('hour')),date:val('year')+'-'+val('month')+'-'+val('day')}}catch(_e){return {hour:now.getHours(),date:now.toISOString().slice(0,10)}}}
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
@@ -44,7 +54,8 @@ function initOnboard(){
   weekdays:[...new Set(chosen)].sort((a,b)=>a-b),
   equipment:p.equipment==='gym'?'gym':'home',
   minutes:String(Math.max(20,Math.min(120,Math.round(oldMinutes/10)*10))),
-  age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
+  age:String(m.age??''),birth_date:String(m.birth_date||''),birthday_telegram_consent:m.birthday_telegram_consent===true,
+  height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
   equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:m.timezone||deviceZone(),timezoneConfirmed:true,
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
   aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
@@ -82,13 +93,25 @@ function onboardWeekdays(){
   '<p class="input-note" aria-live="polite">Выбрано '+onboard.weekdays.length+' дн. в неделю. Количество тренировок определяется автоматически.</p>'+
   onboardError('weekdays')+'</div>';
 }
+function onboardBirthInput(){
+ const clock=localClock().date;
+ const bounds=clock.split('-'),year=Number(bounds[0])||new Date().getFullYear();
+ const max=String(year-18)+'-'+bounds[1]+'-'+bounds[2];
+ return '<label class="field fq-birth-date"><span>Дата рождения</span>'+
+   '<input type="date" data-onboard="birth_date" min="'+(year-101)+'-01-01" max="'+max+
+   '" value="'+esc(onboard.birth_date||'')+'" autocomplete="bday" aria-label="Дата рождения: день, месяц, год">'+
+   '<small class="input-note">Нажми на год в календаре, чтобы быстро выбрать его. Дата не передаётся Yandex AI.</small>'+
+   (!onboard.birth_date&&state?.metrics?.age?'<small class="input-note">Ранее сохранён только возраст — дата рождения пока неизвестна.</small>':'')+
+   onboardError('birth_date')+'</label>';
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
  const intro='<p class="intro">Одна анкета. Все значения сохраняются без удаления истории.</p>';
  const personal='<h2 class="section-label" style="margin-top:0">Основные параметры</h2>'+
   onboardButtons('sex','Пол',[['Мужской','male'],['Женский','female']])+
-  '<div class="form-row">'+onboardInput('age','Возраст',18,100,1)+onboardInput('height_cm','Рост, см',100,240,.1)+
+  onboardBirthInput()+
+  '<div class="form-row">'+onboardInput('height_cm','Рост, см',100,240,.1)+
   onboardInput('weight_kg','Вес, кг',25,300,.1)+'</div>'+
  ''; 
  const training='<h2 class="section-label">Тренировки</h2>'+
@@ -101,6 +124,7 @@ function onboardForm(){
  '<textarea data-onboard="description" maxlength="800" rows="3" placeholder="Например: беспокоит плечо при жиме">'+esc(d.description)+'</textarea></label>'+
  onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
+  onboardCheckbox('birthday_telegram_consent','Разрешаю одно поздравление с днём рождения в Telegram. Можно отключить в профиле.')+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
   '<p class="input-note"><a href="/mini/yandex-privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность Yandex AI</a>. Согласие добровольное, его можно отозвать здесь.</p>'+
   onboardCheckbox('terms','Принимаю <a href="/mini/terms" target="_blank" rel="noopener noreferrer">условия использования</a>')+
@@ -119,6 +143,7 @@ function onboardForm(){
     '<button type="button" class="'+((key==='start'?state.tier!=='max':state.tier==='max')?'on':'')+
     '" data-cmd="tier-select" data-tier="'+key+'"'+(state.tier_demo?'':' disabled')+
     '><strong>'+name+'</strong><small>'+price+'</small></button>').join('')+'</div>'+
+  (state?.birthday?'<p class="input-note">🎁 День рождения: −10% на один период «Тренера AI» — 900 ₽ вместо 1 000 ₽. Оплата пока не подключена.</p>':'')+
   '<p class="input-note">'+(state.tier_demo?'Тестовое переключение прав без списаний.':'Оплата пока не подключена.')+'</p>'+
   '</section>':'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
@@ -130,7 +155,13 @@ function onboardingPayload(){
  if(!Array.isArray(d.weekdays)||d.weekdays.length<1)errs.weekdays='Выбери хотя бы один день недели.';
  for(const key of ['terms','privacy','health'])if(!d[key])errs[key]='Подтверди согласие.';
  const mm={};
- for(const [key,min,max,whole] of [['age',18,100,true],['height_cm',100,240,false],['weight_kg',25,300,false]]){
+ const dob=String(d.birth_date||'').trim();
+ const calculated=dob?ageFromBirth(dob,localClock().date):null;
+ if(dob&&(!Number.isInteger(calculated)||calculated<18||calculated>100))errs.birth_date='Проверь полную дату рождения (возраст 18–100 лет).';
+ if(!dob&&!state?.metrics?.age)errs.birth_date='Выбери дату рождения.';
+ if(dob&&calculated>=18&&calculated<=100){mm.birth_date=dob;mm.age=calculated}
+ else if(!dob&&state?.metrics?.age)mm.age=state.metrics.age;
+ for(const [key,min,max,whole] of [['height_cm',100,240,false],['weight_kg',25,300,false]]){
   const raw=String(d[key]??'').trim(),value=Number(raw.replace(',','.'));
   if(!raw||!Number.isFinite(value)||value<min||value>max||(whole&&!Number.isInteger(value)))errs[key]='Введи корректное значение: '+min+'–'+max+'.';
   else mm[key]=value;
@@ -166,7 +197,8 @@ function onboardingPayload(){
  const timezone=d.timezone||deviceZone();
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
-  metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
+  metrics:{...mm,sex:d.sex},birthday_telegram_consent:!!d.birthday_telegram_consent,
+  timezone,timezone_confirmed:true,
   health_description:description,health_storage_consent:!!description&&d.privacy,
   ai_profile_consent:!!d.profileAiConsent,ai_health_consent:!!d.profileAiConsent,ai_cycle_consent:!!(d.profileAiConsent&&d.sex==='female'),
   unified_ai_consent:!!d.profileAiConsent,
@@ -409,8 +441,11 @@ function training(){
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
  const trainingCoach='';
+ const birthday=state?.birthday?.show_congratulations?
+  '<section class="surface" role="status"><h2>🎉 С днём рождения!</h2><p>Твоя форма — твои достижения. Желаем здоровья и сил для новых целей!</p>'+
+  '<p>🎁 Скидка 10% на один период «Тренера AI»: 900 ₽ вместо 1 000 ₽. Оплата пока не подключена.</p></section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
-  '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
+  '<p class="intro">'+esc(message)+'</p>'+birthday+'<section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
   (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
