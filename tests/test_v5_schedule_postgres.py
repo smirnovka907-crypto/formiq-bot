@@ -199,6 +199,25 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertIsNotNone(row[2])
             self.assertEqual(self.snapshot_history(),before)
 
+    def test_tz4_conflicting_opt_out_flags_rejected_without_mutation(self):
+        from cryptography.fernet import Fernet
+        with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
+             patch.object(self.m,'FORMIQ_HEALTH_ENCRYPTION_KEY',
+                          Fernet.generate_key().decode('ascii')):
+            first=self.body()
+            first['food_allergies']={'choice':'declared','items':[
+                {'name':'Яйца','kind':'allergy'}],
+                'consent':True,'consent_version':self.m.FOOD_ALLERGY_CONSENT_VERSION}
+            self.m.save_onboarding(self.chat,first)
+            before=self.snapshot_history()
+            conflicting=self.body()
+            conflicting['food_allergies_declined']=True
+            conflicting['food_allergies_revoke']=True
+            with self.assertRaisesRegex(ValueError,'пищевыми ограничениями'):
+                self.m.save_onboarding(self.chat,conflicting)
+            self.assertEqual(self.m.food_allergy_state(self.chat)['choice'],'declared')
+            self.assertEqual(self.snapshot_history(),before)
+
     def test_tz4_food_allergy_capture_in_onboarding_is_atomic(self):
         from cryptography.fernet import Fernet
         with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',True), \
