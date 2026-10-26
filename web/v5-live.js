@@ -753,8 +753,7 @@ function food(){
     (totals.meals.find(x=>x.type===meal.type).complete?'КБЖУ: ':'Учтённые продукты: ')+
     nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
   meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
-  '<button type="button" class="button-subtle" data-cmd="food-edit" data-id="'+row.id+'">Изменить</button>'+
-  '<button type="button" class="button-subtle" data-cmd="food-delete" data-id="'+row.id+'">Удалить</button></div>').join('')+'</section>').join('');
+  '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
   '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
   button('Убрать строку','food-draft-remove',false,'data-index="'+i+'"')+'</div>').join('');
@@ -873,7 +872,7 @@ function modalHTML(){
    '<label class="field"><span>Название</span><input type="text" id="food-edit-name" maxlength="120" value="'+esc(foodEdit.name)+'"></label>'+
    '<label class="field"><span>Вес, г</span><input type="number" id="food-edit-grams" min="0.1" max="5000" step="0.1" value="'+esc(foodEdit.grams)+'"></label>'+
    (state?.food_catalog_available?button('Найти в FatSecret','food-catalog-open'):'')+
-   button('Сохранить изменения','food-edit-save',true)+button('Отмена','close');
+   button('Сохранить','food-edit-save',true)+button('Удалить продукт','food-delete-open')+button('Отмена','close');
  }
  if(modal==='food-catalog'&&foodEdit){
   const cards=catalogCandidates.map(candidate=>{
@@ -1206,6 +1205,7 @@ app.addEventListener('click',async e=>{
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты'}
   draw();return;
  }
+ if(cmd==='food-delete-open'&&foodEdit){modal='food-delete';draw();return}
  if(cmd==='food-edit'||cmd==='food-delete'){
   const id=Number(element.dataset.id);
   const item=(foodHistory?.meals||[]).flatMap(m=>m.items).find(row=>row.id===id);
