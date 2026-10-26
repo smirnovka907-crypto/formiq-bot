@@ -46,6 +46,16 @@ class V5StagingContract(unittest.TestCase):
         self.assertNotIn('provider_user_id',str(result))
         self.assertNotIn('access_token',str(result))
 
+    def test_tz3_fatsecret_import_rejects_changed_preview_before_db(self):
+        snapshot=({'entries':[{'external_id':'17'}]},(b'ENCRYPTED_TEST_TOKEN',b'ENCRYPTED_TEST_SECRET','test-connection'))
+        with patch.object(self.mod,'fatsecret_user_diary',return_value=snapshot), \
+             patch.object(self.mod,'db') as database:
+            with self.assertRaisesRegex(ValueError,'изменился'):
+                self.mod.fatsecret_user_import(777,{'date':'2026-10-25','expected_ids':['18']})
+            with self.assertRaisesRegex(ValueError,'Некорректный'):
+                self.mod.fatsecret_user_import(777,{'date':'2026-10-25','expected_ids':[123]})
+            database.assert_not_called()
+
     def test_tz3_profile_connections_denied_without_agreement(self):
         with patch.object(self.mod,'has_agreement',return_value=False), \
              patch.object(self.mod,'db') as database:
