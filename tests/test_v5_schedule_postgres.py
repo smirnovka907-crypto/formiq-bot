@@ -973,6 +973,42 @@ class SchedulePostgresTests(unittest.TestCase):
                     for table in ('workouts', 'workout_items', 'workout_sets',
                                   'cardio_sessions', 'pending_inputs', 'rest_timers')}
 
+    def test_tz5_zero_set_finish_skip_and_partial_progress_persist(self):
+        self.m.save_onboarding(self.chat,self.body())
+        for completed, action, expected in [
+            (False,'finish','finished_empty'),
+            (False,'skip_workout','skipped'),
+            (True,'skip_workout','finished'),
+        ]:
+            with self.connect() as conn:
+                wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                    VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+                conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                    VALUES(%s,0,'Приседание','10')""",(wid,))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit,state,actual_value)
+                    VALUES(%s,0,1,8,12,'reps',%s,%s)""",
+                    (wid,'done' if completed else 'pending',10 if completed else None))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit)
+                    VALUES(%s,0,2,8,12,'reps')""",(wid,))
+            self.assertTrue(self.m.mini_write(self.chat,action,{}))
+            with self.connect() as conn:
+                result=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()
+                states=conn.execute("""SELECT state FROM workout_sets WHERE workout_id=%s
+                    ORDER BY set_no""",(wid,)).fetchall()
+            self.assertEqual(result[0],expected)
+            self.assertEqual([row[0] for row in states],
+                             ['done' if completed else 'skipped','skipped'])
+            with self.connect() as conn:
+                self.assertIsNone(self.m.mini_current(conn,self.chat))
+            history=self.m.mini_history_page(self.chat,{'limit':30})
+            self.assertTrue(any(row['id']==wid for row in history['history']))
+            detail=self.m.mini_history_detail(self.chat,wid)
+            self.assertEqual(detail['status'],expected)
+            with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
+                self.m.mini_write(self.chat,action,{})
+
     def test_active_workout_overview_uses_saved_set_rows(self):
         rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),
                 (0, 2, 8, 12, 'reps', 'pending', 'Жим ногами', 'leg_press'),
