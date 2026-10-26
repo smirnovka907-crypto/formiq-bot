@@ -4771,7 +4771,7 @@ def mini_history_detail(chat,wid):
         return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
                 'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty,status FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
@@ -4780,7 +4780,8 @@ def mini_history_detail(chat,wid):
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
     elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
     return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
-      'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
+      'type':'workout','duration_minutes':elapsed,'result':w[4],
+      'status':w[5],'items':[
        {'name':visible_exercise_name(name),'key':key if key in EX else None,
         'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
          f' · {kg} кг' if kg is not None else ''),
@@ -4817,7 +4818,9 @@ def mini_history_page(chat, body):
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
         "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
-        "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
+        "SELECT id AS entry_id, started_at AS occurred_at, "
+        "CASE WHEN status='skipped' THEN 'workout_skipped' "
+        "WHEN status='finished_empty' THEN 'workout_empty' ELSE 'workout' END AS entry_type,"
         "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
         "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
         "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') " + filter_w +
@@ -4836,7 +4839,9 @@ def mini_history_page(chat, body):
             'id': ident,
             'date': history_local_date(timestamp, zone),
             'type': kind,
-            'title': (custom or day_title(p, day)) if kind == 'workout'
+            'title': ((('Пропущена · ' if kind=='workout_skipped' else
+                       'Без подходов · ' if kind=='workout_empty' else '')+
+                      (custom or day_title(p,day)))) if kind.startswith('workout')
                      else cardio_history_title(equipment,minutes,activity,kcal),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
