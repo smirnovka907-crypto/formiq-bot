@@ -1471,6 +1471,7 @@ app.addEventListener('click',async e=>{
   try{
    await request('garmin_disconnect');
    garminSnapshot={connected:false};garminError='';modal='';
+   if(connectionsStatus?.garmin)connectionsStatus.garmin={...connectionsStatus.garmin,connected:false,last_sync_at:null};
    if(view==='profile')void loadConnections();
   }catch(ex){garminError=ex.message||'Не удалось отключить Garmin';modal=''}
   finally{garminLoading=false;draw()}
@@ -1559,6 +1560,7 @@ app.addEventListener('click',async e=>{
    await request('fatsecret_account_disconnect');
    fatsecretAccount={connected:false,available:true};
    fatsecretAuthUrl='';fatsecretDaily=null;fatsecretError='';modal='';
+   if(connectionsStatus?.fatsecret)connectionsStatus.fatsecret={...connectionsStatus.fatsecret,connected:false,last_sync_at:null};
    if(view==='profile')void loadConnections();
   }catch(ex){fatsecretError=ex.message||'Не удалось отключить аккаунт';modal=''}
   finally{fatsecretBusy=false;draw()}
