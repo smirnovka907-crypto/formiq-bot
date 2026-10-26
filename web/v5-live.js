@@ -18,7 +18,7 @@ function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
 let onboardOpen=false,onboard=null,onboardErrors={};
-let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview';
+let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview',detailOrigin='';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
@@ -44,7 +44,7 @@ function initOnboard(){
   equipment:p.equipment==='gym'?'gym':'home',
   minutes:String(Math.max(20,Math.min(120,Math.round(oldMinutes/10)*10))),
   age:String(m.age??''),height_cm:String(m.height_cm??''),weight_kg:String(m.weight_kg??''),
-  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:deviceZone(),timezoneConfirmed:true,
+  equipment_description:state?.equipment_description||'',sex:['male','female'].includes(m.sex)?m.sex:'',timezone:m.timezone||deviceZone(),timezoneConfirmed:true,
   description:state?.health_description||'',healthStorageConsent:!!state?.health_description,
   aiConsent:false,aiResult:null,aiReviewed:false,clarification:'',
   profileAiConsent:state?.ai_personalization?.profile===true&&state?.ai_personalization?.health===true&&(m.sex!=='female'||state?.ai_personalization?.cycle===true),
@@ -95,17 +95,10 @@ function onboardForm(){
   onboardWeekdays()+onboardChoice('minutes','Продолжительность тренировки',onboardChoices.minutes)+
   onboardButtons('equipment','Место занятий',onboardChoices.equipment)+
   (d.equipment==='home'?'<label class="field"><span>Какой спортивный инвентарь у тебя есть дома?</span><textarea data-onboard="equipment_description" maxlength="400" rows="2" placeholder="Например: гантели, коврик, резинки. Если ничего нет — оставь поле пустым">'+esc(d.equipment_description)+'</textarea></label>':'');
- const health=block('<h2>Здоровье</h2>'+
-  '<label class="field"><span>Есть ли заболевания, травмы или ограничения, которые нужно учитывать при тренировках?</span>'+
-  '<textarea data-onboard="description" maxlength="800" rows="4" placeholder="Необязательно. Опиши своими словами.">'+esc(d.description)+'</textarea></label>'+
-  '<p class="input-note">Описание необязательно. При нажатии «Сохранить» оно сохраняется в приватном профиле. При симптомах или травмах уточни допустимую нагрузку у специалиста.</p>'+
-  (String(d.description).trim()?button('Уточнить с Yandex AI','onboard-ai'):'')+
-  (d.aiResult?'<div class="fq-ai-result">'+
-   (d.aiResult.needs_clarification&&d.aiResult.clarification_question?
-     '<label class="field"><span>Уточнение Yandex AI</span><textarea data-onboard="clarification" rows="2" maxlength="220" required placeholder="'+esc(d.aiResult.clarification_question)+'">'+esc(d.clarification||'')+'</textarea></label>'+
-      button('Уточнить для Yandex AI','onboard-ai-clarify'):
-      '<p class="input-note"><strong>Yandex AI выделил:</strong> '+esc((d.aiResult.affected||[]).map(x=>onboardRegions.find(([k])=>k===x)?.[1]||'Ограничение').join(', ')||'Общие ограничения')+'. '+(d.aiResult.pain_score==null?'Интенсивность боли не указана.':'Боль: '+esc(d.aiResult.pain_score)+'/10.')+'</p>'+button('Применить результат','onboard-ai-apply'))+'</div>':'')+
-  onboardError('description')+onboardError('clarification'));
+ const health=block('<h2>Здоровье и ограничения</h2>'+
+ '<label class="field"><span>Есть ли травмы, заболевания или ограничения, которые важно учитывать при тренировках?</span>'+
+ '<textarea data-onboard="description" maxlength="800" rows="3" placeholder="Например: беспокоит плечо при жиме">'+esc(d.description)+'</textarea></label>'+
+ onboardError('description'));
  const legal=block('<h2>Подтверждения</h2>'+
   onboardCheckbox('profileAiConsent','Разрешаю использовать Yandex AI для персонализации тренировок и питания с учётом предоставленных мной данных, включая описание ограничений здоровья и, для женского профиля, сведения менструального цикла')+
   '<p class="input-note"><a href="/mini/yandex-privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность Yandex AI</a>. Согласие добровольное, его можно отозвать здесь.</p>'+
@@ -121,7 +114,7 @@ function onboardForm(){
   '<p class="input-note">'+esc(state?.premium?.label||'')+
    (state?.premium?.days_left!=null?' · '+esc(state.premium.days_left)+' дн.':'')+'</p>'+
   '<div class="fq-tier-choice">'+
-   [['start','Дневник','100 ₽/мес.'],['max','Тренер AI','1 000 ₽/мес.']].map(([key,name,price])=>
+   [['start','Дневник','Бесплатно'],['max','Тренер AI','1 000 ₽/мес.']].map(([key,name,price])=>
     '<button type="button" class="'+((key==='start'?state.tier!=='max':state.tier==='max')?'on':'')+
     '" data-cmd="tier-select" data-tier="'+key+'"'+(state.tier_demo?'':' disabled')+
     '><strong>'+name+'</strong><small>'+price+'</small></button>').join('')+'</div>'+
@@ -169,7 +162,7 @@ function onboardingPayload(){
   (noteChanged?[...new Set([...previousAreas,...inferred])]:previousAreas);
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
- const timezone=deviceZone();
+ const timezone=d.timezone||deviceZone();
  return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},timezone,timezone_confirmed:true,
@@ -408,11 +401,7 @@ function training(){
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
- const trainingCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
-  '<section class="surface"><h2>Персональный совет Yandex AI</h2>'+
-  '<p class="input-note">Рекомендация учитывает анкету, результаты и самочувствие. Тренировочные ограничения проверяет сервер.</p>'+
-  button(aiTipBusy?'Анализируем…':'Получить совет по тренировке','ai-tip-training',false,aiTipBusy?'disabled':'')+
-  (aiTrainingTip?'<p role="status" class="fq-live-banner">'+esc(aiTrainingTip)+'</p>':'')+'</section>':'';
+ const trainingCoach='';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p><section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
   (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
@@ -680,7 +669,7 @@ function progress(){
   preview+'</section>';
  const summary='<section class="surface"><h2 style="font-size:20px;margin:0 0 14px">Результаты</h2>'+
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
-  '<div class="metric"><span>Выполненных подходов</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
+  '<div class="metric"><span>Подходы</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
   '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+garminPanel()+summary+history();
 }
@@ -799,13 +788,9 @@ function food(){
       button('Убрать из FORMIQ','fatsecret-entry-unlink',false,'data-id="'+esc(e.external_id)+'"'):'')+'</div>').join('')+
    ((fsEntries.entries||[]).length?button('Импортировать день в FORMIQ','fatsecret-import-day',false,fatsecretBusy?'disabled':''):''):'')+
   '</section>':'';
- const nutritionCoach=state?.tier==='max'&&state?.ai_personalization?.profile===true?
-  '<section class="surface"><h2>Совет Yandex AI по рациону</h2>'+
-  '<p class="input-note">Только твои реальные продукты за выбранную дату. Без подтверждённой базы КБЖУ не рассчитываем.</p>'+
-  button(aiTipBusy?'Анализируем…':'Получить совет по рациону','ai-tip-nutrition',false,aiTipBusy?'disabled':'')+
-  (aiNutritionTip?'<p role="status" class="fq-live-banner">'+esc(aiNutritionTip)+'</p>':'')+'</section>':'';
+ const nutritionCoach='';
  const reportAllowed=state?.tier==='max'&&state?.ai_personalization?.profile===true;
- const report='<section class="surface"><h2>Анализ отчёта Yandex AI</h2>'+
+ const report='<section class="surface"><h2>Анализ отчёта FatSecret</h2>'+
   '<p class="input-note">Дополнительный разбор по добровольному согласию из анкеты. Исходный файл не сохраняется.</p>'+
   (reportAllowed?'<label class="field"><span>Выбранный отчёт</span><input id="nutrition-file" type="file" accept=".jpg,.jpeg,.png,.csv,image/jpeg,image/png,text/csv"></label>'+
     button('Отправить выбранный отчёт в Yandex AI','nutrition-analyze',true):
