@@ -34,6 +34,7 @@ let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Objec
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let foodMonth='',foodMonthMarks=null,foodMonthBusy=false,foodMonthSeq=0;
 let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='',fatsecretEntry=null;
+let connectionsStatus=null,connectionsBusy=false,connectionsError='',connectionsSeq=0;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',periodDeleteTarget=null,pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
@@ -105,6 +106,49 @@ function onboardBirthInput(){
    (!onboard.birth_date&&state?.metrics?.age?'<small class="input-note">Ранее сохранён только возраст — дата рождения пока неизвестна.</small>':'')+
    onboardError('birth_date')+'</label>';
 }
+function connectionsPanel(){
+ if(view!=='profile'||!state?.agreed)return '';
+ const service=(id,name,brand)=>{
+  const r=connectionsStatus?.[id]||null,available=r?.available===true,connected=r?.connected===true;
+  const status=!r?'Проверяем статус…':
+   connected&&(available||id==='garmin')?'Подключён':
+   available?'Не подключён':'Временно недоступен';
+  const sync=r?.last_sync_at&&/^\\d{4}-\\d{2}-\\d{2}T/.test(r.last_sync_at)?
+   '<small>Последняя успешная синхронизация: '+esc(r.last_sync_at.slice(0,16).replace('T',' '))+' UTC</small>':
+   '<small>Успешная синхронизация пока не зарегистрирована</small>';
+  let actions='';
+  if(id==='fatsecret'&&available&&!connected)
+   actions=button(fatsecretBusy?'Подключаем…':'Подключить','fatsecret-connect',false,fatsecretBusy?'disabled':'');
+  if(connected)actions+=button('Отключить',id==='fatsecret'?'fatsecret-disconnect-open':'garmin-disconnect-open');
+  const notes=id==='garmin'&&!connected?
+   '<small>Официальное подключение Garmin пока недоступно.</small>':
+   id==='fatsecret'&&!available?'<small>Официальная авторизация сейчас недоступна.</small>':'';
+  return '<div class="fq-connection-row"><div class="fq-connection-mark" aria-hidden="true">'+esc(brand)+'</div>'+
+   '<div class="fq-connection-copy"><strong>'+esc(name)+'</strong><small role="status">'+esc(status)+'</small>'+
+   (connected?sync:'')+notes+'</div><div class="fq-connection-actions">'+actions+'</div></div>';
+ };
+ return '<section class="surface" id="profile-connections"><h2>Подключения</h2>'+
+  '<p class="input-note">Подключаем только официальные сервисы с твоего разрешения. Отображаются только реальные подключения.</p>'+
+  service('fatsecret','FatSecret','fatsecret')+service('garmin','Garmin Connect','GARMIN')+
+  (fatsecretAuthUrl?'<p><a href="'+esc(fatsecretAuthUrl)+'" rel="noopener noreferrer" target="_blank">Продолжить подключение на FatSecret</a></p>':'')+
+  (connectionsError?'<p role="alert" class="input-note">'+esc(connectionsError)+'</p>':'')+
+  (fatsecretError?'<p role="alert" class="input-note">'+esc(fatsecretError)+'</p>':'')+'</section>';
+}
+async function loadConnections(){
+ const seq=++connectionsSeq;
+ connectionsBusy=true;connectionsError='';
+ try{
+  const result=await request('integrations_status');
+  if(seq!==connectionsSeq)return;
+  connectionsStatus={fatsecret:result.fatsecret,garmin:result.garmin};
+  fatsecretAccount=result.fatsecret;
+ }catch(ex){
+  if(seq!==connectionsSeq)return;
+  connectionsStatus=null;connectionsError=ex.message||'Не удалось проверить подключения.';
+ }finally{
+  if(seq===connectionsSeq){connectionsBusy=false;if(view==='profile')draw()}
+ }
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
@@ -133,7 +177,7 @@ function onboardForm(){
   onboardCheckbox('health','Понимаю, что FORMIQ не ставит диагнозы и не заменяет врача')+
   '<div class="fq-onboard-actions">'+(profileNotice?'<p role="status" class="input-note">'+esc(profileNotice)+'</p>':'')+button(ready()?'Сохранить изменения':'Сохранить анкету','onboard-save',true)+'</div>');
  const calendar=d.sex==='female'?femaleCalendar():'';
- const connections=''; // Inactive integrations are not displayed in the app.
+ const connections=connectionsPanel();
  const tiers=view==='profile'&&state?.agreed?'<section class="surface" id="test-tariffs">'+
   '<h2>Доступ FORMIQ</h2>'+
   '<p class="input-note">Пробный период «Тренер AI» — 14 дней после первой анкеты, без банковской карты. После него — «Дневник». Данные остаются.</p>'+
@@ -923,7 +967,7 @@ function food(){
   '</section>';
  const fsEntries=fatsecretDaily?.date===foodDate?fatsecretDaily:null;
  const fsTotals=fsEntries?.totals;
- const fsSection=state?.fatsecret_diary_configured?'<section class="surface">'+
+ const fsSection=state?.fatsecret_diary_configured&&fatsecretAccount?.connected?'<section class="surface">'+
   '<h2>Личный дневник FatSecret</h2>'+
   '<p class="input-note">Записи загружаются из FatSecret и не копируются в ручной дневник.</p>'+
   (fatsecretAccount?.connected?
@@ -1159,7 +1203,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods();void loadConnections()}return}
  if(element.dataset.foodDate){
   const chosen=element.dataset.foodDate;
   if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chosen))return;
@@ -1419,6 +1463,7 @@ app.addEventListener('click',async e=>{
   try{
    await request('garmin_disconnect');
    garminSnapshot={connected:false};garminError='';modal='';
+   if(view==='profile')void loadConnections();
   }catch(ex){garminError=ex.message||'Не удалось отключить Garmin';modal=''}
   finally{garminLoading=false;draw()}
   return;
@@ -1506,6 +1551,7 @@ app.addEventListener('click',async e=>{
    await request('fatsecret_account_disconnect');
    fatsecretAccount={connected:false,available:true};
    fatsecretAuthUrl='';fatsecretDaily=null;fatsecretError='';modal='';
+   if(view==='profile')void loadConnections();
   }catch(ex){fatsecretError=ex.message||'Не удалось отключить аккаунт';modal=''}
   finally{fatsecretBusy=false;draw()}
   return;
