@@ -36,7 +36,7 @@ class AllergenDictionaryTests(unittest.TestCase):
           ['яйца куриные'],['перепелиные яйца'],['яичный белок'],
           ['желток'],['яичный порошок'],['яичный альбумин'],
           ['овальбумин'],['овомукоид'],['лизоцим E1105'],
-          ['egg yolk'],['quail egg'],['ovalbumin'],['lysozyme E1105']
+          ['egg yolk'],['quail egg'],['ovalbumin'],['lysozyme E1105'],['E1105']
         ]
         for ingredients in products:
             with self.subTest(ingredients=ingredients):
@@ -72,7 +72,7 @@ class AllergenDictionaryTests(unittest.TestCase):
             trusted_server_source=True)['status'],'no_conflicts_detected')
 
     def test_composite_and_ambiguous_ingredients_need_verification(self):
-        for name in ['майонез','паста','макароны','соус','эмульгатор','лецитин']:
+        for name in ['майонез','паста','макароны','соус','эмульгатор','лецитин','альбумин']:
             with self.subTest(name=name):
                 self.assertEqual(evaluate_composition(evidence([name]),self.egg,
                     trusted_server_source=True)['status'],'needs_review')
