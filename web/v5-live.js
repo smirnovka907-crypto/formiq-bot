@@ -67,7 +67,8 @@ function initOnboard(){
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
   foodChoice:state?.food_allergies?.choice||'unknown',
   foodRows:(state?.food_allergies?.items||[]).map(x=>({name:x.name,kind:x.kind})),
-  foodInput:'',foodDirty:false,foodConsent:state?.food_allergies?.recommendations_allowed===true,
+  foodInput:'',foodDirty:false,foodSkip:false,
+  foodConsent:state?.food_allergies?.recommendations_allowed===true,
   adult:true,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
@@ -190,9 +191,12 @@ function foodAllergyPanel(){
     '<option value="allergy"'+(x.kind==='allergy'?' selected':'')+'>Аллергия</option>'+
     '<option value="intolerance"'+(x.kind==='intolerance'?' selected':'')+'>Непереносимость</option></select>'+
     '<button type="button" class="button-subtle" data-cmd="food-allergy-remove" data-index="'+i+'">×</button></div>').join(''):'')+
+  (ch==='unknown'&&!state?.agreed?
+   '<p class="input-note">При первом заполнении ответь на вопрос или явно выбери продолжение без медицинских сведений.</p>'+
+   button(d.foodSkip?'Продолжу без сведений ✓':'Не сообщать — только дневник','food-allergy-skip'):'')+
   (ch!=='unknown'?onboardCheckbox('foodConsent',
    'Отдельно разрешаю хранить пищевые ограничения для проверки состава. Без согласия дневник доступен, персональный подбор питания — нет.'):'')+
-  '<p class="input-note">Согласие можно отозвать, данные удалить. Без отдельного разрешения ничего не отправляется в Yandex AI. <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>.</p>'+
+  '<p class="input-note">Без отдельного согласия указанные продукты не сохраняются. Согласие можно отозвать, данные удалить. Без отдельного разрешения ничего не отправляется в Yandex AI. <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>.</p>'+
   (view==='profile'&&a.choice!=='unknown'?
    (foodAllergyConfirm?
     '<p role="alert" class="input-note">Удалить сохранённые ограничения и отозвать согласие?</p>'+
@@ -267,6 +271,8 @@ function onboardingPayload(){
  // An unreviewed Yandex AI analysis is optional; its structured fields are
  // applied only after confirmation. Saving can proceed with conservative limits.
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
+ if(state?.food_allergies?.available&&!state?.agreed&&d.foodChoice==='unknown'&&!d.foodSkip)
+  errs.foodInput='Выбери ответ или продолжи без сведений о здоровье.';
  if(state?.food_allergies?.available&&d.foodChoice==='declared'&&d.foodConsent){
   try{if(!collectFoodRows().length)errs.foodInput='Укажи продукты.'}catch(ex){errs.foodInput=ex.message}
  }
@@ -1410,7 +1416,7 @@ app.addEventListener('click',async e=>{
   if(!(onboardOpen||view==='profile')||!onboard)return;
   const key=element.dataset.onboardPick,value=element.dataset.value;
   if(!['goal','equipment','sex','foodChoice'].includes(key))return;
-  onboard[key]=value;if(key==='foodChoice'){onboard.foodDirty=true;if(value==='none'){onboard.foodRows=[];onboard.foodInput=''}}delete onboardErrors[key];
+  onboard[key]=value;if(key==='foodChoice'){onboard.foodDirty=true;onboard.foodSkip=false;if(value==='none'){onboard.foodRows=[];onboard.foodInput=''}}delete onboardErrors[key];
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
   draw();return;
  }
@@ -1438,6 +1444,12 @@ app.addEventListener('click',async e=>{
   onboardOpen=false;view='profile';onboard=null;initOnboard();draw();
   window.setTimeout(()=>app.querySelector('[data-onboard-pick="foodChoice"]')?.scrollIntoView?.({block:'center',behavior:'smooth'}),100);
   return;
+ }
+ if(cmd==='food-allergy-skip'){
+  if(!onboard)return;
+  onboard.foodSkip=true;onboard.foodChoice='unknown';onboard.foodRows=[];
+  onboard.foodInput='';onboard.foodConsent=false;onboard.foodDirty=false;
+  delete onboardErrors.foodInput;draw();return;
  }
  if(cmd==='food-allergy-add'){
   try{onboard.foodRows=collectFoodRows();onboard.foodInput='';onboard.foodDirty=true;delete onboardErrors.foodInput;error=''}
