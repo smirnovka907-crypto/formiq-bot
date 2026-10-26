@@ -1956,6 +1956,19 @@ class SchedulePostgresTests(unittest.TestCase):
             denial=client.post('/mini/api',json={'action':'period_delete','id':rid})
             self.assertEqual(denial.status_code,400)
 
+    def test_tz3_period_save_rejects_unobserved_tomorrow_in_saved_timezone(self):
+        self.m.save_onboarding(self.chat,{**self.body(zone='Pacific/Honolulu'),
+            'metrics':{**self.body()['metrics'],'sex':'female'}})
+        # UTC may already be the following day; the Hawaii user still has today.
+        Clock.instant=datetime(2026,10,20,1,30,tzinfo=timezone.utc)
+        today=self.m.local_today(self.chat)
+        self.assertEqual(today,date(2026,10,19))
+        with self.assertRaises(ValueError):
+            self.m.period_save(self.chat,{'start':'2026-10-19','end':'2026-10-20'})
+        good=self.m.period_save(self.chat,{'start':'2026-10-18','end':'2026-10-19'})
+        self.assertEqual(good['periods'][0]['end'],'2026-10-19')
+        self.assertEqual(len(self.m.period_history(self.chat)['periods']),1)
+
     def test_tz3_period_forecast_uses_saved_calendar_timezone_at_midnight(self):
         data=self.body(zone='Europe/Helsinki')
         data['metrics']['sex']='female'
