@@ -19,7 +19,7 @@ ALIASES = {
         'яйцо','яйца','яиц','яйц','яичный','яичная','яичные','яичного',
         'желток','желтки','белок яйца','яичный белок','яичный порошок',
         'альбумин яйца','яичный альбумин','овальбумин','овомукоид',
-        'лизоцим e1105','лизоцим e 1105','egg','eggs','egg white',
+        'лизоцим e1105','лизоцим e 1105','e1105','e 1105','egg','eggs','egg white',
         'egg yolk','egg powder','ovalbumin','ovomucoid','egg albumin',
         'lysozyme e1105','quail egg','перепелиные яйца','перепелиное яйцо'),
     'peanut': ('арахис','арахисовый','арахисовая','peanut','groundnut'),
@@ -154,7 +154,8 @@ def evaluate_composition(candidate, restrictions, *, trusted_server_source=False
     # additives, cannot be cleared on a simplistic word match.
     uncertain=('майонез','соус','выпечка','булочка','хлеб','макароны',
                'паста','панировка','начинка','крем','лецитин','эмульгатор',
-               'mayonnaise','sauce','noodle','bread','lecithin','emulsifier')
+               'mayonnaise','sauce','noodle','bread','lecithin','emulsifier',
+               'альбумин','albumin','protein isolate')
     if any(_has_alias(ingredient,alias) for ingredient in items for alias in uncertain):
         return {'status':'needs_review','reason':'Не раскрыт полный состав составного или неоднозначного компонента'}
     return {'status':'no_conflicts_detected',
