@@ -74,10 +74,10 @@ WORKERS = ThreadPoolExecutor(max_workers=1)
 ADMIN_ID = int(os.getenv('FORMIQ_ADMIN_ID', '0') or '0')
 PREMIUM_ENFORCED = os.getenv('FORMIQ_PREMIUM_ENFORCED', '0') == '1'
 TRIAL_DAYS = 14
-START_PRICE_RUB = 100
-COMFORT_PRICE_RUB = 100
+START_PRICE_RUB = 0
+COMFORT_PRICE_RUB = 0
 MAX_PRICE_RUB = 1000
-MONTH_PRICES_RUB = {'start':100,'comfort':100,'max':1000}
+MONTH_PRICES_RUB = {'start':0,'comfort':0,'max':1000}
 YANDEX_VISION_MODEL = os.getenv('YANDEX_VISION_MODEL','qwen3.6-35b-a3b').strip()
 AI_DAILY_LIMIT = 10
 FEEDBACK_SHEETS_WEBHOOK = os.getenv('FORMIQ_FEEDBACK_SHEETS_WEBHOOK', '').strip()
@@ -2988,23 +2988,26 @@ def onboarding_number(raw,name,low,high,required=True,whole=False):
 
 
 def validate_health(raw):
-    if not isinstance(raw,dict):raise ValueError('Заполни раздел об ограничениях')
-    limits=raw.get('affected')
+    # Health text is optional; retain server-side movement and danger safeguards.
+    if raw is None:raw={}
+    if not isinstance(raw,dict):raise ValueError('Некорректные данные здоровья')
+    limits=raw.get('affected',[])
     if not isinstance(limits,list) or len(limits)>len(LIMIT_LABELS) or \
        any(type(x) is not str or x not in LIMIT_LABELS for x in limits) or len(limits)!=len(set(limits)):
         raise ValueError('Выбери ограничения из списка')
-    score=onboarding_number(raw.get('pain_score'), 'интенсивность боли',0,10,whole=True)
-    course=raw.get('symptom_course')
+    score=onboarding_number(raw.get('pain_score',0), 'интенсивность боли',0,10,whole=True)
+    course=raw.get('symptom_course') or ('unspecified' if limits else 'none')
     if course not in ('none','stable','recent','worsening','unspecified'):
         raise ValueError('Проверь описание ограничений')
-    danger=raw.get('danger_signs')
-    cleared=raw.get('activity_cleared')
+    danger=raw.get('danger_signs',False)
+    cleared=raw.get('activity_cleared',False)
     if type(danger) is not bool or type(cleared) is not bool:
         raise ValueError('Подтверди ответы о безопасности нагрузки')
     if not limits and score:
         raise ValueError('Если есть боль, отметь область, которая беспокоит')
     if limits and course=='none':
-        raise ValueError('Укажи характер симптомов или выбери отсутствие ограничений')
+        # The obsolete symptom questionnaire is no longer required for saving.
+        course='unspecified'
     if not limits:
         course='none'
     return {'affected':limits,'pain_score':score,'symptom_course':course,
@@ -4181,10 +4184,12 @@ def mini_training_preview(chat, body):
         if not slot:
             raise ValueError('Тренировка не найдена')
         sid,cycle,week,day,planned=slot
-        completed=bool(conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s
+        completed_row=conn.execute("""SELECT id FROM workouts WHERE chat_id=%s
             AND cycle_id=%s AND week_no=%s AND plan_day=%s
-            AND source='template' AND status='finished' LIMIT 1""",
-            (chat,cycle,week,day)).fetchone())
+            AND source='template' AND status='finished'
+            ORDER BY finished_at DESC NULLS LAST,id DESC LIMIT 1""",
+            (chat,cycle,week,day)).fetchone()
+        completed=completed_row is not None
         next_slot=conn.execute("""SELECT s.id FROM scheduled_sessions s
             WHERE s.chat_id=%s AND s.cycle_id=%s
               AND s.schedule_state IS DISTINCT FROM 'retired'
@@ -4194,6 +4199,12 @@ def mini_training_preview(chat, body):
                 AND w.status='finished')
             ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
             (chat,cycle,chat)).fetchone()
+    if completed_row:
+        # Saved results, not an empty template. Owner-scoped detail enforces identity.
+        actual=mini_history_detail(chat,completed_row[0])
+        return {'preview':{'id':sid,'week':week,'day':day,
+            'date':planned.isoformat(),'name':actual['title'],
+            'finished':True,'can_start':False,'actual':actual,'exercises':[]}}
     warning=ready(p,chat)
     plan=[]
     if not warning and not completed:
@@ -4568,16 +4579,19 @@ def mini_history_detail(chat,wid):
         if kcal is not None:
             items.append({'name':'Примерный расход энергии','key':None,
                           'result':f'≈ {kcal} ккал (MET {met}; не измерение датчика)'})
-        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,'items':items}
+        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
+                'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
            FROM workout_sets s JOIN workout_items i ON i.workout_id=s.workout_id
            AND i.position=s.position WHERE s.workout_id=%s AND s.state='done'
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
-    return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),'items':[
+    elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
+    return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
+      'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
        {'name':visible_exercise_name(name),'key':key if key in EX else None,'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
        f' · {kg} кг' if kg is not None else '')} for name,count,kg,unit,key in rows]}
 
