@@ -706,6 +706,48 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
 
+
+    def test_tz3_optional_health_note_does_not_require_obsolete_questionnaire(self):
+        data=self.body()
+        data['health_profile']=None
+        self.m.save_onboarding(self.chat,data)
+        self.assertEqual(self.m.health_profile(self.chat)['affected'],[])
+        data['health_profile']={'affected':['shoulder'],'pain_score':0,
+            'symptom_course':'none','danger_signs':False,'activity_cleared':False}
+        self.m.save_onboarding(self.chat,data)
+        stored=self.m.health_profile(self.chat)
+        self.assertEqual(stored['affected'],['shoulder'])
+        self.assertEqual(stored['symptom_course'],'unspecified')
+
+    def test_tz3_completed_slot_shows_only_real_stored_sets(self):
+        profile,cycle,calendar=self.save((0,2,4))
+        slot=calendar[0]
+        began=Clock.instant
+        finished=began+timedelta(minutes=37)
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(
+                chat_id,cycle_id,week_no,plan_day,status,started_at,
+                finished_at,source,difficulty)
+                VALUES(%s,%s,%s,%s,'finished',%s,%s,'template','ok')
+                RETURNING id""",(self.chat,cycle,slot['week'],slot['day'],began,finished)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,
+                target,exercise_key) VALUES(%s,0,'Жим ногами','3 x 10','leg_press')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                target_min,target_max,unit,actual_value,state,weight_kg,completed_at)
+                VALUES(%s,0,1,8,12,'reps',11,'done',42.5,%s)""",(wid,finished))
+        history_before=self.snapshot_history()
+        preview=self.m.mini_training_preview(self.chat,{'id':slot['id']})['preview']
+        self.assertTrue(preview['finished'])
+        self.assertFalse(preview['can_start'])
+        self.assertEqual(preview['exercises'],[])
+        self.assertEqual(preview['actual']['duration_minutes'],37)
+        self.assertEqual(preview['actual']['result'],'ok')
+        self.assertIn('11 повт.',preview['actual']['items'][0]['result'])
+        self.assertIn('42.5 кг',preview['actual']['items'][0]['result'])
+        self.assertEqual(self.snapshot_history(),history_before)
+        with self.assertRaises(ValueError):
+            self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
+
     def test_recent_additional_cardio_reduces_future_volume_explainably(self):
         profile,cycle,calendar=self.save((0,2,4))
         baseline=self.m.make_session(profile,1,'A',adapt='normal',cycle_id=cycle)
