@@ -542,7 +542,7 @@ function training(){
   '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
   '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
- const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
+ const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&['planned','past'].includes(r.status));
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
  const trainingCoach='';
  const birthday=state?.birthday?.show_congratulations?
@@ -651,7 +651,7 @@ function trainingPlanCard(){
    '<span><span class="week-range">'+esc(periodShortLabel(i))+'</span><small class="week-meta">'+
    dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
   const entries=dates.map(r=>'<button type="button" class="plan-entry fq-plan-preview" data-cmd="training-preview" data-id="'+esc(r.id)+'" aria-label="Просмотр: '+esc(r.title)+' '+esc(r.date_ru||prettyDate(r.date))+'"><span><strong>'+esc(r.title)+'</strong><small>'+
-    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
+    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='skipped'?'Пропущено':r.status==='empty'?'Без подходов':r.status==='planned'?'Запланировано':'По расписанию')+
     '</small></span><span class="plan-chevron" aria-hidden="true">›</span></button>').join('');
   return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
    (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
@@ -1020,7 +1020,7 @@ function previewPanel(){
  if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
  if(!p)return '<h2>Просмотр недоступен</h2>';
  const unit=x=>x.unit==='min'?'мин':x.unit==='sec'?'сек':'повт.';
- if(p.finished&&p.actual)return '<h2>Выполненная тренировка</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
+ if(p.finished&&p.actual)return '<h2>Запись тренировки</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
  return '<h2>'+esc(p.name)+'</h2><p class="subtitle">'+esc(prettyDate(p.date))+
   ' · '+esc(p.duration_minutes)+' мин · неделя '+esc(p.week)+'</p>'+
   '<div class="fq-live-row"><span>Разминка</span><strong>'+esc(p.warmup_minutes)+' мин</strong></div>'+
