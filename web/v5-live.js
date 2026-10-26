@@ -22,6 +22,7 @@ let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exercise
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
+let foodMonth='',foodMonthMarks=null,foodMonthBusy=false,foodMonthSeq=0;
 let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=false,fatsecretError='',fatsecretEntry=null;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
@@ -679,9 +680,54 @@ function progress(){
   '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+garminPanel()+summary+history();
 }
 const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
+async function loadFoodMonth(){
+ const expected=foodMonth||foodDate.slice(0,7);
+ if(!/^[0-9]{4}-[0-9]{2}$/.test(expected))return;
+ const seq=++foodMonthSeq;
+ foodMonthBusy=true;draw();
+ try{
+  const result=await request('history_month',{month:expected});
+  if(seq===foodMonthSeq&&foodMonth===expected)foodMonthMarks=result;
+ }catch(_ex){
+  if(seq===foodMonthSeq&&foodMonth===expected)foodMonthMarks=null;
+ }finally{
+  if(seq===foodMonthSeq&&foodMonth===expected){foodMonthBusy=false;draw()}
+ }
+}
+function foodCalendar(){
+ const stamp=foodMonth||foodDate.slice(0,7);
+ if(!/^[0-9]{4}-[0-9]{2}$/.test(stamp))return '';
+ const [year,month]=stamp.split('-').map(Number);
+ const first=new Date(Date.UTC(year,month-1,1));
+ const count=new Date(Date.UTC(year,month,0)).getUTCDate();
+ const before=(first.getUTCDay()+6)%7;
+ const foodDays=new Set(foodMonthMarks?.month===stamp?foodMonthMarks.food_dates||[]:[]);
+ const activityDays=new Set(foodMonthMarks?.month===stamp?foodMonthMarks.workout_dates||[]:[]);
+ const cells=Array.from({length:before},()=>'<span class="fq-food-empty-day"></span>').join('')+
+  Array.from({length:count},(_,i)=>{
+   const day=String(i+1).padStart(2,'0'),date=stamp+'-'+day;
+   const hasFood=foodDays.has(date),hasActivity=activityDays.has(date);
+   const status=(hasFood?'питание':'')+(hasFood&&hasActivity?' и ':'')+(hasActivity?'тренировка':'');
+   return '<button type="button" class="fq-food-calendar-day'+(foodDate===date?' selected':'')+
+    '" data-cmd="food-calendar-date" data-date="'+date+'" aria-label="'+esc(date+(status?' · '+status:''))+'">'+(i+1)+
+    '<span class="fq-calendar-dots">'+(hasFood?'<i class="food" aria-hidden="true"></i>':'')+
+    (hasActivity?'<i class="workout" aria-hidden="true"></i>':'')+'</span></button>';
+  }).join('');
+ return '<section class="surface fq-food-calendar"><div class="fq-live-calendar-controls">'+
+  '<button type="button" class="cal-arrow" data-cmd="food-month-prev" aria-label="Предыдущий месяц">‹</button>'+
+  '<strong>'+esc(new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}).format(first))+'</strong>'+
+  '<button type="button" class="cal-arrow" data-cmd="food-month-next" aria-label="Следующий месяц">›</button></div>'+
+  '<div class="fq-food-calendar-days">'+['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>'<span>'+x+'</span>').join('')+'</div>'+
+  '<div class="fq-food-calendar-grid">'+cells+'</div>'+
+  '<p class="input-note"><span class="fq-food-legend-dot food"></span> Есть питание · <span class="fq-food-legend-dot workout"></span> Выполнена тренировка</p>'+
+  (foodMonthBusy?'<p class="input-note" role="status">Загружаем даты дневника…</p>':'')+'</section>';
+}
 async function loadFoodHistory(){
  if(!foodDate)foodDate=localClock().date;
  const requested=foodDate;
+ const targetMonth=requested.slice(0,7);
+ if(foodMonth!==targetMonth){foodMonth=targetMonth;foodMonthMarks=null}
+ if(!foodMonthMarks||foodMonthMarks.month!==targetMonth)void loadFoodMonth();
  ++foodRevision;aiNutritionTip='';
  foodLoading=true;draw();
  try{
@@ -823,7 +869,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function exerciseThumb(x){
