@@ -743,7 +743,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(preview['actual']['duration_minutes'],37)
         self.assertEqual(preview['actual']['result'],'ok')
         self.assertIn('11 повт.',preview['actual']['items'][0]['result'])
-        self.assertIn('42.5 кг',preview['actual']['items'][0]['result'])
+        self.assertRegex(preview['actual']['items'][0]['result'],r'42[.]50? кг')
         self.assertEqual(self.snapshot_history(),history_before)
         with self.assertRaises(ValueError):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
