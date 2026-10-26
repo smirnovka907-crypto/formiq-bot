@@ -3914,7 +3914,8 @@ def food_history(chat,body):
                 'nutrition_source':'manual' if user_values is not None
                      else 'fatsecret' if food_id and serving_id else None})
     return {'date':day.isoformat(),'meals':list(meals.values()),
-        'nutrients_available':False}
+        'nutrients_available':any(item['nutrition_source'] for meal in meals.values()
+            for item in meal['items'])}
 
 
 def food_add(chat,body):
@@ -4022,7 +4023,8 @@ def food_day_totals(chat, body):
     day=food_day(body.get('date'))
     with db() as conn:
         records=conn.execute("""SELECT i.id,m.meal_type,i.grams,
-                   i.source_food_id,i.source_serving_id,i.updated_at
+                   i.source_food_id,i.source_serving_id,i.updated_at,
+                   i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
             FROM manual_food_meals m JOIN manual_food_items i
               ON i.meal_id=m.id AND i.chat_id=m.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s
@@ -4030,13 +4032,12 @@ def food_day_totals(chat, body):
     if len(records)>250:
         raise ValueError('За день слишком много продуктов для одного расчёта')
     linked={r[3] for r in records if r[3] and r[4]}
-    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
-        # Do not claim a '0 kcal' total when there is no real provider.
-        raise ValueError('Расчёт КБЖУ недоступен: FatSecret пока не подключён')
+    # User-entered values are independently usable offline. Missing FatSecret
+    # credentials never turn manual macros into "unavailable" or guessed zero.
     if len(linked)>FOOD_DAY_MAX_PROVIDER_IDS:
         raise ValueError('Слишком много разных продуктов FatSecret за день для одного запроса')
     sources={}
-    if linked:
+    if linked and FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET:
         try:
             provider=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
             token=provider.get_token()
@@ -4056,7 +4057,7 @@ def food_day_totals(chat, body):
     subtotal={key:Decimal('0') for key in keys}
     meal_values={}
     items=[]
-    for item_id,meal_type,grams,fid,sid,modified in records:
+    for item_id,meal_type,grams,fid,sid,modified,*manual in records:
         meal=meal_values.setdefault(meal_type,{'type':meal_type,'total_items':0,
                                                'resolved_items':0,
                                                'subtotal':{key:Decimal('0') for key in keys}})
@@ -4064,7 +4065,14 @@ def food_day_totals(chat, body):
         detail=sources.get(fid) if fid and sid else None
         serving=next((p for p in detail['servings'] if p.get('serving_id')==sid),None) if detail else None
         values=None
-        if serving and serving.get('grams') and serving.get('per_serving'):
+        if all(v is not None for v in manual):
+            try:
+                factor=Decimal(str(grams))/Decimal('100')
+                values={key:(Decimal(str(v))*factor).quantize(Decimal('0.01'))
+                        for key,v in zip(keys,manual)}
+            except (InvalidOperation,ValueError,TypeError):
+                values=None
+        if values is None and serving and serving.get('grams') and serving.get('per_serving'):
             try:
                 mass=Decimal(str(serving['grams']))
                 factor=Decimal(str(grams))/mass
@@ -4083,8 +4091,9 @@ def food_day_totals(chat, body):
             for key in keys:
                 subtotal[key]+=values[key]
                 meal['subtotal'][key]+=values[key]
+        user_values=all(v is not None for v in manual)
         items.append({'id':item_id,'meal_type':meal_type,
-            'source':'fatsecret' if values is not None else None,
+            'source':('manual' if user_values else 'fatsecret') if values is not None else None,
             'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
     # If a product changed during an API request, never present a stale number
     # as belonging to its newer grams or provider identity.
@@ -4099,7 +4108,9 @@ def food_day_totals(chat, body):
         if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
             raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
     complete=bool(records) and all(item['nutrition'] is not None for item in items)
-    return {'date':day.isoformat(), 'source':'fatsecret',
+    origins={item['source'] for item in items if item['source']}
+    origin='mixed' if len(origins)>1 else next(iter(origins),None)
+    return {'date':day.isoformat(), 'source':origin,
         'complete':complete,'total_items':len(records),
         'resolved_items':sum(item['nutrition'] is not None for item in items),
         'partial':bool(records) and not complete,
@@ -4204,7 +4215,9 @@ def food_catalog_attach(chat,body):
                for key,value in portion['per_serving'].items()}
     with db() as conn:
         result=conn.execute("""UPDATE manual_food_items SET
-            source_food_id=%s,source_serving_id=%s,updated_at=NOW()
+            source_food_id=%s,source_serving_id=%s,
+            manual_kcal_100g=NULL,manual_protein_g_100g=NULL,
+            manual_fat_g_100g=NULL,manual_carbs_g_100g=NULL,updated_at=NOW()
             WHERE id=%s AND chat_id=%s AND name=%s AND grams=%s RETURNING id""",
             (fid,sid,item_id,chat,old[0],old[1])).fetchone()
         if not result:
