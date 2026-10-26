@@ -97,6 +97,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
                 m.apply_approved_avatar_once()
         upload.assert_not_called()
 
+    def test_owner_approved_telegram_description_slogan(self):
+        description = self.m.FORMIQ_BOT_DESCRIPTION
+        self.assertTrue(description.endswith('Твоя форма. Наш интелект.'))
+        self.assertNotIn('Твоя цель. Твой темп. Твой результат.', description)
+
     def test_about_description_checked_in_both_telegram_locales(self):
         m=self.m
         state={loc:{'about':'OLD','desc':'OLD'} for loc in (None,'ru')}

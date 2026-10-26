@@ -192,7 +192,8 @@ function createClient(auth=true,shared={}){
    return {ok:true,status:200,async json(){return response}};
   }
  };
- const ClientDate=shared.now?class extends Date{constructor(...args){super(...(args.length?args:[shared.now]))}static now(){return new Date(shared.now).getTime()}}:Date;
+ const fixtureNow=shared.now||'2026-10-25T12:00:00Z';
+ const ClientDate=class extends Date{constructor(...args){super(...(args.length?args:[fixtureNow]))}static now(){return new Date(fixtureNow).getTime()}};
  const context={
   document:doc,
   window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){shared.expandCalls=(shared.expandCalls||0)+1},...(shared.fullscreen?{isVersionAtLeast(){return !shared.oldTelegram},requestFullscreen(){shared.fullscreenCalls=(shared.fullscreenCalls||0)+1;if(shared.fullscreenThrows)throw Error('Fullscreen unavailable')},onEvent(){}}:{})}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
