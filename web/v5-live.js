@@ -1069,7 +1069,7 @@ function exerciseCardPanel(){
 }
 function actualWorkoutPanel(row){
  if(!row)return '<p class="empty">Результат не найден.</p>';
- const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':'Силовая'].filter(Boolean).join(' · ');
+ const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':row.status==='skipped'?'Пропущена':row.status==='finished_empty'?'Завершена без подходов':'Силовая'].filter(Boolean).join(' · ');
  return '<h2>'+esc(row.title||'Завершённая тренировка')+'</h2><p class="subtitle">'+esc(summary)+'</p>'+
   (row.result?'<p class="input-note">Результат: '+esc(row.result)+'</p>':'')+
   (row.items||[]).map((x,i)=>x.key?'<button type="button" class="fq-preview-exercise" data-cmd="exercise-history" data-index="'+i+'">'+exerciseThumb(x)+'<span><strong>'+esc(x.name)+'</strong><small>'+esc(x.result)+'</small></span><span>›</span></button>':
