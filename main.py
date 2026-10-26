@@ -482,6 +482,7 @@ def init_db():
             id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL,
             eaten_on DATE NOT NULL, meal_type TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS raw_input_text TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
             ON manual_food_meals(chat_id,eaten_on,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
@@ -3990,7 +3991,13 @@ def food_history(chat,body):
                 'nutrition_100g':user_values,
                 'nutrition_source':'manual' if user_values is not None
                      else 'fatsecret' if food_id and serving_id else None})
+    # Unparsed text is kept without made-up serving weights or nutrients.
+    with db() as conn:
+        raw_rows=conn.execute("""SELECT meal_type,raw_input_text FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s AND raw_input_text IS NOT NULL
+            ORDER BY id""",(chat,day)).fetchall()
     return {'date':day.isoformat(),'meals':list(meals.values()),
+        'unparsed_texts':[{'meal_type':m,'text':raw} for m,raw in raw_rows],
         'nutrients_available':any(item['nutrition_source'] for meal in meals.values()
             for item in meal['items'])}
 
@@ -4032,6 +4039,44 @@ def food_add(chat,body):
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (meal_id,chat,name,grams,*(values or (None,)*4)))
     return food_history(chat,{'date':day.isoformat()})
+
+
+
+def food_add_text(chat,body):
+    """One operation: save user text, safely parse grams, never invent nutrients."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    meal_type=body.get('meal_type')
+    if meal_type not in ('breakfast','lunch','dinner','snack'):
+        raise ValueError('Выбери приём пищи')
+    raw_text=body.get('text')
+    parsed=food_parse({'text':raw_text})
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        existing=conn.execute("""SELECT id FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s AND meal_type=%s
+            ORDER BY id LIMIT 1""",(chat,day,meal_type)).fetchone()
+        if existing:
+            meal_id=existing[0]
+            conn.execute("""UPDATE manual_food_meals SET raw_input_text=
+                CASE WHEN raw_input_text IS NULL THEN %s ELSE raw_input_text || E'\\n' || %s END
+                WHERE id=%s AND chat_id=%s""",(raw_text,raw_text,meal_id,chat))
+        else:
+            meal_id=conn.execute("""INSERT INTO manual_food_meals
+                (chat_id,eaten_on,meal_type,raw_input_text)
+                VALUES(%s,%s,%s,%s) RETURNING id""",
+                (chat,day,meal_type,raw_text)).fetchone()[0]
+        for row in parsed['items']:
+            name,grams=food_item(row['name'],row['grams'])
+            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+    result=food_history(chat,{'date':day.isoformat()})
+    result['unparsed']=parsed['unparsed']
+    result['notice']=('Запись сохранена. Для некоторых продуктов не указан вес.'
+                      if parsed['unparsed'] else
+                      'Продукты сохранены. КБЖУ появятся при наличии проверенного источника.')
+    return result
 
 
 def food_change(chat,body,delete=False):
@@ -6066,6 +6111,8 @@ def mini_api():
             payload = {'ok': True, **food_catalog_attach(chat,data)}
         elif action == 'food_history':
             payload = {'ok': True, **food_history(chat,data)}
+        elif action == 'food_add_text':
+            payload = {'ok': True, **food_add_text(chat,data)}
         elif action == 'food_add':
             payload = {'ok': True, **food_add(chat,data)}
         elif action == 'food_update':
