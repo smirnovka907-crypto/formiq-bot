@@ -486,8 +486,10 @@ def init_db():
         c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS unresolved_fragments JSONB NOT NULL DEFAULT '[]'::jsonb")
         c.execute("""CREATE TABLE IF NOT EXISTS food_save_requests (
             chat_id BIGINT NOT NULL, request_id TEXT NOT NULL,
-            meal_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            meal_id BIGINT NOT NULL, request_hash TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             PRIMARY KEY(chat_id,request_id))""")
+        c.execute("ALTER TABLE food_save_requests ADD COLUMN IF NOT EXISTS request_hash TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
             ON manual_food_meals(chat_id,eaten_on,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
@@ -4133,13 +4135,18 @@ def food_add_text(chat,body):
             not isinstance(request_id,str) or
             not re.fullmatch(r'[a-zA-Z0-9_-]{12,80}',request_id)):
         raise ValueError('Некорректный идентификатор сохранения')
-    replay=False
+    request_hash=hashlib.sha256(json.dumps(
+        [day.isoformat(),meal_type,raw_text],ensure_ascii=False,
+        separators=(',',':')).encode('utf-8')).hexdigest()
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
-        replay=bool(request_id and conn.execute(
-            """SELECT 1 FROM food_save_requests WHERE chat_id=%s AND request_id=%s""",
-            (chat,request_id)).fetchone())
+        replay=conn.execute(
+            """SELECT request_hash FROM food_save_requests
+                WHERE chat_id=%s AND request_id=%s""",(chat,request_id)
+            ).fetchone() if request_id else None
         if replay:
+            if replay[0]!=request_hash:
+                raise ValueError('Повторный запрос отличается от сохранённой записи')
             return food_history(chat,{'date':day.isoformat()})
         existing=conn.execute("""SELECT id FROM manual_food_meals
             WHERE chat_id=%s AND eaten_on=%s AND meal_type=%s
@@ -4162,8 +4169,9 @@ def food_add_text(chat,body):
                 VALUES(%s,%s,%s,%s) RETURNING id""",(meal_id,chat,name,grams)).fetchone()[0]
             inserted.append((item_id,name))
         if request_id:
-            conn.execute("""INSERT INTO food_save_requests(chat_id,request_id,meal_id)
-                VALUES(%s,%s,%s)""",(chat,request_id,meal_id))
+            conn.execute("""INSERT INTO food_save_requests
+                (chat_id,request_id,meal_id,request_hash)
+                VALUES(%s,%s,%s,%s)""",(chat,request_id,meal_id,request_hash))
     # Durability must never wait for a third-party nutrition API.
     # The Mini App requests enrichment separately after this response.
     result=food_history(chat,{'date':day.isoformat()})
