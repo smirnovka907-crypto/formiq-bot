@@ -237,6 +237,21 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
 
+    def test_tz5_combined_ingredients_daily_macro_totals(self):
+        self.m.save_onboarding(self.chat,self.body())
+        source={'рис сухой':{'kcal':350,'protein_g':7,'fat_g':1,'carbs_g':78},
+                'курица':{'kcal':165,'protein_g':31,'fat_g':3.6,'carbs_g':0}}
+        parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г'})
+        self.assertEqual(len(parsed['items']),2)
+        entries=[{**row,'nutrition_100g':source[row['name']]} for row in parsed['items']]
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch','items':entries})
+        total=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertTrue(total['complete'])
+        self.assertEqual(total['totals']['kcal'],527.5)
+        self.assertEqual(total['totals']['protein_g'],52.1)
+        self.assertEqual(total['totals']['fat_g'],6.2)
+        self.assertEqual(total['totals']['carbs_g'],62.4)
+
     def test_tz5_multiple_measured_ingredients_with_conjunction(self):
         parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г плюс огурец 100 г'})
         self.assertEqual(parsed['items'],[
