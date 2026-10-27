@@ -4269,17 +4269,30 @@ def food_auto_match_candidates(name, options):
         return None
     option=exact[0]
     portions=[p for p in option.get('servings',[]) if isinstance(p,dict)
-              and p.get('grams')==100 and isinstance(p.get('per_serving'),dict)
+              and isinstance(p.get('per_serving'),dict)
               and all(k in p['per_serving'] for k in FOOD_MANUAL_KEYS)]
-    if len(portions)!=1:
-        return None
-    # Reject malformed, negative and nonfinite upstream nutrients before linking.
+    # A 100 g portion is preferred. Without it, precisely one metric portion
+    # can still be scaled by observed grams. Several competing portions
+    # without 100 g are ambiguous and must not auto-link.
     try:
-        vals=[Decimal(str(portions[0]['per_serving'][key])) for key in FOOD_MANUAL_KEYS]
-    except (InvalidOperation,TypeError,ValueError,KeyError):
+        portions=[p for p in portions if Decimal(str(p.get('grams'))).is_finite()
+                  and Decimal('0')<Decimal(str(p['grams']))<=Decimal('5000')]
+    except (InvalidOperation,TypeError,ValueError):
         return None
-    if any(not val.is_finite() or val<0 or val>(1000 if key=='kcal' else 100)
-           for key,val in zip(FOOD_MANUAL_KEYS,vals)):
+    per100=[p for p in portions if Decimal(str(p['grams']))==100]
+    choices=per100 if per100 else portions
+    if len(choices)!=1:
+        return None
+    serving=choices[0]
+    try:
+        grams=Decimal(str(serving['grams']))
+        vals=[Decimal(str(serving['per_serving'][key])) for key in FOOD_MANUAL_KEYS]
+        norm=[value*Decimal('100')/grams for value in vals]
+    except (InvalidOperation,TypeError,ValueError,KeyError,ZeroDivisionError):
+        return None
+    if any(not value.is_finite() or value<0 or
+           value>(1000 if key=='kcal' else 100)
+           for key,value in zip(FOOD_MANUAL_KEYS,norm)):
         return None
     if food_preparation_state(name)!=food_preparation_state(option['name']):
         return None
@@ -4289,7 +4302,7 @@ def food_auto_match_candidates(name, options):
             r'овсян|греч|рис|макарон|круп|паст|перлов|манн',
             name.casefold().replace('ё','е')):
         return None
-    fid,sid=option.get('food_id'),portions[0].get('serving_id')
+    fid,sid=option.get('food_id'),serving.get('serving_id')
     return (fid,sid) if isinstance(fid,str) and fid.isdecimal() and isinstance(sid,str) and sid.isdecimal() else None
 
 

@@ -154,6 +154,19 @@ class SchedulePostgresTests(unittest.TestCase):
         malformed={**valid,'servings':[{'serving_id':'4','grams':100,
                           'per_serving':{'kcal':float('nan'),'protein_g':12,'fat_g':6,'carbs_g':62}}]}
         self.assertIsNone(match('Овсянка сухая',[malformed]))
+        # Official servings may be 30 g instead of 100 g; calculate from
+        # verified mass, never assume one serving equals 100 g.
+        scaled={**valid,'servings':[{'serving_id':'33','grams':30,
+            'per_serving':{'kcal':111,'protein_g':3.6,'fat_g':1.8,'carbs_g':18.6}}]}
+        self.assertEqual(match('Овсянка сухая',[scaled]),('123','33'))
+        both={**valid,'servings':valid['servings']+scaled['servings']}
+        self.assertEqual(match('Овсянка сухая',[both]),('123','4'))
+        ambiguous={**valid,'servings':[scaled['servings'][0],
+            {**scaled['servings'][0],'serving_id':'34','grams':60}]}
+        self.assertIsNone(match('Овсянка сухая',[ambiguous]))
+        impossible={**valid,'servings':[{'serving_id':'33','grams':30,
+            'per_serving':{'kcal':800,'protein_g':3,'fat_g':1,'carbs_g':20}}]}
+        self.assertIsNone(match('Овсянка сухая',[impossible]))
 
     def test_tz5_ai_food_requires_permission_and_never_invents_grams(self):
         self.m.save_onboarding(self.chat,self.body())
