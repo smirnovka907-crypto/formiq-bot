@@ -6,6 +6,11 @@ on:
       - 'formiq_wsgi.py'
       - 'requirements-timeweb.txt'
       - 'scripts/timeweb*'
+      - 'scripts/formiq_pg_restore_audit.py'
+      - 'scripts/FORMIQ_Backup_Windows.*'
+      - 'tests/test_windows_pg18_restore.py'
+      - 'docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md'
+      - 'docs/FORMIQ_CUTOVER_PLAN.md'
       - 'deploy/timeweb/**'
       - 'tests/test_timeweb_pilot.py'
       - '.github/workflows/timeweb-pilot.yml'
@@ -58,3 +63,27 @@ jobs:
     environment: timeweb-production
     steps:
       - run: echo 'No real deployment in Issue 35 pilot'
+
+  windows-launcher-check:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      # Synthetic blocker only: no real credentials, database or backup access.
+      DATABASE_URL: 'synthetic-blocked-by-safety-guard'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Parse Windows PowerShell and verify fail-closed behavior
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            'scripts/FORMIQ_Backup_Windows.ps1',
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw 'Windows backup launcher PowerShell syntax failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/FORMIQ_Backup_Windows.ps1
+          if ($LASTEXITCODE -ne 2) { throw 'Windows launcher did not refuse inherited database credentials' }
+          Write-Host 'WINDOWS_LAUNCHER_FAIL_CLOSED; no production connections'
