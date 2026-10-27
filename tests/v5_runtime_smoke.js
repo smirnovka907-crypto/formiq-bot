@@ -543,7 +543,7 @@ async function run(){
   'Existing verified food macros load without an extra user action');
  await mixedClient.click({cmd:'food-nutrition-day'});
  assert.match(mixedClient.root.innerHTML,/Данные за день неполные/);
- assert.match(mixedClient.root.innerHTML,/1 из 2 продуктов/);
+ assert.match(mixedClient.root.innerHTML,/1 из 2 позиций/);
  assert.doesNotMatch(mixedClient.root.innerHTML,/КБЖУ за день:/,'Partial sum is never full day total');
  const unconfigured=createClient(true,{foodCatalogAvailable:false});
  await settle();await unconfigured.click({nav:'food'});await settle();
