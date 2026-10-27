@@ -4397,10 +4397,10 @@ def food_auto_link_recent(chat, item_ids):
 
 
 def food_ai_resolve_saved_fragments(chat, day):
-    """Optional AI normalisation strictly AFTER the meal has been persisted.
+    """Post-save AI recognition with owner locks and all-or-nothing food rows.
 
-    Scope to owner's one unresolved fragment. Lock and compare before adding
-    so retries and concurrent manual edits cannot duplicate or erase data.
+    Iterate a small bounded number of fragments; keep the original diary text.
+    Model network calls happen outside transactions, after the user's save.
     """
     if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
         return 0
@@ -4408,30 +4408,34 @@ def food_ai_resolve_saved_fragments(chat, day):
         rows=conn.execute("""SELECT id,unresolved_fragments FROM manual_food_meals
             WHERE chat_id=%s AND eaten_on=%s
               AND jsonb_array_length(unresolved_fragments)>0
-            ORDER BY id DESC LIMIT 1""",(chat,day)).fetchall()
+            ORDER BY id DESC LIMIT 4""",(chat,day)).fetchall()
+    inserted,total_requests=0,0
     for meal_id,fragments in rows:
-        fragment=next((f for f in fragments if isinstance(f,str) and len(f)<=200),None)
-        if not fragment:
-            continue
-        parsed=food_parse_ai(chat,fragment)
-        if not parsed or len(parsed.get('items',[]))!=1:
-            continue
-        name,grams=food_item(parsed['items'][0]['name'],parsed['items'][0]['grams'])
-        with db() as conn:
-            conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
-            current=conn.execute("""SELECT unresolved_fragments FROM manual_food_meals
-                WHERE id=%s AND chat_id=%s FOR UPDATE""",(meal_id,chat)).fetchone()
-            if not current or fragment not in current[0]:
+        for fragment in fragments:
+            if total_requests>=3:
+                return inserted
+            if not isinstance(fragment,str) or not 2<=len(fragment)<=500:
                 continue
-            left=list(current[0])
-            left.remove(fragment)
-            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
-                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
-            conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
-                WHERE id=%s AND chat_id=%s""",(json.dumps(left),meal_id,chat))
-            return 1
-    return 0
-
+            total_requests+=1
+            parsed=food_parse_ai(chat,fragment)
+            if not parsed or not 1<=len(parsed.get('items',[]))<=8:
+                continue
+            items=[food_item(row['name'],row['grams']) for row in parsed['items']]
+            with db() as conn:
+                conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+                current=conn.execute("""SELECT unresolved_fragments FROM manual_food_meals
+                    WHERE id=%s AND chat_id=%s FOR UPDATE""",(meal_id,chat)).fetchone()
+                if not current or fragment not in current[0]:
+                    continue
+                left=list(current[0])
+                left.remove(fragment)
+                for name,grams in items:
+                    conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                        VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+                conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
+                    WHERE id=%s AND chat_id=%s""",(json.dumps(left),meal_id,chat))
+            inserted+=len(items)
+    return inserted
 
 def food_auto_enrich(chat, body):
     """Explicit owner-scoped optional lookup, independent of saving a meal.
