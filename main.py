@@ -3139,7 +3139,8 @@ def check_food_safety(chat, ingredient_or_product, composition, *, source_verifi
     candidate={'name':str(ingredient_or_product or '')[:150],
                'composition':composition}
     decision=evaluate_composition(candidate,stored['items'],
-                                  trusted_server_source=source_verified is True)
+                                  trusted_server_source=source_verified is True,
+                                  confirmed_no_allergies=stored['choice']=='none')
     return {**decision,'status':{
         'excluded':'blocked','no_conflicts_detected':'safe'
         }.get(decision['status'],'needs_review')}
