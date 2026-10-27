@@ -483,6 +483,7 @@ def init_db():
             eaten_on DATE NOT NULL, meal_type TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS raw_input_text TEXT")
+        c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS unresolved_fragments JSONB NOT NULL DEFAULT '[]'::jsonb")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
             ON manual_food_meals(chat_id,eaten_on,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
@@ -4102,6 +4103,7 @@ def food_add_text(chat,body):
         raise ValueError('Выбери приём пищи')
     raw_text=body.get('text')
     parsed=food_parse_ai(chat,raw_text) or food_parse({'text':raw_text})
+    unresolved=[str(row['text']) for row in parsed['unparsed']]
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
         existing=conn.execute("""SELECT id FROM manual_food_meals
@@ -4110,13 +4112,14 @@ def food_add_text(chat,body):
         if existing:
             meal_id=existing[0]
             conn.execute("""UPDATE manual_food_meals SET raw_input_text=
-                CASE WHEN raw_input_text IS NULL THEN %s ELSE raw_input_text || E'\\n' || %s END
-                WHERE id=%s AND chat_id=%s""",(raw_text,raw_text,meal_id,chat))
+                CASE WHEN raw_input_text IS NULL THEN %s ELSE raw_input_text || E'\\n' || %s END,
+                unresolved_fragments=unresolved_fragments || %s::jsonb
+                WHERE id=%s AND chat_id=%s""",(raw_text,raw_text,json.dumps(unresolved),meal_id,chat))
         else:
             meal_id=conn.execute("""INSERT INTO manual_food_meals
-                (chat_id,eaten_on,meal_type,raw_input_text)
-                VALUES(%s,%s,%s,%s) RETURNING id""",
-                (chat,day,meal_type,raw_text)).fetchone()[0]
+                (chat_id,eaten_on,meal_type,raw_input_text,unresolved_fragments)
+                VALUES(%s,%s,%s,%s,%s::jsonb) RETURNING id""",
+                (chat,day,meal_type,raw_text,json.dumps(unresolved))).fetchone()[0]
         inserted=[]
         for row in parsed['items']:
             name,grams=food_item(row['name'],row['grams'])
@@ -4270,6 +4273,9 @@ def food_day_totals(chat, body):
             ORDER BY m.id,i.id""",(chat,day)).fetchall()
     if len(records)>250:
         raise ValueError('За день слишком много продуктов для одного расчёта')
+    with db() as conn:
+        unknown_count=conn.execute("""SELECT COALESCE(SUM(jsonb_array_length(unresolved_fragments)),0)
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s""",(chat,day)).fetchone()[0]
     linked={r[3] for r in records if r[3] and r[4]}
     # User-entered values are independently usable offline. Missing FatSecret
     # credentials never turn manual macros into "unavailable" or guessed zero.
@@ -4346,13 +4352,14 @@ def food_day_totals(chat, body):
                 (chat,day)).fetchall()
         if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
             raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
-    complete=bool(records) and all(item['nutrition'] is not None for item in items)
+    complete=bool(records) and not unknown_count and all(item['nutrition'] is not None for item in items)
     origins={item['source'] for item in items if item['source']}
     origin='mixed' if len(origins)>1 else next(iter(origins),None)
     return {'date':day.isoformat(), 'source':origin,
         'complete':complete,'total_items':len(records),
         'resolved_items':sum(item['nutrition'] is not None for item in items),
-        'partial':bool(records) and not complete,
+        'partial':bool(records or unknown_count) and not complete,
+        'unresolved_items':int(unknown_count),
         'totals':{k:float(v) for k,v in subtotal.items()} if complete else None,
         'known_subtotal':{k:float(v) for k,v in subtotal.items()}
             if any(item['nutrition'] is not None for item in items) else None,
