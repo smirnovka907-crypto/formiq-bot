@@ -119,13 +119,14 @@ def _verified(ingredients):
         return False
 
 
-def evaluate_composition(candidate, restrictions, *, trusted_server_source=False):
+def evaluate_composition(candidate, restrictions, *, trusted_server_source=False,
+                         confirmed_no_allergies=False):
     """Returns (excluded | needs_review | no_conflicts_detected), never 'safe'.
 
     Caller-supplied verified flags, AI assertions or an 'egg-free' product name
     never certify source integrity. The trusted argument is server-only.
     """
-    if not restrictions:
+    if not restrictions and not confirmed_no_allergies:
         return {'status':'needs_review','reason':'Нет подтверждённых пищевых ограничений'}
     if not isinstance(candidate,dict):
         return {'status':'needs_review','reason':'Неизвестный состав продукта'}
