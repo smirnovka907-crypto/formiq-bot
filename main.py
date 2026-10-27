@@ -4067,11 +4067,13 @@ def food_history(chat,body):
                      else 'fatsecret' if food_id and serving_id else None})
     # Unparsed text is kept without made-up serving weights or nutrients.
     with db() as conn:
-        raw_rows=conn.execute("""SELECT meal_type,raw_input_text FROM manual_food_meals
-            WHERE chat_id=%s AND eaten_on=%s AND raw_input_text IS NOT NULL
-            ORDER BY id""",(chat,day)).fetchall()
+        raw_rows=conn.execute("""SELECT id,meal_type,raw_input_text,unresolved_fragments
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+                AND raw_input_text IS NOT NULL ORDER BY id""",(chat,day)).fetchall()
     return {'date':day.isoformat(),'meals':list(meals.values()),
-        'unparsed_texts':[{'meal_type':m,'text':raw} for m,raw in raw_rows],
+        'unparsed_texts':[{'meal_id':mid,'meal_type':m,'text':raw,
+                           'unresolved_fragments':frags or []}
+                          for mid,m,raw,frags in raw_rows],
         'nutrients_available':any(item['nutrition_source'] for meal in meals.values()
             for item in meal['items'])}
 
@@ -4182,6 +4184,36 @@ def food_add_text(chat,body):
                       'Продукты сохранены. КБЖУ появятся при наличии проверенного источника.')
     return result
 
+
+
+
+def food_resolve_fragment(chat, body):
+    """Resolve one ambiguous text fragment with user-confirmed name and grams.
+
+    The original diary text is retained. The unresolved marker is removed
+    transactionally with the new food item so totals cannot become complete
+    before an actual weighed ingredient has been saved.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    meal_id,idx=body.get('meal_id'),body.get('fragment_index')
+    if type(meal_id) is not int or meal_id<=0 or type(idx) is not int or not 0<=idx<30:
+        raise ValueError('Некорректная нераспознанная запись')
+    name,grams=food_item(body.get('name'),body.get('grams'))
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        meal=conn.execute("""SELECT eaten_on,unresolved_fragments
+            FROM manual_food_meals WHERE id=%s AND chat_id=%s
+            FOR UPDATE""",(meal_id,chat)).fetchone()
+        if not meal or not isinstance(meal[1],list) or idx>=len(meal[1]):
+            raise ValueError('Запись уже уточнена или не найдена')
+        unresolved=list(meal[1])
+        unresolved.pop(idx)
+        conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+            VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+        conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
+            WHERE id=%s AND chat_id=%s""",(json.dumps(unresolved),meal_id,chat))
+    return food_history(chat,{'date':meal[0].isoformat()})
 
 
 def food_auto_match_candidates(name, options):
@@ -6318,6 +6350,8 @@ def mini_api():
             payload = {'ok': True, **food_history(chat,data)}
         elif action == 'food_auto_enrich':
             payload = {'ok': True, **food_auto_enrich(chat,data)}
+        elif action == 'food_resolve_fragment':
+            payload = {'ok': True, **food_resolve_fragment(chat,data)}
         elif action == 'food_add_text':
             payload = {'ok': True, **food_add_text(chat,data)}
         elif action == 'food_add':
