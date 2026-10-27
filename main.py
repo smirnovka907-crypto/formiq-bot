@@ -4014,27 +4014,43 @@ def food_parse(body):
 
 
 def food_parse_ai(chat, text):
-    """Optional Yandex text recognition, never an authority on food nutrients.
+    """Recognise explicitly weighed foods, not nutrition or inferred portions.
 
-    Validate model rows against the source text; discard unsupported claims.
+    Every AI row is tied to a unique source span and explicit mass; ambiguous
+    multi-food output is discarded atomically. The original text remains saved.
     """
+    if not isinstance(text,str) or not 2 <= len(text.strip()) <= 1000:
+        return None
     if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
         return None
-    # Food interpretation consent is not consent to transmit medical notes.
-    # Exclude diary fragments containing health statements before external AI.
+    # Food consent is not consent to send medical/health details to the model.
     if re.search(r'аллерг|непереносим|диабет|диагноз|болезн|лекарств|'
                  r'инсулин|травм|беремен|менстру|хронич|болит|боль',
                  text,re.IGNORECASE):
         return None
-    system=('Extract one explicitly weighed food from this Russian diary fragment. '
-            'Normalise only grammatical case (for example курицу to курица). '
-            'Keep food identity and raw/cooked state unchanged. '
-            'Never infer grams from pieces, cups or portions; never invent '
-            'calories or nutrients. Reply only JSON '
-            '{"items":[{"name":"food name","grams":100}]}. '
-            'Return an empty items list when the mass or identity is ambiguous.')
+    if (re.search(r'(?<!\w)(?:плов|борщ|суп|омлет|пицца|шаурма|лазанья|'
+                  r'рагу|запеканка|салат|пюре|котлет[а-яё]*)(?!\w)',
+                  text,re.IGNORECASE) or any(char in text for char in '()')):
+        return None
+    mass_pattern=re.compile(
+        r'(?<!\w)(\d{1,4}(?:[.,]\d{1,2})?)\s*'
+        r'(кг|kg|килограммов|килограмма|килограмм|'
+        r'граммов|грамма|грамм|гр|г|g)(?!\w)',re.IGNORECASE)
+    evidence=list(mass_pattern.finditer(text))
+    if not 1 <= len(evidence) <= 8:
+        return None
+    system=('Read a Russian meal diary fragment and identify every separate '
+            'explicitly weighed single-ingredient food (maximum 8). Return '
+            'only JSON with key "items", list entries with keys "source", '
+            '"name", "grams". Each "source" must be an EXACT verbatim, unique '
+            'substring of the user text containing that food and its explicit '
+            'weight exactly once. Preserve food identity, cooking state and '
+            'weight; change only grammatical endings in name. Convert '
+            'explicit kg to grams. No calories/nutrients; never infer mass '
+            'from cups, pieces or portions. If any food cannot be assigned a '
+            'unique explicit weight or source span, return {"items":[]}.')
     request_body={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
-        'completionOptions':{'stream':False,'temperature':0,'maxTokens':'900'},
+        'completionOptions':{'stream':False,'temperature':0,'maxTokens':'1200'},
         'messages':[{'role':'system','text':system},{'role':'user','text':text}]}
     try:
         req=urllib.request.Request(AI_URL,
@@ -4046,35 +4062,54 @@ def food_parse_ai(chat, text):
         response_text=reply['result']['alternatives'][0]['message']['text']
         obj=json.loads(response_text[response_text.index('{'):response_text.rindex('}')+1])
         rows=obj.get('items')
-        if not isinstance(rows,list) or len(rows)!=1:
+        if not isinstance(rows,list) or len(rows)!=len(evidence):
             return None
-        # Explicit weight is authoritative, never an inferred model serving.
-        amounts=re.findall(r'(?<!\d)(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:граммов|грамма|грамм|гр|г|g)(?![а-яa-z])',
-                           text,flags=re.IGNORECASE)
-        if len(amounts)!=1:
+        recognized,used=[],set()
+        for row in rows:
+            if (not isinstance(row,dict) or
+                not {'name','grams'} <= set(row) or
+                set(row)-{'name','grams','source'} or
+                type(row['grams']) not in (int,float)):
+                return None
+            source=row.get('source')
+            if source is None and len(rows)==1:
+                # Legacy one-item model responses remain compatible.
+                source=text
+            if (not isinstance(source,str) or not 3<=len(source)<=500 or
+                    text.count(source)!=1):
+                return None
+            start=text.index(source)
+            matched=list(mass_pattern.finditer(source))
+            if len(matched)!=1:
+                return None
+            token=matched[0]
+            absolute=(start+token.start(),start+token.end())
+            if absolute in used or absolute not in {(m.start(),m.end()) for m in evidence}:
+                return None
+            used.add(absolute)
+            multiplier=(1000 if token.group(2).casefold() in (
+                'кг','kg','килограммов','килограмма','килограмм') else 1)
+            explicit=Decimal(token.group(1).replace(',','.'))*multiplier
+            name,grams=food_item(row['name'],row['grams'])
+            if grams!=explicit:
+                return None
+            # Each proposed food word must be evidenced by THIS source,
+            # never by another item elsewhere in the user's diary.
+            original=re.findall(r'[a-zа-яё]+',source.casefold())
+            proposed=re.findall(r'[a-zа-яё]+',name.casefold())
+            if not proposed or any(not any(word.startswith(
+                    p[:min(4,len(p))]) for word in original) for p in proposed):
+                return None
+            if food_preparation_state(name)!=food_preparation_state(source):
+                return None
+            recognized.append({'name':name,'grams':float(grams)})
+        if len(used)!=len(evidence):
             return None
-        row=rows[0]
-        if not isinstance(row,dict) or set(row)!={'name','grams'} or type(row['grams']) not in (int,float):
-            return None
-        name,grams=food_item(row['name'],row['grams'])
-        if Decimal(amounts[0].replace(',','.'))!=grams:
-            return None
-        original=re.findall(r'[a-zа-яё]+',text.casefold())
-        proposed=re.findall(r'[a-zа-яё]+',name.casefold())
-        # Reject food substitutions, keeping only grounded word inflections.
-        if not proposed or any(not any(word.startswith(token[:min(4,len(token))])
-                               for word in original) for token in proposed):
-            return None
-        if food_preparation_state(name)!=food_preparation_state(text):
-            return None
-        if re.search(r'\b(?:плов|борщ|суп|омлет|пицца|шаурма|лазанья|рагу|запеканка)\b',
-                     text,re.IGNORECASE) or any(char in text for char in '()'):
-            return None
-        return {'items':[{'name':name,'grams':float(grams)}],'unparsed':[]}
-    except (ValueError,TypeError,KeyError,IndexError,urllib.error.HTTPError,
-            urllib.error.URLError,TimeoutError,json.JSONDecodeError):
+        return {'items':recognized,'unparsed':[]}
+    except (ValueError,TypeError,KeyError,IndexError,AttributeError,
+            urllib.error.HTTPError,urllib.error.URLError,TimeoutError,
+            json.JSONDecodeError,OverflowError):
         return None
-
 
 def food_history(chat,body):
     day=food_day(body.get('date'))
