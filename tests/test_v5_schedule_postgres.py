@@ -142,6 +142,24 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(match('Овсянка сухая',[{**valid,'brand':'Марка'}]))
         self.assertIsNone(match('Овсянка сухая',[{**valid,'servings':[]}]))
 
+    def test_tz5_ai_food_requires_permission_and_never_invents_grams(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.assertIsNone(self.m.food_parse_ai(self.chat,'овсянка 80 г'))
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','test'),patch.object(self.m,'FOLDER_ID','test'), \
+             patch.object(self.m.urllib.request,'urlopen') as open_url:
+            from io import BytesIO
+            import json
+            open_url.return_value.__enter__.return_value=BytesIO(json.dumps({
+                'result':{'alternatives':[{'message':{'text':
+                    '{"items":[{"name":"овсянка","grams":999}]}'}}]}}).encode())
+            self.assertIsNone(self.m.food_parse_ai(self.chat,'овсянка 80 г'))
+            open_url.return_value.__enter__.return_value=BytesIO(json.dumps({
+                'result':{'alternatives':[{'message':{'text':
+                    '{"items":[{"name":"овсянка","grams":80}]}'}}]}}).encode())
+            self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
+                             [{'name':'овсянка','grams':80.0}])
+
     def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
         self.m.save_onboarding(self.chat,self.body())
         raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
