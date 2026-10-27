@@ -4556,18 +4556,26 @@ def food_day_totals(chat, body):
         items.append({'id':item_id,'meal_type':meal_type,
             'source':('manual' if user_values else 'fatsecret') if values is not None else None,
             'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
-    # If a product changed during an API request, never present a stale number
-    # as belonging to its newer grams or provider identity.
-    if records:
-        with db() as conn:
-            current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,
-                        i.source_serving_id,i.updated_at
-                FROM manual_food_meals m JOIN manual_food_items i
-                  ON i.meal_id=m.id AND i.chat_id=m.chat_id
-                WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
-                (chat,day)).fetchall()
-        if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
-            raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
+    # External provider reads are slow. Recheck BOTH weighed items and raw
+    # unresolved fragments before calling the day complete; otherwise a
+    # concurrent text save can silently produce a false "full" daily total.
+    # The final reads share one repeatable-read snapshot, even if another
+    # client is saving a meal concurrently.
+    with db() as conn:
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+        current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,
+                    i.source_serving_id,i.updated_at
+            FROM manual_food_meals m JOIN manual_food_items i
+              ON i.meal_id=m.id AND i.chat_id=m.chat_id
+            WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
+            (chat,day)).fetchall()
+        current_unknown=conn.execute("""SELECT COALESCE(
+                SUM(jsonb_array_length(unresolved_fragments)),0)
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s""",
+            (chat,day)).fetchone()[0]
+    if ([(r[0],r[2],r[3],r[4],r[5]) for r in records] != current
+            or int(unknown_count)!=int(current_unknown)):
+        raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
     complete=bool(records) and not unknown_count and all(item['nutrition'] is not None for item in items)
     origins={item['source'] for item in items if item['source']}
     origin='mixed' if len(origins)>1 else next(iter(origins),None)
