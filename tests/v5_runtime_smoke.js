@@ -69,7 +69,7 @@ function createClient(auth=true,shared={}){
     workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
-   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],unparsed_texts:shared.foodUnparsed||[],nutrients_available:false};
    else if(p.action==='ai_personalized_guidance')response={ok:true,advice:'Совет по реальному дневнику питания',used_ai:true};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
    else if(p.action==='garmin_day'){
@@ -147,6 +147,14 @@ function createClient(auth=true,shared={}){
     assert.equal(p.food_id,'42');assert.equal(p.serving_id,'13');
     for(const m of shared.foodMeals||[])for(const i of m.items||[])if(i.id===p.id)i.nutrition_source='fatsecret';
     response={ok:true,item_id:p.id,source:'fatsecret',nutrients:{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}};
+   }
+   else if(p.action==='food_resolve_fragment'){
+    if(!shared.foodUnparsed||!shared.foodUnparsed[0])throw Error('No unresolved item');
+    shared.foodUnparsed[0].unresolved_fragments=[];
+    shared.foodMeals=[{id:p.meal_id,type:'snack',
+      items:[{id:303,name:p.name,grams:p.grams}]}];
+    response={ok:true,date:'2026-10-25',meals:shared.foodMeals,
+      unparsed_texts:shared.foodUnparsed};
    }
    else if(p.action==='food_add_text'){
     assert.ok(p.request_id&&p.request_id.length>=12,'One-tap food save has a retry key');
@@ -481,6 +489,18 @@ async function run(){
  await app.click({cmd:'food-delete',id:'100'});
  await app.click({cmd:'food-delete-confirm'});
  assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
+ const fragmentClient=createClient(true,{foodUnparsed:[
+   {meal_id:51,meal_type:'snack',text:'стакан молока',
+    unresolved_fragments:['стакан молока']}]});
+ await settle();await fragmentClient.click({nav:'food'});await settle();
+ assert.match(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
+ fragmentClient.fields.set('food-unknown-name-51-0',{value:'молоко'});
+ fragmentClient.fields.set('food-unknown-grams-51-0',{value:'200'});
+ await fragmentClient.click({cmd:'food-resolve-fragment',mealId:'51',index:'0'});
+ assert.ok(fragmentClient.requests.some(x=>x.action==='food_resolve_fragment'
+    &&x.meal_id===51&&x.grams==='200'));
+ assert.doesNotMatch(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
+
  const quick=createClient(true,{foodCatalogAvailable:true});
  await settle();await quick.click({nav:'food'});await settle();
  quick.input('food-text','рис сухой 80 г и курица 150 г');
