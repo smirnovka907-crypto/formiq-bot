@@ -5367,7 +5367,7 @@ def mini_write(chat, action, body):
                     return True
             raise ValueError('Активной тренировки нет')
         if expected_id is not None and expected_id != wid:
-            raise ValueError('Тренировка изменилась. Обнови дневник')
+            raise ValueError('Тренировка изменилась. Обнови тренировку')
         # Old cancel requests remain valid, but never delete training history.
         if action in ('finish','skip_workout','cancel'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
