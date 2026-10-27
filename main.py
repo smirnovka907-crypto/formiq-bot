@@ -4904,7 +4904,7 @@ def mini_history_month(chat, body):
     with db() as conn:
         dates_workout = conn.execute(
             "SELECT DISTINCT (started_at AT TIME ZONE %s)::date FROM workouts "
-            "WHERE chat_id=%s AND status='finished' "
+            "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') "
             "AND started_at >= %s AND started_at < %s",
             (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_cardio = conn.execute(
@@ -5021,8 +5021,9 @@ def mini_state(chat, just_finished=False):
             result['workout'] = workout
     # A single progress screen: dates and drill-down, without duplicate reports.
     with db() as c:
-        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title FROM workouts
-          WHERE chat_id=%s AND status='finished' ORDER BY started_at DESC,id DESC LIMIT 15''',
+        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title,status FROM workouts
+          WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped')
+          ORDER BY started_at DESC,id DESC LIMIT 15''',
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
@@ -5030,9 +5031,13 @@ def mini_state(chat, just_finished=False):
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     history_zone=history_local_zone(chat)
     combined=[{'id':wid,'date':history_local_date(dt, history_zone),
-        'sort_at':dt.isoformat(),'type':'workout',
-        'title':manual_title or day_title(p,day)}
-        for wid,day,dt,manual_title in history_rows]
+        'sort_at':dt.isoformat(),
+        'type':('workout_skipped' if status=='skipped' else
+                'workout_empty' if status=='finished_empty' else 'workout'),
+        'title':(('Пропущена · ' if status=='skipped' else
+                  'Без подходов · ' if status=='finished_empty' else '')+
+                 (manual_title or day_title(p,day)))}
+        for wid,day,dt,manual_title,status in history_rows]
     combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
         'title':cardio_history_title(equipment,mins,activity,kcal)}
@@ -5351,19 +5356,19 @@ def mini_write(chat, action, body):
         wid = mini_current(c,chat)
         if not wid:
             raise ValueError('Активной тренировки нет')
-        if action == 'cancel':
-            c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
-            return False
-        if action in ('finish','skip_workout'):
+        # Old cancel requests remain valid, but never delete training history.
+        if action in ('finish','skip_workout','cancel'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
                 WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
+            legacy_done = c.execute('''SELECT COUNT(*) FROM workout_items
+                WHERE workout_id=%s AND done=TRUE''',(wid,)).fetchone()[0]
             # A skipped session must never count as a completed workout.
             # Explicit early finish with no sets is also recorded, not blocked.
             # Preserve completed work even if the user chooses "skip" later:
             # a partially completed session must not disappear from progress.
-            final_status = ('finished' if done else
-                            'skipped' if action=='skip_workout' else 'finished_empty')
+            final_status = ('finished' if done or legacy_done else
+                            'skipped' if action in ('skip_workout','cancel')
+                            else 'finished_empty')
             c.execute('''UPDATE workouts SET status=%s,finished_at=NOW()
                 WHERE id=%s AND chat_id=%s AND status='active' ''',(final_status,wid,chat))
             affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()

@@ -1026,6 +1026,8 @@ class SchedulePostgresTests(unittest.TestCase):
             (False,'finish','finished_empty'),
             (False,'skip_workout','skipped'),
             (True,'skip_workout','finished'),
+            (False,'cancel','skipped'),
+            (True,'cancel','finished'),
         ]:
             with self.connect() as conn:
                 wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
@@ -1055,6 +1057,33 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(detail['status'],expected)
             with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
                 self.m.mini_write(self.chat,action,{})
+
+    def test_tz5_legacy_completed_item_without_sets_is_not_empty(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,done)
+                VALUES(%s,0,'Приседание','10',TRUE)""",(wid,))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',{}))
+        with self.connect() as conn:
+            status=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()[0]
+        self.assertEqual(status,'finished')
+
+    def test_tz5_skipped_visible_in_progress_history_and_calendar(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'cancel',{}))
+        state=self.m.mini_state(self.chat)
+        self.assertTrue(any(row['id']==wid and row['type']=='workout_skipped'
+            for row in state['history']))
+        with self.connect() as conn:
+            month=conn.execute("SELECT to_char(started_at,'YYYY-MM') FROM workouts WHERE id=%s",
+                (wid,)).fetchone()[0]
+        marks=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertTrue(marks['dates'])
 
     def test_tz5_skip_scheduled_slot_advances_without_marking_done(self):
         p,cycle,calendar=self.save()
