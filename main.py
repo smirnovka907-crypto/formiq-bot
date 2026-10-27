@@ -3957,9 +3957,13 @@ def food_parse(body):
     # User text may start or end with the explicitly measured gram weight.
     # Never infer 'one egg', cups, cooked/raw yield or nutritional data.
     mass=r'(\d{1,4}(?:[.,]\d{1,2})?)'
-    unit=r'(?:граммов|грамма|грамм|гр|г|g)'
+    unit=r'(килограммов|килограмма|килограмм|кг|kg|граммов|грамма|грамм|гр|г|g)'
     suffix=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+r'\.?',re.IGNORECASE)
     prefix=re.compile(mass+r'\s*'+unit+r'\.?\s+(.+)',re.IGNORECASE)
+    def measured(name, mass_text, mass_unit):
+        # A kg value is explicitly measured, not an inferred portion size.
+        factor=1000 if mass_unit.casefold() in ('кг','kg','килограммов','килограмма','килограмм') else 1
+        return food_item(name,Decimal(mass_text.replace(',','.'))*factor)
     # Some natural phrases put preparation *after* the measured amount.
     # Keep that modifier with the item; dry/cooked weights must not be merged.
     prep_tail=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+
@@ -3970,7 +3974,7 @@ def food_parse(body):
     # do not split ordinary ingredient names or decimal gram values.
     expanded=[]
     for part in parts:
-        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=(?:[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм)|\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм)\s+[^,;\n]{2,100}))',part,flags=re.IGNORECASE))
+        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=(?:[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:кг|kg|килограмм|г|гр|грамм)|\d{1,4}(?:[.,]\d{1,2})?\s*(?:кг|kg|килограмм|г|гр|грамм)\s+[^,;\n]{2,100}))',part,flags=re.IGNORECASE))
     parts=[part.strip() for part in expanded if part.strip()]
     if len(parts)>30:
         raise ValueError('Максимум 30 продуктов за один ввод')
@@ -3996,9 +4000,10 @@ def food_parse(body):
         leading=prefix.fullmatch(clean) if ending is None and trailing is None else None
         if trailing or ending or leading:
             try:
-                name,grams=(food_item(trailing.group(1)+' '+trailing.group(3),trailing.group(2))
-                            if trailing else food_item(ending.group(1),ending.group(2)) if ending
-                            else food_item(leading.group(2),leading.group(1)))
+                name,grams=(measured(trailing.group(1)+' '+trailing.group(4),
+                                      trailing.group(2),trailing.group(3))
+                            if trailing else measured(ending.group(1),ending.group(2),ending.group(3)) if ending
+                            else measured(leading.group(3),leading.group(1),leading.group(2)))
                 recognized.append({'name':name,'grams':float(grams)})
                 continue
             except ValueError:
