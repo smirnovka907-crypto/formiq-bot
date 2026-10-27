@@ -261,7 +261,10 @@ class FoodAllergyPrivacyTests(unittest.TestCase):
                  'choice':'declared','recommendations_allowed':True,
                  'items':normalise_restrictions([{'name':'Яйца','kind':'allergy'}])}):
             result=self.m.food_allergy_check(777,{'candidate':evidence(['рис'])})
+            blocked=self.m.food_allergy_check(777,
+                {'candidate':evidence(['яичный порошок'])})
         self.assertEqual(result['result']['status'],'needs_review')
+        self.assertEqual(blocked['result']['status'],'blocked')
 
 
 if __name__=='__main__':
