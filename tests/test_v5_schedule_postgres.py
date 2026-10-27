@@ -167,6 +167,29 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
                              [{'name':'овсянка','grams':80.0}])
 
+    def test_tz5_resolve_unknown_food_preserves_raw_and_owner_isolation(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        original='курица 150 г, стакан молока'
+        first=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':original})
+        self.assertEqual(first['unparsed_texts'][0]['unresolved_fragments'],
+                         ['стакан молока'])
+        meal_id=first['unparsed_texts'][0]['meal_id']
+        with self.assertRaises(ValueError):
+            self.m.food_resolve_fragment(self.chat+1,{'meal_id':meal_id,
+                'fragment_index':0,'name':'молоко','grams':200})
+        result=self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
+            'fragment_index':0,'name':'молоко','grams':200})
+        self.assertEqual(result['unparsed_texts'][0]['text'],original)
+        self.assertEqual(result['unparsed_texts'][0]['unresolved_fragments'],[])
+        self.assertEqual(len(result['meals'][0]['items']),2)
+        self.assertEqual(self.m.food_day_totals(self.chat,
+            {'date':'2026-10-18'})['unresolved_items'],0)
+        with self.assertRaises(ValueError):
+            self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
+                'fragment_index':0,'name':'молоко','grams':200})
+
     def test_tz5_one_tap_meal_immediate_save_then_source_backed_totals(self):
         from unittest.mock import Mock
         self.m.save_onboarding(self.chat,self.body())
