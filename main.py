@@ -4149,7 +4149,8 @@ def food_auto_match_candidates(name, options):
         return None
     option=exact[0]
     portions=[p for p in option.get('servings',[]) if isinstance(p,dict)
-              and p.get('grams')==100 and p.get('per_serving')]
+              and p.get('grams')==100 and isinstance(p.get('per_serving'),dict)
+              and all(k in p['per_serving'] for k in FOOD_MANUAL_KEYS)]
     if len(portions)!=1:
         return None
     if food_preparation_state(name)!=food_preparation_state(option['name']):
