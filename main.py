@@ -3964,6 +3964,14 @@ def food_parse(body):
         r'\s+(сух(?:ая|ой|ое|ие|их|ого)|варен(?:ая|ый|ое|ые|ой|ого)|варён(?:ая|ый|ое|ые|ой|ого)|'
         r'отварн(?:ая|ый|ое|ые|ой|ого)|готов(?:ая|ый|ое|ые|ой|ого)|'
         r'жарен(?:ая|ый|ое|ые|ой|ого)|жарён(?:ая|ый|ое|ые|ой|ого))',re.IGNORECASE)
+    # Connectors between two explicitly weighed foods are safe separators;
+    # do not split ordinary ingredient names or decimal gram values.
+    expanded=[]
+    for part in parts:
+        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм))',part,flags=re.IGNORECASE))
+    parts=[part.strip() for part in expanded if part.strip()]
+    if len(parts)>30:
+        raise ValueError('Максимум 30 продуктов за один ввод')
     for part in parts:
         trailing=prep_tail.fullmatch(part)
         ending=suffix.fullmatch(part) if trailing is None else None
