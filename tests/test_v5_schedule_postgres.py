@@ -738,6 +738,45 @@ class SchedulePostgresTests(unittest.TestCase):
               AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
         self.assertEqual(nutrients,[],'Provider macro values must not be stored')
 
+    def test_day_kbju_detects_unresolved_food_saved_during_catalogue_lookup(self):
+        """A concurrent free-text save must not make incomplete KBJU look complete."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','items':[{'name':'Овсянка сухая','grams':100}]})
+        item_id=saved['meals'][0]['items'][0]['id']
+        with self.connect() as conn:
+            conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                source_serving_id='13' WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat))
+        sample={'food_id':'42','name':'Овсянка сухая',
+            'servings':[{'serving_id':'13','grams':100,
+                'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='synthetic-token'
+        def save_unknown_during_lookup(_food_id,_token):
+            # This is the real owner-scoped write via another connection.
+            self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'lunch','text':'стакан молока'})
+            return sample
+        fake.food_by_id.side_effect=save_unknown_during_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            with self.assertRaisesRegex(ValueError,'Дневник изменился'):
+                self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            # After a fresh read, the raw item remains saved without fake 0s.
+            fake.food_by_id.side_effect=None
+            fake.food_by_id.return_value=sample
+            result=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(result['complete'])
+        self.assertTrue(result['partial'])
+        self.assertIsNone(result['totals'])
+        self.assertEqual(result['unresolved_items'],1)
+        self.assertEqual(result['known_subtotal']['kcal'],380)
+        history=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(history['unparsed_texts'][0]['text'],'стакан молока')
+
     def test_fatsecret_oauth_links_owner_with_one_time_callback_encrypted_tokens(self):
         from cryptography.fernet import Fernet
         from urllib.parse import parse_qs,urlsplit
