@@ -1,0 +1,52 @@
+name: Timeweb VPS - OFFLINE pilot (Issue 35)
+on:
+  pull_request:
+    paths:
+      - 'main.py'
+      - 'formiq_wsgi.py'
+      - 'requirements-timeweb.txt'
+      - 'scripts/timeweb*'
+      - 'deploy/timeweb/**'
+      - 'tests/test_timeweb_pilot.py'
+      - '.github/workflows/timeweb-pilot.yml'
+      - 'docs/TIMEWEB_PILOT_RUNBOOK.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: timeweb-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TELEGRAM_BOT_TOKEN: ''
+      DATABASE_URL: ''
+      YANDEX_API_KEY: ''
+      TIMEWEB_SSH_PRIVATE_KEY: ''
+      TIMEWEB_SSH_HOST: ''
+      FORMIQ_TIMEWEB_REAL_DEPLOY_ENABLED: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline guards and syntax
+        run: |
+          python scripts/timeweb_pilot.py --check
+          bash -n scripts/timeweb-pilot.sh
+          node --check web/v5-live.js
+      - name: Install runtime for synthetic import
+        run: pip install -r requirements.txt -r requirements-timeweb.txt
+      - name: Verify service unit
+        run: systemd-analyze verify deploy/timeweb/formiq-web.service
+      - name: Security and rollback regressions
+        run: python -m unittest tests/test_timeweb_pilot.py -v
+      - name: Simulate atomic update and failed-release rollback
+        run: python scripts/timeweb_release.py simulate
+      - name: Package immutable tracked source (no artifact upload)
+        run: bash scripts/timeweb-pilot.sh
