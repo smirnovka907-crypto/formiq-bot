@@ -134,6 +134,39 @@ print('WSGI import isolated')
         self.assertNotEqual(run.returncode,0)
         self.assertIn("cannot connect to existing Render",run.stderr)
 
+    def test_real_health_probe_requires_release_and_database(self):
+        from unittest.mock import patch
+        class Reply:
+            status=200
+            def __init__(self, body): self.body=body
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def read(self, _): return self.body
+        with patch.object(timeweb_release.urllib.request, 'urlopen',
+                          side_effect=[Reply((A+'\n').encode()),
+                                       Reply(b'DATABASE_READY\n')]) as http:
+            self.assertTrue(timeweb_release.live_health(A))
+            self.assertEqual(http.call_count, 2)
+            self.assertIn('/__timeweb_db_health', http.call_args.args[0])
+        with patch.object(timeweb_release.urllib.request, 'urlopen',
+                          side_effect=lambda u, **kw:
+                              Reply((A+'\n').encode()) if '__timeweb_release_' in u
+                              else Reply(b'database unavailable')) as http:
+            self.assertFalse(timeweb_release.live_health(A))
+
+    def test_windows_launcher_never_accepts_secret_in_command_arguments(self):
+        script=(ROOT/'scripts/FORMIQ_Backup_Windows.ps1').read_text()
+        cmd=(ROOT/'scripts/FORMIQ_Backup_Windows.cmd').read_text()
+        self.assertIn('Find-Python',script)
+        self.assertIn('Find-Postgres18',script)
+        self.assertIn('Ensure-No-Stored-Secrets',script)
+        self.assertIn('FORMIQ-private-backups',script)
+        self.assertIn('formiq_restore',script)
+        self.assertIn('formiq_pg_restore_audit.py',script)
+        self.assertIn('FORMIQ_Backup_Windows.ps1',cmd)
+        self.assertNotIn('set PGPASSWORD=',cmd)
+        self.assertNotIn('TELEGRAM_BOT_TOKEN=',cmd)
+
     def test_workflow_is_readonly_and_offline(self):
         text=(ROOT/".github/workflows/timeweb-pilot.yml").read_text()
         for fragment in ("pull_request:","contents: read","concurrency:",
