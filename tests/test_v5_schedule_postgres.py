@@ -189,6 +189,20 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
 
+    def test_tz5_postweight_preparation_is_not_dropped(self):
+        parsed=self.m.food_parse({'text':
+            'гречка 200 г варёная, рис 80 г сухой; картофель 150 г жареный'})
+        self.assertEqual(parsed['items'],[
+            {'name':'гречка варёная','grams':200.0},
+            {'name':'рис сухой','grams':80.0},
+            {'name':'картофель жареный','grams':150.0}])
+        self.assertEqual(parsed['unparsed'],[])
+        # Do not convert cooked grams to dry grams by assuming a yield.
+        self.assertIsNone(self.m.food_auto_match_candidates('гречка варёная',[
+            {'food_id':'3','name':'гречка сухая','brand':None,
+             'servings':[{'serving_id':'8','grams':100,
+                          'per_serving':{'kcal':330}}]}]))
+
     def test_free_text_accepts_explicit_leading_and_trailing_grams_without_guessing(self):
         result=self.m.food_parse({'text':
             '80 г рис сухой; творог 150 граммов; 65,5 грамма яблоко; 2 яйца'})
