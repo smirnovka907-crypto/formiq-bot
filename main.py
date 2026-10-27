@@ -3117,8 +3117,10 @@ def food_allergy_check(chat,payload):
                  'reason':'Не подтверждены пищевые ограничения или согласие'}}
     # Client JSON can NEVER certify its own composition or source.
     candidate=payload.get('candidate') if isinstance(payload,dict) else None
-    return {'result':evaluate_composition(candidate,stored['items'],
-                                          trusted_server_source=False)}
+    result=evaluate_composition(candidate,stored['items'],trusted_server_source=False)
+    return {'result':{**result,'status':{
+        'excluded':'blocked','no_conflicts_detected':'safe'
+    }.get(result['status'],'needs_review')}}
 
 
 
