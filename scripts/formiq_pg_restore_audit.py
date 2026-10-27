@@ -56,7 +56,7 @@ def take_snapshot(env):
         counts[name] = int(answer)
     # Including FK/PK/unique/check constraints, not their contents.
     constraints = psql_scalar(env,
-        "SELECT conrelid::regclass::text || ':' || contype || ':' || conname "
+        "SELECT conrelid::regclass::text || ':' || contype::text || ':' || conname "
         "FROM pg_catalog.pg_constraint WHERE connamespace='public'::regnamespace "
         "ORDER BY 1").splitlines()
     sequences = psql_scalar(env,
