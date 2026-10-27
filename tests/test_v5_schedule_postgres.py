@@ -219,6 +219,8 @@ class SchedulePostgresTests(unittest.TestCase):
         second=self.m.food_add_text(self.chat,request)
         self.assertEqual(first['meals'],second['meals'])
         self.assertEqual(len(second['meals'][0]['items']),2)
+        with self.assertRaisesRegex(ValueError,'отличается'):
+            self.m.food_add_text(self.chat,{**request,'text':'рис сухой 500 г'})
         with self.connect() as conn:
             row=conn.execute("""SELECT COUNT(*) FROM food_save_requests
                 WHERE chat_id=%s""",(self.chat,)).fetchone()
