@@ -1058,6 +1058,37 @@ class SchedulePostgresTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
                 self.m.mini_write(self.chat,action,{})
 
+    def test_tz5_closure_retry_guard_and_owner_identity(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as c:
+            old=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        with self.connect() as c:
+            fresh=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'B','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        with self.assertRaisesRegex(ValueError,'Тренировка изменилась'):
+            self.m.mini_write(self.chat,'skip_workout',
+                              {'expected_workout':old})
+        with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
+            self.m.mini_write(self.chat+1,'finish',
+                              {'expected_workout':old})
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'active')
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'skipped')
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM workouts WHERE chat_id=%s",
+                                       (self.chat,)).fetchone()[0],2)
+
     def test_tz5_legacy_completed_item_without_sets_is_not_empty(self):
         self.m.save_onboarding(self.chat,self.body())
         with self.connect() as conn:
