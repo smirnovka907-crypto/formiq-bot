@@ -194,6 +194,7 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(len(saved['meals'][0]['items']),2)
             self.assertTrue(all(x['nutrition_source'] is None
                 for x in saved['meals'][0]['items']))
+            self.m.save_onboarding(self.chat+1,self.body())
             self.assertEqual(self.m.food_auto_enrich(self.chat+1,
                 {'date':'2026-10-18'})['catalog_matches'],0)
             linked=self.m.food_auto_enrich(self.chat,
