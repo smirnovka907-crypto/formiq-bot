@@ -384,6 +384,43 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(float(record[0]),200.0)
         self.assertEqual(record[1:],(None,None))
 
+    def test_tz5_per_meal_unresolved_never_looks_complete(self):
+        """A resolved product does not complete a meal with unknown fragments."""
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г, стакан молока'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        self.m.food_change(self.chat,{'id':item_id,'name':'курица',
+            'grams':150,'nutrition_100g':{'kcal':165,'protein_g':31,
+                                          'fat_g':3.6,'carbs_g':0}})
+        self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'snack','text':'пюре домашнее 200 г'})
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertEqual(totals['resolved_items'],1)
+        self.assertEqual(totals['unresolved_items'],2)
+        self.assertIsNone(totals['totals'])
+        meals={m['type']:m for m in totals['meals']}
+        self.assertEqual(meals['lunch']['total_items'],2)
+        self.assertEqual(meals['lunch']['resolved_items'],1)
+        self.assertEqual(meals['lunch']['unresolved_items'],1)
+        self.assertFalse(meals['lunch']['complete'])
+        self.assertAlmostEqual(meals['lunch']['known_subtotal']['kcal'],247.5)
+        self.assertEqual(meals['snack']['total_items'],1)
+        self.assertEqual(meals['snack']['unresolved_items'],1)
+        self.assertIsNone(meals['snack']['known_subtotal'])
+        self.assertFalse(meals['snack']['complete'])
+        # Same result when the local owner's unknown item is resolved.
+        raw=next(r for r in saved['unparsed_texts'] if r['meal_type']=='lunch')
+        self.m.food_resolve_fragment(self.chat,{'meal_id':raw['meal_id'],
+            'fragment_index':0,'expected_text':'стакан молока',
+            'name':'молоко','grams':200})
+        final=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(final['unresolved_items'],1)
+        lunch=next(m for m in final['meals'] if m['type']=='lunch')
+        self.assertEqual(lunch['unresolved_items'],0)
+        self.assertFalse(lunch['complete'])  # Milk still has no verified macros.
+
     def test_tz5_save_unknown_food_does_not_wait_for_ai(self):
         self.m.save_onboarding(self.chat,self.body())
         with patch.object(self.m,'food_parse_ai',side_effect=RuntimeError(
