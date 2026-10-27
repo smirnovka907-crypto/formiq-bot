@@ -496,7 +496,7 @@ async function run(){
  assert.match(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
  fragmentClient.fields.set('food-unknown-name-51-0',{value:'молоко'});
  fragmentClient.fields.set('food-unknown-grams-51-0',{value:'200'});
- await fragmentClient.click({cmd:'food-resolve-fragment',mealId:'51',index:'0'});
+ await fragmentClient.click({cmd:'food-resolve-fragment',mealId:'51',index:'0',fragment:'стакан молока'});
  assert.ok(fragmentClient.requests.some(x=>x.action==='food_resolve_fragment'
     &&x.meal_id===51&&x.grams==='200'));
  assert.doesNotMatch(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
