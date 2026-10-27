@@ -1,3 +1,11 @@
+# FORMIQ | Issue #35 — результаты offline dry-run CI (27.10.2026)
+
+**Верификация:** [Timeweb pilot Actions #40519894046](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519894046) **SUCCESS** на кодовом SHA `9b33785875618826426cb8a405e8dc9b767f754c` (WSGI импорт без внешних соединений, охрана реквизитов, systemd синтаксис, Python-тесты переключения и отката, allowlist SHA-архива). [Integrations offline #40519227208](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519227208) **SUCCESS** на предыдущем кодовом SHA `cda18fa526c1fa273f1f68472fa1745a153b6da2` (API/Python, JavaScript, Chromium mobile, временная PostgreSQL 18). Полный тест на последнем кодовом SHA запускается отдельно, итог проверяется по точному HEAD после этого журнального коммита.
+
+**Граница:** реальный Timeweb VPS не создан. Никакого remote SSH, GitHub deployment, перемещения БД или webhook нет. Автоматический rollout проверен только в disposable симуляции. Future deployment job закреплён `if: false` и не исполняется. Формальная возможность required reviewers для публичного GitHub подтверждена официальными правилами, но реальная настройка Environment в аккаунте не проверена. Production encrypted backup/restore не подтверждены. **NO-GO на выпуск** до отдельного разрешения владельца и проверки данных/152-ФЗ.
+
+---
+
 # FORMIQ | Issue #35 — Timeweb VPS + GitHub Actions, offline pilot (27.10.2026)
 
 **Состояние:** подготовка только в отдельной ветке `pilot/issue-35-timeweb-vps-offline-20261027`, на базе опубликованного main `f0f46c2b2e598b2e3811fc8af66d5f161a3d8643`. Релиз, merge, Render, Telegram, production PostgreSQL и покупка ресурсов **не выполнялись**.
