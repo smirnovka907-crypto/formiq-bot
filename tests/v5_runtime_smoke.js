@@ -69,7 +69,7 @@ function createClient(auth=true,shared={}){
     workout={...workout,done:1,rest_remaining_seconds:89,current:{...workout.current,set_no:2}};
     shared.workout=workout;
     response={ok:true,patch:{workout}};
-   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],nutrients_available:false};
+   }else if(p.action==='food_history')response={ok:true,date:p.date,meals:shared.foodMeals||[],unparsed_texts:shared.foodUnparsed||[],nutrients_available:false};
    else if(p.action==='ai_personalized_guidance')response={ok:true,advice:'Совет по реальному дневнику питания',used_ai:true};
    else if(p.action==='food_parse')response={ok:true,items:[{name:'овсянка',grams:70},{name:'творог 5%',grams:200}],unparsed:[]};
    else if(p.action==='garmin_day'){
@@ -126,10 +126,13 @@ function createClient(auth=true,shared={}){
    else if(p.action==='food_nutrition_day'){
     const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
     const registered=entries.filter(x=>x.nutrition_source==='fatsecret');
-    const full=!!entries.length&&registered.length===entries.length;
+    const unresolved=(shared.foodUnparsed||[]).reduce((count,row)=>
+      count+(row.unresolved_fragments||[]).length,0);
+    const full=!!entries.length&&registered.length===entries.length&&!unresolved;
     const kcal=registered.length*266;
     response={ok:true,source:'fatsecret',date:p.date,total_items:entries.length,
-      resolved_items:registered.length,complete:full,partial:!full,
+      resolved_items:registered.length,unresolved_items:unresolved,
+      complete:full,partial:!full,
       totals:full?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
       known_subtotal:registered.length?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
       meals:(shared.foodMeals||[]).map(m=>({type:m.type,total_items:m.items.length,
@@ -147,6 +150,26 @@ function createClient(auth=true,shared={}){
     assert.equal(p.food_id,'42');assert.equal(p.serving_id,'13');
     for(const m of shared.foodMeals||[])for(const i of m.items||[])if(i.id===p.id)i.nutrition_source='fatsecret';
     response={ok:true,item_id:p.id,source:'fatsecret',nutrients:{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}};
+   }
+   else if(p.action==='food_resolve_fragment'){
+    if(!shared.foodUnparsed||!shared.foodUnparsed[0])throw Error('No unresolved item');
+    shared.foodUnparsed[0].unresolved_fragments=[];
+    shared.foodMeals=[{id:p.meal_id,type:'snack',
+      items:[{id:303,name:p.name,grams:p.grams}]}];
+    response={ok:true,date:'2026-10-25',meals:shared.foodMeals,
+      unparsed_texts:shared.foodUnparsed};
+   }
+   else if(p.action==='food_add_text'){
+    assert.ok(p.request_id&&p.request_id.length>=12,'One-tap food save has a retry key');
+    shared.foodMeals=[{id:88,type:p.meal_type,items:[
+      {id:301,name:'рис сухой',grams:80},
+      {id:302,name:'курица',grams:150}]}];
+    response={ok:true,date:p.date,meals:shared.foodMeals,unparsed:[],
+      notice:'Запись сохранена.'};
+   }else if(p.action==='food_auto_enrich'){
+    for(const meal of shared.foodMeals||[])for(const item of meal.items)
+      item.nutrition_source='fatsecret';
+    response={ok:true,date:p.date,catalog_matches:2};
    }
    else if(p.action==='food_add'){
     shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
@@ -469,6 +492,41 @@ async function run(){
  await app.click({cmd:'food-delete',id:'100'});
  await app.click({cmd:'food-delete-confirm'});
  assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
+ const fragmentClient=createClient(true,{foodUnparsed:[
+   {meal_id:51,meal_type:'snack',text:'стакан молока',
+    unresolved_fragments:['стакан молока']}]});
+ await settle();await fragmentClient.click({nav:'food'});await settle();
+ assert.match(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
+ fragmentClient.fields.set('food-unknown-name-51-0',{value:'молоко'});
+ fragmentClient.fields.set('food-unknown-grams-51-0',{value:'200'});
+ await fragmentClient.click({cmd:'food-resolve-fragment',mealId:'51',index:'0',fragment:'стакан молока'});
+ assert.ok(fragmentClient.requests.some(x=>x.action==='food_resolve_fragment'
+    &&x.meal_id===51&&x.grams==='200'));
+ assert.doesNotMatch(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
+
+ const rawOnly=createClient(true,{foodUnparsed:[{
+  meal_id:851,meal_type:'snack',text:'домашнее пюре',
+  unresolved_fragments:['домашнее пюре']}]});
+ await settle();await rawOnly.click({nav:'food'});await settle();
+ assert.ok(rawOnly.requests.some(x=>x.action==='food_nutrition_day'),
+  'Raw-only meals must request daily nutrition completeness');
+ assert.match(rawOnly.root.innerHTML,/Данные за день неполные/);
+ assert.match(rawOnly.root.innerHTML,/Требуют уточнения: 1/);
+ assert.doesNotMatch(rawOnly.root.innerHTML,/КБЖУ за день:/);
+
+ const quick=createClient(true,{foodCatalogAvailable:true});
+ await settle();await quick.click({nav:'food'});await settle();
+ quick.input('food-text','рис сухой 80 г и курица 150 г');
+ const finishCatalogue=quick.deferOnce('food_auto_enrich');
+ await quick.click({cmd:'food-save-text'});
+ assert.match(quick.root.innerHTML,/рис сухой/,
+  'Meal is visible before optional catalogue request finishes');
+ assert.equal(quick.requests.filter(x=>x.action==='food_add_text').length,1);
+ assert.ok(quick.requests.some(x=>x.action==='food_auto_enrich'));
+ finishCatalogue();await settle();
+ assert.ok(quick.requests.some(x=>x.action==='food_nutrition_day'),
+  'Daily macro check runs after verified catalogue enrichment');
+
  const catalogClient=createClient(true,{foodCatalogAvailable:true,
   foodMeals:[{id:81,type:'breakfast',items:[{id:202,name:'овсянка сухая',grams:70}]}]});
  await settle();await catalogClient.click({nav:'food'});await settle();
@@ -498,7 +556,7 @@ async function run(){
   'Existing verified food macros load without an extra user action');
  await mixedClient.click({cmd:'food-nutrition-day'});
  assert.match(mixedClient.root.innerHTML,/Данные за день неполные/);
- assert.match(mixedClient.root.innerHTML,/1 из 2 продуктов/);
+ assert.match(mixedClient.root.innerHTML,/1 из 2 позиций/);
  assert.doesNotMatch(mixedClient.root.innerHTML,/КБЖУ за день:/,'Partial sum is never full day total');
  const unconfigured=createClient(true,{foodCatalogAvailable:false});
  await settle();await unconfigured.click({nav:'food'});await settle();
@@ -716,3 +774,9 @@ async function run(){
    console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
 run().catch(e=>{console.error(e);process.exitCode=1});
+
+// TZ5 P0: zero-set closure must be discoverable without deleting a profile.
+const tz5Ui = require('fs').readFileSync(require('path').join(__dirname,'../web/v5-live.js'),'utf8');
+for(const marker of ["cmd==='skip-workout'", "send('skip_workout',{expected_workout:", "Подходы не выполнены", "Завершить досрочно"]){
+  if(!tz5Ui.includes(marker))throw Error('TZ5 zero-set UI regression: '+marker);
+}

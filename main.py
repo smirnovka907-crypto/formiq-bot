@@ -482,6 +482,14 @@ def init_db():
             id BIGSERIAL PRIMARY KEY, chat_id BIGINT NOT NULL,
             eaten_on DATE NOT NULL, meal_type TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+        c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS raw_input_text TEXT")
+        c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS unresolved_fragments JSONB NOT NULL DEFAULT '[]'::jsonb")
+        c.execute("""CREATE TABLE IF NOT EXISTS food_save_requests (
+            chat_id BIGINT NOT NULL, request_id TEXT NOT NULL,
+            meal_id BIGINT NOT NULL, request_hash TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY(chat_id,request_id))""")
+        c.execute("ALTER TABLE food_save_requests ADD COLUMN IF NOT EXISTS request_hash TEXT")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
             ON manual_food_meals(chat_id,eaten_on,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
@@ -1448,7 +1456,7 @@ def planned_next_in(c, chat, cycle_id, count):
       AND s.schedule_state IS DISTINCT FROM 'retired'
       AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
         AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
-        AND w.plan_day=s.day_code AND w.status='finished' AND w.source='template')
+        AND w.plan_day=s.day_code AND w.status IN ('finished','finished_empty','skipped') AND w.source='template')
       ORDER BY s.planned_date,s.week_no,s.id LIMIT 1''',
       (chat,cycle_id,chat)).fetchone()
 
@@ -1910,13 +1918,19 @@ def set_prompt(chat, wid, pos, no, mid=None):
 
 
 def recalc_item(c, wid, pos):
-    total, pending, skipped = c.execute('''SELECT COUNT(*),COUNT(*) FILTER(WHERE state='pending'),
-        COUNT(*) FILTER(WHERE state='skipped') FROM workout_sets
-        WHERE workout_id=%s AND position=%s''', (wid, pos)).fetchone()
+    total,pending,skipped,completed=c.execute('''SELECT COUNT(*),
+        COUNT(*) FILTER(WHERE state='pending'),
+        COUNT(*) FILTER(WHERE state='skipped'),
+        COUNT(*) FILTER(WHERE state='done')
+        FROM workout_sets WHERE workout_id=%s AND position=%s''',
+        (wid,pos)).fetchone()
     if total:
+        # A partially performed exercise is not an entirely skipped exercise.
+        # Preserve the actual set rows for detailed training history.
         c.execute('''UPDATE workout_items SET done=%s,skipped=%s
                      WHERE workout_id=%s AND position=%s''',
-                  (pending == 0 and skipped == 0, pending == 0 and skipped > 0, wid, pos))
+                  (pending == 0 and skipped == 0,
+                   pending == 0 and skipped > 0 and completed == 0,wid,pos))
 
 
 def record_set(chat, wid, pos, no, value, mid=None):
@@ -2031,31 +2045,36 @@ def legacy_mark(chat, wid, pos, skip, mid=None):
 
 
 def finish_workout(chat, wid, mid=None):
+    """Close a Telegram-bot session without inventing any completed sets."""
     with db() as c:
-        done = c.execute('''SELECT COUNT(*) FROM workout_sets s JOIN workouts w ON w.id=s.workout_id
-                            WHERE s.workout_id=%s AND w.chat_id=%s
-                            AND w.status='active' AND s.state='done' ''', (wid, chat)).fetchone()[0]
-        legacy = c.execute('''SELECT COUNT(*) FROM workout_items i JOIN workouts w ON w.id=i.workout_id
-                              WHERE i.workout_id=%s AND w.chat_id=%s
-                              AND w.status='active' AND i.done''', (wid, chat)).fetchone()[0]
-        if done + legacy == 0:
-            return send(chat, 'Пока ничего не выполнено. Запиши подход или отмени занятие.',
-                        [('▶️ Тренировка', 'current'), ('❌ Отменить', f'cancel:{wid}')], mid)
-        row = c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                           WHERE id=%s AND chat_id=%s AND status='active' RETURNING id''',
-                        (wid, chat)).fetchone()
-        if row:
-            affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
-                                    WHERE workout_id=%s AND state='pending' RETURNING position''',
-                                 (wid,)).fetchall()
-            for pos in set(x[0] for x in affected):
-                recalc_item(c, wid, pos)
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    if not row:
-        return send(chat, 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
-    send(chat, '🏁 Тренировка сохранена! Как ощущалась нагрузка?',
-         [('🙂 Легко', f'rate:{wid}:easy'), ('💪 Нормально', f'rate:{wid}:ok'),
-          ('😮‍💨 Тяжело', f'rate:{wid}:hard')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'finished_empty'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    if state=='finished_empty':
+        return send(chat,'Занятие закрыто без выполненных подходов. История сохранена.',
+                    [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
+    send(chat,'🏁 Тренировка сохранена! Как ощущалась нагрузка?',
+         [('🙂 Легко',f'rate:{wid}:easy'),('💪 Нормально',f'rate:{wid}:ok'),
+          ('😮‍💨 Тяжело',f'rate:{wid}:hard')],mid)
 
 
 def rate_workout(chat, wid, grade, mid=None):
@@ -2080,17 +2099,39 @@ def valid_signature(kind, chat, wid, until, sig):
 
 def confirm_cancel(chat, wid, mid=None):
     until = int(time.time()) + 600
-    send(chat, 'Отменить тренировку? Запись не попадёт в статистику.',
+    send(chat, 'Пропустить тренировку? Выполненные подходы сохранятся в истории.',
          [('❌ Подтвердить', f'cancel_yes:{wid}:{until}:{signed("cancel",chat,wid,until)}'),
           ('↩️ Продолжить', 'current')], mid)
 
 
 def cancel_workout(chat, wid, mid=None):
+    """Skip an active Telegram session; never delete its historical records."""
     with db() as c:
-        row = c.execute("DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' RETURNING id",
-                        (wid, chat)).fetchone()
-        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    send(chat, 'Тренировка отменена.' if row else 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'skipped'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    send(chat,'Подходы сохранены, остальные пропущены.' if state=='finished'
+         else 'Занятие пропущено без выполненных подходов.',
+         [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
 
 
 def stats(chat, mid=None):
@@ -3420,18 +3461,25 @@ def scheduled_calendar(chat,p,cycle):
             FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
             AND schedule_state IS DISTINCT FROM 'retired'
             ORDER BY planned_date,week_no,day_code''',(chat,cycle)).fetchall()
-        done=conn.execute('''SELECT week_no,plan_day,COUNT(*) FROM workouts
-            WHERE chat_id=%s AND cycle_id=%s AND status='finished' AND source='template'
-            GROUP BY week_no,plan_day''',(chat,cycle)).fetchall()
-    remaining={(week,day):total for week,day,total in done}
+        closed=conn.execute('''SELECT week_no,plan_day,status FROM workouts
+            WHERE chat_id=%s AND cycle_id=%s
+            AND status IN ('finished','finished_empty','skipped') AND source='template'
+            ORDER BY CASE status WHEN 'finished' THEN 0
+                WHEN 'finished_empty' THEN 1 ELSE 2 END,finished_at DESC''',
+            (chat,cycle)).fetchall()
+    closed_slots={}
+    for week,day,status in closed:
+        closed_slots.setdefault((week,day),status)
     today=local_today(chat)
     items=[]
     for sid,week,day,dt in rows:
-        count_done=remaining.get((week,day),0)
-        if count_done>0:remaining[(week,day)]-=1
+        closed_status=closed_slots.get((week,day))
         items.append({'id':sid,'week':week,'day':day,'date':dt.isoformat(),
           'date_ru':dt.strftime('%d.%m.%Y'),'title':day_title(p,day),
-          'status':'done' if count_done>0 else ('past' if dt<today else 'planned')})
+          'status':('done' if closed_status=='finished' else
+                    'empty' if closed_status=='finished_empty' else
+                    'skipped' if closed_status=='skipped' else
+                    'past' if dt<today else 'planned')})
     return items
 
 
@@ -3949,16 +3997,53 @@ def food_parse(body):
     # User text may start or end with the explicitly measured gram weight.
     # Never infer 'one egg', cups, cooked/raw yield or nutritional data.
     mass=r'(\d{1,4}(?:[.,]\d{1,2})?)'
-    unit=r'(?:граммов|грамма|грамм|гр|г|g)'
+    unit=r'(килограммов|килограмма|килограмм|кг|kg|граммов|грамма|грамм|гр|г|g)'
     suffix=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+r'\.?',re.IGNORECASE)
     prefix=re.compile(mass+r'\s*'+unit+r'\.?\s+(.+)',re.IGNORECASE)
+    def measured(name, mass_text, mass_unit):
+        # A kg value is explicitly measured, not an inferred portion size.
+        factor=1000 if mass_unit.casefold() in ('кг','kg','килограммов','килограмма','килограмм') else 1
+        return food_item(name,Decimal(mass_text.replace(',','.'))*factor)
+    # Some natural phrases put preparation *after* the measured amount.
+    # Keep that modifier with the item; dry/cooked weights must not be merged.
+    prep_tail=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+
+        r'\s+(сух(?:ая|ой|ое|ие|их|ого)|варен(?:ая|ый|ое|ые|ой|ого)|варён(?:ая|ый|ое|ые|ой|ого)|'
+        r'отварн(?:ая|ый|ое|ые|ой|ого)|готов(?:ая|ый|ое|ые|ой|ого)|'
+        r'жарен(?:ая|ый|ое|ые|ой|ого)|жарён(?:ая|ый|ое|ые|ой|ого))',re.IGNORECASE)
+    # Connectors between two explicitly weighed foods are safe separators;
+    # do not split ordinary ingredient names or decimal gram values.
+    expanded=[]
     for part in parts:
-        ending=suffix.fullmatch(part)
-        leading=prefix.fullmatch(part) if ending is None else None
-        if ending or leading:
+        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=(?:[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:кг|kg|килограмм|г|гр|грамм)|\d{1,4}(?:[.,]\d{1,2})?\s*(?:кг|kg|килограмм|г|гр|грамм)\s+[^,;\n]{2,100}))',part,flags=re.IGNORECASE))
+    parts=[part.strip() for part in expanded if part.strip()]
+    if len(parts)>30:
+        raise ValueError('Максимум 30 продуктов за один ввод')
+    for part in parts:
+        # Natural diary phrasing does not belong in the ingredient identity.
+        clean=re.sub(r'^(?:сегодня\s+)?(?:на\s+(?:завтрак|обед|ужин|перекус)\s*[:,]?\s*)?'
+            r'(?:(?:я\s+)?(?:съел|съела|поел|поела|выпил|выпила|ел|ела)\s+)?',
+            '',part,flags=re.IGNORECASE).strip()
+        # Compound dishes with nested descriptions are NOT a single
+        # verified ingredient. Preserve them verbatim for user review.
+        if (any(mark in clean for mark in '()') or
+                re.search(r'(?<!\w)(?:плов|борщ|суп|лазанья|пицца|шаурма|'
+                          r'омлет|запеканка|оливье|цезарь|карбонара|'
+                          r'бутерброд|сэндвич|котлет[а-яё]*|рагу|'
+                          r'салат|пюре)(?!\w)',
+                          clean,re.IGNORECASE)):
+            # Homemade mixed dishes have unknown ingredient proportions.
+            # Preserve the eaten meal, but never invent recipe macros.
+            manual.append({'text':part,'reason':'Уточни состав и вес ингредиентов'})
+            continue
+        trailing=prep_tail.fullmatch(clean)
+        ending=suffix.fullmatch(clean) if trailing is None else None
+        leading=prefix.fullmatch(clean) if ending is None and trailing is None else None
+        if trailing or ending or leading:
             try:
-                name,grams=(food_item(ending.group(1),ending.group(2)) if ending
-                            else food_item(leading.group(2),leading.group(1)))
+                name,grams=(measured(trailing.group(1)+' '+trailing.group(4),
+                                      trailing.group(2),trailing.group(3))
+                            if trailing else measured(ending.group(1),ending.group(2),ending.group(3)) if ending
+                            else measured(leading.group(3),leading.group(1),leading.group(2)))
                 recognized.append({'name':name,'grams':float(grams)})
                 continue
             except ValueError:
@@ -3966,6 +4051,105 @@ def food_parse(body):
         manual.append({'text':part,'reason':'Укажи название и вес в граммах'})
     return {'items':recognized,'unparsed':manual,'nutrition_source':'not_available'}
 
+
+
+def food_parse_ai(chat, text):
+    """Recognise explicitly weighed foods, not nutrition or inferred portions.
+
+    Every AI row is tied to a unique source span and explicit mass; ambiguous
+    multi-food output is discarded atomically. The original text remains saved.
+    """
+    if not isinstance(text,str) or not 2 <= len(text.strip()) <= 1000:
+        return None
+    if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
+        return None
+    # Food consent is not consent to send medical/health details to the model.
+    if re.search(r'аллерг|непереносим|диабет|диагноз|болезн|лекарств|'
+                 r'инсулин|травм|беремен|менстру|хронич|болит|боль',
+                 text,re.IGNORECASE):
+        return None
+    if (re.search(r'(?<!\w)(?:плов|борщ|суп|омлет|пицца|шаурма|лазанья|'
+                  r'рагу|запеканка|салат|пюре|котлет[а-яё]*)(?!\w)',
+                  text,re.IGNORECASE) or any(char in text for char in '()')):
+        return None
+    mass_pattern=re.compile(
+        r'(?<!\w)(\d{1,4}(?:[.,]\d{1,2})?)\s*'
+        r'(кг|kg|килограммов|килограмма|килограмм|'
+        r'граммов|грамма|грамм|гр|г|g)(?!\w)',re.IGNORECASE)
+    evidence=list(mass_pattern.finditer(text))
+    if not 1 <= len(evidence) <= 8:
+        return None
+    system=('Read a Russian meal diary fragment and identify every separate '
+            'explicitly weighed single-ingredient food (maximum 8). Return '
+            'only JSON with key "items", list entries with keys "source", '
+            '"name", "grams". Each "source" must be an EXACT verbatim, unique '
+            'substring of the user text containing that food and its explicit '
+            'weight exactly once. Preserve food identity, cooking state and '
+            'weight; change only grammatical endings in name. Convert '
+            'explicit kg to grams. No calories/nutrients; never infer mass '
+            'from cups, pieces or portions. If any food cannot be assigned a '
+            'unique explicit weight or source span, return {"items":[]}.')
+    request_body={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+        'completionOptions':{'stream':False,'temperature':0,'maxTokens':'1200'},
+        'messages':[{'role':'system','text':system},{'role':'user','text':text}]}
+    try:
+        req=urllib.request.Request(AI_URL,
+            data=json.dumps(request_body,ensure_ascii=False).encode('utf-8'),
+            headers={'Authorization':'Api-Key '+YANDEX_KEY,
+                     'Content-Type':'application/json'},method='POST')
+        with urllib.request.urlopen(req,timeout=12) as response:
+            reply=json.load(response)
+        response_text=reply['result']['alternatives'][0]['message']['text']
+        obj=json.loads(response_text[response_text.index('{'):response_text.rindex('}')+1])
+        rows=obj.get('items')
+        if not isinstance(rows,list) or len(rows)!=len(evidence):
+            return None
+        recognized,used=[],set()
+        for row in rows:
+            if (not isinstance(row,dict) or
+                not {'name','grams'} <= set(row) or
+                set(row)-{'name','grams','source'} or
+                type(row['grams']) not in (int,float)):
+                return None
+            source=row.get('source')
+            if source is None and len(rows)==1:
+                # Legacy one-item model responses remain compatible.
+                source=text
+            if (not isinstance(source,str) or not 3<=len(source)<=500 or
+                    text.count(source)!=1):
+                return None
+            start=text.index(source)
+            matched=list(mass_pattern.finditer(source))
+            if len(matched)!=1:
+                return None
+            token=matched[0]
+            absolute=(start+token.start(),start+token.end())
+            if absolute in used or absolute not in {(m.start(),m.end()) for m in evidence}:
+                return None
+            used.add(absolute)
+            multiplier=(1000 if token.group(2).casefold() in (
+                'кг','kg','килограммов','килограмма','килограмм') else 1)
+            explicit=Decimal(token.group(1).replace(',','.'))*multiplier
+            name,grams=food_item(row['name'],row['grams'])
+            if grams!=explicit:
+                return None
+            # Each proposed food word must be evidenced by THIS source,
+            # never by another item elsewhere in the user's diary.
+            original=re.findall(r'[a-zа-яё]+',source.casefold())
+            proposed=re.findall(r'[a-zа-яё]+',name.casefold())
+            if not proposed or any(not any(word.startswith(
+                    p[:min(4,len(p))]) for word in original) for p in proposed):
+                return None
+            if food_preparation_state(name)!=food_preparation_state(source):
+                return None
+            recognized.append({'name':name,'grams':float(grams)})
+        if len(used)!=len(evidence):
+            return None
+        return {'items':recognized,'unparsed':[]}
+    except (ValueError,TypeError,KeyError,IndexError,AttributeError,
+            urllib.error.HTTPError,urllib.error.URLError,TimeoutError,
+            json.JSONDecodeError,OverflowError):
+        return None
 
 def food_history(chat,body):
     day=food_day(body.get('date'))
@@ -3990,7 +4174,15 @@ def food_history(chat,body):
                 'nutrition_100g':user_values,
                 'nutrition_source':'manual' if user_values is not None
                      else 'fatsecret' if food_id and serving_id else None})
+    # Unparsed text is kept without made-up serving weights or nutrients.
+    with db() as conn:
+        raw_rows=conn.execute("""SELECT id,meal_type,raw_input_text,unresolved_fragments
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+                AND raw_input_text IS NOT NULL ORDER BY id""",(chat,day)).fetchall()
     return {'date':day.isoformat(),'meals':list(meals.values()),
+        'unparsed_texts':[{'meal_id':mid,'meal_type':m,'text':raw,
+                           'unresolved_fragments':frags or []}
+                          for mid,m,raw,frags in raw_rows],
         'nutrients_available':any(item['nutrition_source'] for meal in meals.values()
             for item in meal['items'])}
 
@@ -4034,6 +4226,283 @@ def food_add(chat,body):
     return food_history(chat,{'date':day.isoformat()})
 
 
+
+def food_add_text(chat,body):
+    """One operation: save user text, safely parse grams, never invent nutrients."""
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    meal_type=body.get('meal_type')
+    if meal_type not in ('breakfast','lunch','dinner','snack'):
+        raise ValueError('Выбери приём пищи')
+    raw_text=body.get('text')
+    parsed=food_parse({'text':raw_text})
+    # Persist first. An external AI outage must not delay or prevent diary
+    # saving. Verified catalogue enrichment remains a separate API request.
+    unresolved=[str(row['text']) for row in parsed['unparsed']]
+    request_id=body.get('request_id')
+    if request_id is not None and (
+            not isinstance(request_id,str) or
+            not re.fullmatch(r'[a-zA-Z0-9_-]{12,80}',request_id)):
+        raise ValueError('Некорректный идентификатор сохранения')
+    request_hash=hashlib.sha256(json.dumps(
+        [day.isoformat(),meal_type,raw_text],ensure_ascii=False,
+        separators=(',',':')).encode('utf-8')).hexdigest()
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        replay=conn.execute(
+            """SELECT request_hash FROM food_save_requests
+                WHERE chat_id=%s AND request_id=%s""",(chat,request_id)
+            ).fetchone() if request_id else None
+        if replay:
+            if replay[0]!=request_hash:
+                raise ValueError('Повторный запрос отличается от сохранённой записи')
+            return food_history(chat,{'date':day.isoformat()})
+        existing=conn.execute("""SELECT id FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s AND meal_type=%s
+            ORDER BY id LIMIT 1""",(chat,day,meal_type)).fetchone()
+        if existing:
+            meal_id=existing[0]
+            conn.execute("""UPDATE manual_food_meals SET raw_input_text=
+                CASE WHEN raw_input_text IS NULL THEN %s ELSE raw_input_text || E'\\n' || %s END,
+                unresolved_fragments=unresolved_fragments || %s::jsonb
+                WHERE id=%s AND chat_id=%s""",(raw_text,raw_text,json.dumps(unresolved),meal_id,chat))
+        else:
+            meal_id=conn.execute("""INSERT INTO manual_food_meals
+                (chat_id,eaten_on,meal_type,raw_input_text,unresolved_fragments)
+                VALUES(%s,%s,%s,%s,%s::jsonb) RETURNING id""",
+                (chat,day,meal_type,raw_text,json.dumps(unresolved))).fetchone()[0]
+        inserted=[]
+        for row in parsed['items']:
+            name,grams=food_item(row['name'],row['grams'])
+            item_id=conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s) RETURNING id""",(meal_id,chat,name,grams)).fetchone()[0]
+            inserted.append((item_id,name))
+        if request_id:
+            conn.execute("""INSERT INTO food_save_requests
+                (chat_id,request_id,meal_id,request_hash)
+                VALUES(%s,%s,%s,%s)""",(chat,request_id,meal_id,request_hash))
+    # Durability must never wait for a third-party nutrition API.
+    # The Mini App requests enrichment separately after this response.
+    result=food_history(chat,{'date':day.isoformat()})
+    result['unparsed']=parsed['unparsed']
+    result['catalog_matches']=0
+    result['notice']=('Запись сохранена. Для некоторых продуктов не указан вес.'
+                      if parsed['unparsed'] else
+                      'Продукты сохранены. КБЖУ появятся при наличии проверенного источника.')
+    return result
+
+
+
+
+def food_resolve_fragment(chat, body):
+    """Resolve one ambiguous text fragment with user-confirmed name and grams.
+
+    The original diary text is retained. The unresolved marker is removed
+    transactionally with the new food item so totals cannot become complete
+    before an actual weighed ingredient has been saved.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    meal_id,idx=body.get('meal_id'),body.get('fragment_index')
+    if type(meal_id) is not int or meal_id<=0 or type(idx) is not int or not 0<=idx<30:
+        raise ValueError('Некорректная нераспознанная запись')
+    name,grams=food_item(body.get('name'),body.get('grams'))
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        meal=conn.execute("""SELECT eaten_on,unresolved_fragments
+            FROM manual_food_meals WHERE id=%s AND chat_id=%s
+            FOR UPDATE""",(meal_id,chat)).fetchone()
+        if not meal or not isinstance(meal[1],list) or idx>=len(meal[1]):
+            raise ValueError('Запись уже уточнена или не найдена')
+        unresolved=list(meal[1])
+        if not isinstance(body.get('expected_text'),str) or unresolved[idx]!=body['expected_text']:
+            raise ValueError('Запись была изменена. Обнови дневник и проверь продукт')
+        unresolved.pop(idx)
+        conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+            VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+        conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
+            WHERE id=%s AND chat_id=%s""",(json.dumps(unresolved),meal_id,chat))
+    return food_history(chat,{'date':meal[0].isoformat()})
+
+
+def food_auto_candidate_id(name, options):
+    """Select a unique unbranded search hit before fetching verified food details.
+
+    FatSecret search/v5 generally has no servings, so search hits must NEVER
+    be treated as sufficient evidence of nutrition.
+    """
+    if not isinstance(options,list):
+        return None
+    canon=lambda s:' '.join(str(s).casefold().replace('ё','е').split())
+    exact=[row for row in options if isinstance(row,dict)
+           and canon(row.get('name',''))==canon(name)
+           and not row.get('brand')
+           and isinstance(row.get('food_id'),str)
+           and row['food_id'].isdecimal() and len(row['food_id'])<=20]
+    return exact[0]['food_id'] if len(exact)==1 else None
+
+
+def food_auto_match_candidates(name, options):
+    """Only unambiguous exact catalogue names may receive automatic provider IDs.
+
+    Never infer nutrition from fuzzy names, brands, recipes or cooked/raw variants.
+    """
+    if not isinstance(options,list):
+        return None
+    canon=lambda s:' '.join(str(s).casefold().replace('ё','е').split())
+    exact=[row for row in options if isinstance(row,dict)
+           and canon(row.get('name',''))==canon(name)
+           and not row.get('brand')]
+    if len(exact)!=1:
+        return None
+    option=exact[0]
+    portions=[p for p in option.get('servings',[]) if isinstance(p,dict)
+              and isinstance(p.get('per_serving'),dict)
+              and all(k in p['per_serving'] for k in FOOD_MANUAL_KEYS)]
+    # A 100 g portion is preferred. Without it, precisely one metric portion
+    # can still be scaled by observed grams. Several competing portions
+    # without 100 g are ambiguous and must not auto-link.
+    try:
+        portions=[p for p in portions if Decimal(str(p.get('grams'))).is_finite()
+                  and Decimal('0')<Decimal(str(p['grams']))<=Decimal('5000')]
+    except (InvalidOperation,TypeError,ValueError):
+        return None
+    per100=[p for p in portions if Decimal(str(p['grams']))==100]
+    choices=per100 if per100 else portions
+    if len(choices)!=1:
+        return None
+    serving=choices[0]
+    try:
+        grams=Decimal(str(serving['grams']))
+        vals=[Decimal(str(serving['per_serving'][key])) for key in FOOD_MANUAL_KEYS]
+        norm=[value*Decimal('100')/grams for value in vals]
+    except (InvalidOperation,TypeError,ValueError,KeyError,ZeroDivisionError):
+        return None
+    if any(not value.is_finite() or value<0 or
+           value>(1000 if key=='kcal' else 100)
+           for key,value in zip(FOOD_MANUAL_KEYS,norm)):
+        return None
+    if food_preparation_state(name)!=food_preparation_state(option['name']):
+        return None
+    # Dry vs cooked nutrition is very different for these foods; an unspecified
+    # preparation cannot justify automatic nutritional attribution.
+    if food_preparation_state(name) is None and re.search(
+            r'овсян|греч|рис|макарон|круп|паст|перлов|манн',
+            name.casefold().replace('ё','е')):
+        return None
+    fid,sid=option.get('food_id'),serving.get('serving_id')
+    return (fid,sid) if isinstance(fid,str) and fid.isdecimal() and isinstance(sid,str) and sid.isdecimal() else None
+
+
+def food_auto_link_recent(chat, item_ids):
+    """Optional provider reads happen after durable save; failures never roll back food."""
+    if not (FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET) or not item_ids:
+        return 0
+    try:
+        client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
+        token=client.get_token()
+    except Exception:
+        return 0
+    updated=0
+    # Each lookup can outlive a user's edits. Tie the provider result to
+    # the exact pre-lookup row version, not merely to its immutable item ID.
+    for item_id,name,observed_at in item_ids[:6]:
+        try:
+            candidate_id=food_auto_candidate_id(name,client.search(name,token))
+            if not candidate_id:
+                continue
+            # Search results have no verified servings. Require food.get.v5,
+            # then validate the exact name, unbranded identity and nutrients.
+            verified=client.food_by_id(candidate_id,token)
+            match=food_auto_match_candidates(name,[verified])
+            if not match or match[0]!=candidate_id:
+                continue
+            with db() as conn:
+                changed=conn.execute("""UPDATE manual_food_items SET
+                    source_food_id=%s,source_serving_id=%s,updated_at=NOW()
+                    WHERE id=%s AND chat_id=%s AND name=%s
+                      AND updated_at=%s
+                      AND source_food_id IS NULL AND source_serving_id IS NULL
+                      AND manual_kcal_100g IS NULL
+                      AND manual_protein_g_100g IS NULL
+                      AND manual_fat_g_100g IS NULL
+                      AND manual_carbs_g_100g IS NULL
+                    RETURNING id""",(*match,item_id,chat,name,observed_at)).fetchone()
+            updated+=bool(changed)
+        except Exception:
+            continue
+    return updated
+
+
+
+def food_ai_resolve_saved_fragments(chat, day):
+    """Post-save AI recognition with owner locks and all-or-nothing food rows.
+
+    Iterate a small bounded number of fragments; keep the original diary text.
+    Model network calls happen outside transactions, after the user's save.
+    """
+    if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
+        return 0
+    with db() as conn:
+        rows=conn.execute("""SELECT id,unresolved_fragments FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s
+              AND jsonb_array_length(unresolved_fragments)>0
+            ORDER BY id DESC LIMIT 4""",(chat,day)).fetchall()
+    inserted,total_requests=0,0
+    for meal_id,fragments in rows:
+        for fragment in fragments:
+            if total_requests>=3:
+                return inserted
+            if not isinstance(fragment,str) or not 2<=len(fragment)<=500:
+                continue
+            total_requests+=1
+            parsed=food_parse_ai(chat,fragment)
+            if not parsed or not 1<=len(parsed.get('items',[]))<=8:
+                continue
+            items=[food_item(row['name'],row['grams']) for row in parsed['items']]
+            with db() as conn:
+                conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+                current=conn.execute("""SELECT unresolved_fragments FROM manual_food_meals
+                    WHERE id=%s AND chat_id=%s FOR UPDATE""",(meal_id,chat)).fetchone()
+                if not current or fragment not in current[0]:
+                    continue
+                left=list(current[0])
+                left.remove(fragment)
+                for name,grams in items:
+                    conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                        VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+                conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
+                    WHERE id=%s AND chat_id=%s""",(json.dumps(left),meal_id,chat))
+            inserted+=len(items)
+    return inserted
+
+def food_auto_enrich(chat, body):
+    """Explicit owner-scoped optional lookup, independent of saving a meal.
+
+    Only existing, unlinked records without owner-supplied nutrients can be
+    linked. A failed provider request must never modify the diary.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    recognized=food_ai_resolve_saved_fragments(chat,day)
+    with db() as conn:
+        rows=conn.execute("""SELECT i.id,i.name,i.updated_at
+            FROM manual_food_items i JOIN manual_food_meals m
+                ON m.id=i.meal_id AND m.chat_id=i.chat_id
+            WHERE m.chat_id=%s AND m.eaten_on=%s
+                AND i.source_food_id IS NULL
+                AND i.source_serving_id IS NULL
+                AND i.manual_kcal_100g IS NULL
+                AND i.manual_protein_g_100g IS NULL
+                AND i.manual_fat_g_100g IS NULL
+                AND i.manual_carbs_g_100g IS NULL
+            ORDER BY i.id DESC LIMIT 6""",(chat,day)).fetchall()
+    linked=food_auto_link_recent(chat,rows)
+    return {'date':day.isoformat(),'catalog_matches':linked,'ai_recognized':recognized}
+
+
 def food_change(chat,body,delete=False):
     iid=body.get('id')
     if type(iid) is not int or iid<=0:
@@ -4049,8 +4518,12 @@ def food_change(chat,body,delete=False):
                   AND m.chat_id=%s RETURNING m.id,m.eaten_on""",
                 (iid,chat,chat)).fetchone()
             if changed:
+                # A user deleting one product must not erase the original
+                # free-text diary or unresolved products from the same meal.
                 conn.execute("""DELETE FROM manual_food_meals m WHERE id=%s
-                    AND chat_id=%s AND NOT EXISTS (
+                    AND chat_id=%s AND raw_input_text IS NULL
+                    AND jsonb_array_length(unresolved_fragments)=0
+                    AND NOT EXISTS (
                     SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
                     (changed[0],chat))
         else:
@@ -4099,6 +4572,8 @@ def food_day_totals(chat, body):
         raise ValueError('Сначала заполни анкету')
     day=food_day(body.get('date'))
     with db() as conn:
+        # Start with one consistent snapshot of weighed and unresolved foods.
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
         records=conn.execute("""SELECT i.id,m.meal_type,i.grams,
                    i.source_food_id,i.source_serving_id,i.updated_at,
                    i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
@@ -4106,8 +4581,14 @@ def food_day_totals(chat, body):
               ON i.meal_id=m.id AND i.chat_id=m.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s
             ORDER BY m.id,i.id""",(chat,day)).fetchall()
-    if len(records)>250:
-        raise ValueError('За день слишком много продуктов для одного расчёта')
+        if len(records)>250:
+            raise ValueError('За день слишком много продуктов для одного расчёта')
+        unresolved_rows=conn.execute("""SELECT meal_type,
+                SUM(jsonb_array_length(unresolved_fragments))::integer
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+            GROUP BY meal_type ORDER BY meal_type""",(chat,day)).fetchall()
+    unknown_by_meal=dict(unresolved_rows)
+    unknown_count=sum(unknown_by_meal.values())
     linked={r[3] for r in records if r[3] and r[4]}
     # User-entered values are independently usable offline. Missing FatSecret
     # credentials never turn manual macros into "unavailable" or guessed zero.
@@ -4172,30 +4653,51 @@ def food_day_totals(chat, body):
         items.append({'id':item_id,'meal_type':meal_type,
             'source':('manual' if user_values else 'fatsecret') if values is not None else None,
             'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
-    # If a product changed during an API request, never present a stale number
-    # as belonging to its newer grams or provider identity.
-    if records:
-        with db() as conn:
-            current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,
-                        i.source_serving_id,i.updated_at
-                FROM manual_food_meals m JOIN manual_food_items i
-                  ON i.meal_id=m.id AND i.chat_id=m.chat_id
-                WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
-                (chat,day)).fetchall()
-        if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
-            raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
-    complete=bool(records) and all(item['nutrition'] is not None for item in items)
+    # Include meals made entirely of unresolved foods, too. Never call one
+    # meal complete merely because its weighed items have verified nutrients.
+    for meal_type,unresolved in unknown_by_meal.items():
+        meal=meal_values.setdefault(meal_type,{'type':meal_type,'total_items':0,
+                                               'resolved_items':0,
+                                               'subtotal':{key:Decimal('0') for key in keys}})
+        meal['unresolved_items']=unresolved
+    # External provider reads are slow. Recheck BOTH weighed items and raw
+    # unresolved fragments before calling the day complete; otherwise a
+    # concurrent text save can silently produce a false "full" daily total.
+    # The final reads share one repeatable-read snapshot, even if another
+    # client is saving a meal concurrently.
+    with db() as conn:
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
+        current=conn.execute("""SELECT i.id,i.grams,i.source_food_id,
+                    i.source_serving_id,i.updated_at
+            FROM manual_food_meals m JOIN manual_food_items i
+              ON i.meal_id=m.id AND i.chat_id=m.chat_id
+            WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
+            (chat,day)).fetchall()
+        current_unresolved=conn.execute("""SELECT meal_type,
+                SUM(jsonb_array_length(unresolved_fragments))::integer
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+            GROUP BY meal_type ORDER BY meal_type""",
+            (chat,day)).fetchall()
+    if ([(r[0],r[2],r[3],r[4],r[5]) for r in records] != current
+            or unresolved_rows!=current_unresolved):
+        raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
+    complete=bool(records) and not unknown_count and all(item['nutrition'] is not None for item in items)
     origins={item['source'] for item in items if item['source']}
     origin='mixed' if len(origins)>1 else next(iter(origins),None)
     return {'date':day.isoformat(), 'source':origin,
         'complete':complete,'total_items':len(records),
         'resolved_items':sum(item['nutrition'] is not None for item in items),
-        'partial':bool(records) and not complete,
+        'partial':bool(records or unknown_count) and not complete,
+        'unresolved_items':int(unknown_count),
         'totals':{k:float(v) for k,v in subtotal.items()} if complete else None,
         'known_subtotal':{k:float(v) for k,v in subtotal.items()}
             if any(item['nutrition'] is not None for item in items) else None,
         'meals':[{'type':m['type'],'resolved_items':m['resolved_items'],
-                  'total_items':m['total_items'],'complete':m['total_items']==m['resolved_items'],
+                  'total_items':m['total_items']+m.get('unresolved_items',0),
+                  'unresolved_items':m.get('unresolved_items',0),
+                  'complete':bool(m['total_items']) and
+                      m['total_items']==m['resolved_items'] and
+                      not m.get('unresolved_items',0),
                   'known_subtotal':({k:float(v) for k,v in m['subtotal'].items()}
                       if m['resolved_items'] else None)}
                  for m in meal_values.values()],
@@ -4328,7 +4830,7 @@ def mini_training_preview(chat, body):
         sid,cycle,week,day,planned=slot
         completed_row=conn.execute("""SELECT id FROM workouts WHERE chat_id=%s
             AND cycle_id=%s AND week_no=%s AND plan_day=%s
-            AND source='template' AND status='finished'
+            AND source='template' AND status IN ('finished','finished_empty','skipped')
             ORDER BY finished_at DESC NULLS LAST,id DESC LIMIT 1""",
             (chat,cycle,week,day)).fetchone()
         completed=completed_row is not None
@@ -4338,7 +4840,7 @@ def mini_training_preview(chat, body):
               AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
                 AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
                 AND w.plan_day=s.day_code AND w.source='template'
-                AND w.status='finished')
+                AND w.status IN ('finished','finished_empty','skipped'))
             ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
             (chat,cycle,chat)).fetchone()
     if completed_row:
@@ -4771,7 +5273,7 @@ def mini_history_detail(chat,wid):
         return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
                 'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty,status FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
@@ -4780,7 +5282,8 @@ def mini_history_detail(chat,wid):
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
     elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
     return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
-      'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
+      'type':'workout','duration_minutes':elapsed,'result':w[4],
+      'status':w[5],'items':[
        {'name':visible_exercise_name(name),'key':key if key in EX else None,
         'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
          f' · {kg} кг' if kg is not None else ''),
@@ -4817,10 +5320,12 @@ def mini_history_page(chat, body):
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
         "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
-        "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
+        "SELECT id AS entry_id, started_at AS occurred_at, "
+        "CASE WHEN status='skipped' THEN 'workout_skipped' "
+        "WHEN status='finished_empty' THEN 'workout_empty' ELSE 'workout' END AS entry_type,"
         "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
         "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
-        "WHERE chat_id=%s AND status='finished' " + filter_w +
+        "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
         "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
@@ -4836,7 +5341,9 @@ def mini_history_page(chat, body):
             'id': ident,
             'date': history_local_date(timestamp, zone),
             'type': kind,
-            'title': (custom or day_title(p, day)) if kind == 'workout'
+            'title': ((('Пропущена · ' if kind=='workout_skipped' else
+                       'Без подходов · ' if kind=='workout_empty' else '')+
+                      (custom or day_title(p,day)))) if kind.startswith('workout')
                      else cardio_history_title(equipment,minutes,activity,kcal),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
@@ -4859,7 +5366,7 @@ def mini_history_month(chat, body):
     with db() as conn:
         dates_workout = conn.execute(
             "SELECT DISTINCT (started_at AT TIME ZONE %s)::date FROM workouts "
-            "WHERE chat_id=%s AND status='finished' "
+            "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') "
             "AND started_at >= %s AND started_at < %s",
             (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_cardio = conn.execute(
@@ -4868,8 +5375,9 @@ def mini_history_month(chat, body):
             (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_food = conn.execute("""SELECT DISTINCT m.eaten_on FROM manual_food_meals m
             WHERE m.chat_id=%s AND m.eaten_on >= %s AND m.eaten_on < %s
-            AND EXISTS(SELECT 1 FROM manual_food_items i
-                       WHERE i.meal_id=m.id AND i.chat_id=m.chat_id)
+            AND (m.raw_input_text IS NOT NULL OR
+                 EXISTS(SELECT 1 FROM manual_food_items i
+                        WHERE i.meal_id=m.id AND i.chat_id=m.chat_id))
             ORDER BY m.eaten_on""",(chat,start,end)).fetchall()
     marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
     saved_food = sorted({value.isoformat() for (value,) in dates_food})
@@ -4976,8 +5484,9 @@ def mini_state(chat, just_finished=False):
             result['workout'] = workout
     # A single progress screen: dates and drill-down, without duplicate reports.
     with db() as c:
-        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title FROM workouts
-          WHERE chat_id=%s AND status='finished' ORDER BY started_at DESC,id DESC LIMIT 15''',
+        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title,status FROM workouts
+          WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped')
+          ORDER BY started_at DESC,id DESC LIMIT 15''',
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
@@ -4985,9 +5494,13 @@ def mini_state(chat, just_finished=False):
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     history_zone=history_local_zone(chat)
     combined=[{'id':wid,'date':history_local_date(dt, history_zone),
-        'sort_at':dt.isoformat(),'type':'workout',
-        'title':manual_title or day_title(p,day)}
-        for wid,day,dt,manual_title in history_rows]
+        'sort_at':dt.isoformat(),
+        'type':('workout_skipped' if status=='skipped' else
+                'workout_empty' if status=='finished_empty' else 'workout'),
+        'title':(('Пропущена · ' if status=='skipped' else
+                  'Без подходов · ' if status=='finished_empty' else '')+
+                 (manual_title or day_title(p,day)))}
+        for wid,day,dt,manual_title,status in history_rows]
     combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
         'title':cardio_history_title(equipment,mins,activity,kcal)}
@@ -5290,7 +5803,7 @@ def mini_write(chat, action, body):
             raise ValueError(error)
         return {'options':[{'key':k,'name':EX[k][0]} for k in keys]}
 
-    if action not in ('record','skip','replace','finish','cancel','rate'):
+    if action not in ('record','skip','replace','finish','skip_workout','cancel','rate'):
         raise ValueError('Неизвестная операция')
 
     with db() as c:
@@ -5303,20 +5816,36 @@ def mini_write(chat, action, body):
                 AND difficulty IS NULL ORDER BY finished_at DESC,id DESC LIMIT 1)
                 AND chat_id=%s''',(grade,chat,chat))
             return False
+        # Serialize set recording and closure for one Telegram user.
+        c.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        expected_id = body.get('expected_workout')
+        if expected_id is not None and (type(expected_id) is not int or expected_id <= 0):
+            raise ValueError('Обнови тренировку перед повторным запросом')
         wid = mini_current(c,chat)
         if not wid:
+            if action in ('finish','skip_workout','cancel') and expected_id:
+                previous = c.execute('''SELECT status FROM workouts
+                    WHERE id=%s AND chat_id=%s''',(expected_id,chat)).fetchone()
+                if previous and previous[0] in ('finished','finished_empty','skipped'):
+                    return True
             raise ValueError('Активной тренировки нет')
-        if action == 'cancel':
-            c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
-            return False
-        if action == 'finish':
+        if expected_id is not None and expected_id != wid:
+            raise ValueError('Тренировка изменилась. Обнови тренировку')
+        # Old cancel requests remain valid, but never delete training history.
+        if action in ('finish','skip_workout','cancel'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
                 WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
-            if done == 0:
-                raise ValueError('Сначала запиши хотя бы один подход')
-            c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
+            legacy_done = c.execute('''SELECT COUNT(*) FROM workout_items
+                WHERE workout_id=%s AND done=TRUE''',(wid,)).fetchone()[0]
+            # A skipped session must never count as a completed workout.
+            # Explicit early finish with no sets is also recorded, not blocked.
+            # Preserve completed work even if the user chooses "skip" later:
+            # a partially completed session must not disappear from progress.
+            final_status = ('finished' if done or legacy_done else
+                            'skipped' if action in ('skip_workout','cancel')
+                            else 'finished_empty')
+            c.execute('''UPDATE workouts SET status=%s,finished_at=NOW()
+                WHERE id=%s AND chat_id=%s AND status='active' ''',(final_status,wid,chat))
             affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
                 WHERE workout_id=%s AND state='pending' RETURNING position''',(wid,)).fetchall()
             for pos in {r[0] for r in affected}:
@@ -6066,6 +6595,12 @@ def mini_api():
             payload = {'ok': True, **food_catalog_attach(chat,data)}
         elif action == 'food_history':
             payload = {'ok': True, **food_history(chat,data)}
+        elif action == 'food_auto_enrich':
+            payload = {'ok': True, **food_auto_enrich(chat,data)}
+        elif action == 'food_resolve_fragment':
+            payload = {'ok': True, **food_resolve_fragment(chat,data)}
+        elif action == 'food_add_text':
+            payload = {'ok': True, **food_add_text(chat,data)}
         elif action == 'food_add':
             payload = {'ok': True, **food_add(chat,data)}
         elif action == 'food_update':

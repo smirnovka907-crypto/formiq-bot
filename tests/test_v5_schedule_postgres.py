@@ -129,6 +129,505 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIn('Другое',result['plan_warning'])
         self.assertIsNotNone(result['cycle_start'])
 
+    def test_tz5_automatic_catalogue_match_never_guesses_ambiguous_food(self):
+        valid={'food_id':'123','name':'Овсянка сухая','brand':None,
+               'servings':[{'serving_id':'4','grams':100,
+                            'per_serving':{'kcal':370,'protein_g':12,
+                                           'fat_g':6,'carbs_g':62}}]}
+        match=self.m.food_auto_match_candidates
+        candidate=self.m.food_auto_candidate_id
+        search_hit={'food_id':'123','name':'Овсянка сухая','brand':None,'servings':[]}
+        self.assertEqual(candidate('Овсянка сухая',[search_hit]),'123')
+        self.assertIsNone(candidate('Овсянка сухая',[search_hit,search_hit]))
+        self.assertIsNone(candidate('Овсянка сухая',[{**search_hit,'brand':'Бренд'}]))
+        self.assertIsNone(match('Овсянка сухая',[search_hit]))
+        self.assertEqual(match('Овсянка сухая',[valid]),('123','4'))
+        self.assertIsNone(match('Овсянка вареная',[valid]))
+        self.assertIsNone(match('Овсянка сухая',[valid,valid]))
+        self.assertIsNone(match('Овсянка',[valid]))
+        unspecified={**valid,'name':'Овсянка'}
+        self.assertIsNone(match('Овсянка',[unspecified]))
+        self.assertIsNone(match('Овсянка сухая',[{**valid,'brand':'Марка'}]))
+        self.assertIsNone(match('Овсянка сухая',[{**valid,'servings':[]}]))
+        incomplete={**valid,'servings':[{'serving_id':'4','grams':100,'per_serving':{'kcal':370}}]}
+        self.assertIsNone(match('Овсянка сухая',[incomplete]))
+        malformed={**valid,'servings':[{'serving_id':'4','grams':100,
+                          'per_serving':{'kcal':float('nan'),'protein_g':12,'fat_g':6,'carbs_g':62}}]}
+        self.assertIsNone(match('Овсянка сухая',[malformed]))
+        # Official servings may be 30 g instead of 100 g; calculate from
+        # verified mass, never assume one serving equals 100 g.
+        scaled={**valid,'servings':[{'serving_id':'33','grams':30,
+            'per_serving':{'kcal':111,'protein_g':3.6,'fat_g':1.8,'carbs_g':18.6}}]}
+        self.assertEqual(match('Овсянка сухая',[scaled]),('123','33'))
+        both={**valid,'servings':valid['servings']+scaled['servings']}
+        self.assertEqual(match('Овсянка сухая',[both]),('123','4'))
+        ambiguous={**valid,'servings':[scaled['servings'][0],
+            {**scaled['servings'][0],'serving_id':'34','grams':60}]}
+        self.assertIsNone(match('Овсянка сухая',[ambiguous]))
+        impossible={**valid,'servings':[{'serving_id':'33','grams':30,
+            'per_serving':{'kcal':800,'protein_g':3,'fat_g':1,'carbs_g':20}}]}
+        self.assertIsNone(match('Овсянка сухая',[impossible]))
+
+    def test_tz5_ai_food_requires_permission_and_never_invents_grams(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.assertIsNone(self.m.food_parse_ai(self.chat,'овсянка 80 г'))
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','test'),patch.object(self.m,'FOLDER_ID','test'), \
+             patch.object(self.m.urllib.request,'urlopen') as open_url:
+            from io import BytesIO
+            import json
+            open_url.return_value.__enter__.return_value=BytesIO(json.dumps({
+                'result':{'alternatives':[{'message':{'text':
+                    '{"items":[{"name":"овсянка","grams":999}]}'}}]}}).encode())
+            self.assertIsNone(self.m.food_parse_ai(self.chat,'овсянка 80 г'))
+            open_url.return_value.__enter__.return_value=BytesIO(json.dumps({
+                'result':{'alternatives':[{'message':{'text':
+                    '{"items":[{"name":"овсянка","grams":80}]}'}}]}}).encode())
+            self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
+                             [{'name':'овсянка','grams':80.0}])
+
+    def test_tz5_yandex_multi_food_masses_and_untrusted_output(self):
+        """Accept only separate, verbatim measured spans from Yandex output."""
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг на ужин'
+        chicken='курицу 150 граммов'
+        rice='рисом сухим 0,2 кг'
+        def response(rows):
+            return BytesIO(json.dumps({'result':{'alternatives':[{'message':{
+                'text':json.dumps({'items':rows},ensure_ascii=False)}}]}},
+                ensure_ascii=False).encode('utf-8'))
+        items=[{'source':chicken,'name':'курица','grams':150},
+               {'source':rice,'name':'рисом сухим','grams':200}]
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','offline-test'), \
+             patch.object(self.m,'FOLDER_ID','offline-test'), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            external.return_value.__enter__.return_value=response(items)
+            parsed=self.m.food_parse_ai(self.chat,raw)
+            self.assertEqual(parsed['items'],[
+                {'name':'курица','grams':150.0},
+                {'name':'рисом сухим','grams':200.0}])
+            for bad in (
+                [items[0]],
+                [items[0],{**items[1],'grams':250}],
+                [items[0],{**items[1],'name':'гречка'}],
+                [{**items[0],'source':rice},items[1]],
+                [{**items[0],'source':'другой текст'},items[1]],
+                [{**items[0],'grams':150,'kcal':500},items[1]],
+            ):
+                external.return_value.__enter__.return_value=response(bad)
+                self.assertIsNone(self.m.food_parse_ai(self.chat,raw),
+                    'Unsupported multi-food model reply must fail closed')
+            external.return_value.__enter__.return_value=response(items)
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'аллергия на курицу 150 г и рис 200 г'))
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'плов 150 г и курица 200 г'))
+
+    def test_tz5_multi_food_ai_persists_atomically_idempotently(self):
+        """Save original text first, then insert all validated products once."""
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг на ужин'
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), \
+             patch.object(self.m,'YANDEX_KEY','offline-test'), \
+             patch.object(self.m,'FOLDER_ID','offline-test'), \
+             patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            original=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'dinner','text':raw,'request_id':'multi-raw-save-123'})
+            self.assertEqual(len(original['meals'][0]['items']),0)
+            self.assertEqual(original['unparsed_texts'][0]['text'],raw)
+            external.assert_not_called()
+            reply={'result':{'alternatives':[{'message':{'text':json.dumps(
+                {'items':[{'source':'курицу 150 граммов','name':'курица','grams':150},
+                          {'source':'рисом сухим 0,2 кг','name':'рисом сухим',
+                           'grams':200}]},ensure_ascii=False)}}]}}
+            external.return_value.__enter__.return_value=BytesIO(
+                json.dumps(reply,ensure_ascii=False).encode('utf-8'))
+            once=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+            twice=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(once['ai_recognized'],2)
+        self.assertEqual(twice['ai_recognized'],0)
+        diary=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(diary['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(diary['unparsed_texts'][0]['unresolved_fragments'],[])
+        self.assertEqual(len(diary['meals'][0]['items']),2)
+        self.assertTrue(all(i['nutrition_source'] is None
+            for i in diary['meals'][0]['items']))
+        macros=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(macros['complete'])
+        self.assertIsNone(macros['totals'])
+
+    def test_tz5_ai_enrich_saved_explicit_grams_only_after_commit(self):
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        original='съел курицу 150 граммов на ужин'
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'dinner','text':original})
+        self.assertEqual(saved['unparsed_texts'][0]['unresolved_fragments'],[original])
+        response={'result':{'alternatives':[{'message':{'text':
+            '{"items":[{"name":"курица","grams":150}]}'}}]}}
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','local-test'), \
+             patch.object(self.m,'FOLDER_ID','local-test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_ID',''), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            external.return_value.__enter__.return_value=BytesIO(
+                json.dumps(response).encode())
+            result=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(result['ai_recognized'],1)
+            again=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(again['ai_recognized'],0)
+        diary=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(diary['unparsed_texts'][0]['text'],original)
+        self.assertEqual(diary['unparsed_texts'][0]['unresolved_fragments'],[])
+        self.assertEqual([(i['name'],i['grams']) for i in diary['meals'][0]['items']],
+                         [('курица',150.0)])
+        self.assertIsNone(diary['meals'][0]['items'][0]['nutrition_source'])
+
+    def test_tz5_ai_refuses_invented_grams_and_other_food(self):
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        def check(raw,nutrients):
+            payload={'result':{'alternatives':[{'message':{'text':
+                json.dumps({'items':[nutrients]})}}]}}
+            with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+                 patch.object(self.m,'YANDEX_KEY','local-test'), \
+                 patch.object(self.m,'FOLDER_ID','local-test'), \
+                 patch.object(self.m.urllib.request,'urlopen') as external:
+                external.return_value.__enter__.return_value=BytesIO(json.dumps(payload).encode())
+                return self.m.food_parse_ai(self.chat,raw)
+        self.assertIsNone(check('курицу 150 г',{'name':'курица','grams':200}))
+        self.assertIsNone(check('курицу 150 г',{'name':'рыба','grams':150}))
+        self.assertIsNone(check('стакан молока',{'name':'молоко','grams':200}))
+        self.assertIsNone(check('плов 150 г',{'name':'плов','grams':150}))
+
+    def test_tz5_food_health_note_never_sent_to_yandex(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','local-test'), \
+             patch.object(self.m,'FOLDER_ID','local-test'), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'аллергия на молоко, 150 г творога'))
+            external.assert_not_called()
+
+    def test_tz5_resolve_unknown_food_preserves_raw_and_owner_isolation(self):
+        self.m.save_onboarding(self.chat,self.body())
+        self.m.save_onboarding(self.chat+1,self.body())
+        original='курица 150 г, стакан молока'
+        first=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':original})
+        self.assertEqual(first['unparsed_texts'][0]['unresolved_fragments'],
+                         ['стакан молока'])
+        meal_id=first['unparsed_texts'][0]['meal_id']
+        with self.assertRaises(ValueError):
+            self.m.food_resolve_fragment(self.chat+1,{'meal_id':meal_id,
+                'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
+        result=self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
+            'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
+        self.assertEqual(result['unparsed_texts'][0]['text'],original)
+        self.assertEqual(result['unparsed_texts'][0]['unresolved_fragments'],[])
+        self.assertEqual(len(result['meals'][0]['items']),2)
+        self.assertEqual(self.m.food_day_totals(self.chat,
+            {'date':'2026-10-18'})['unresolved_items'],0)
+        with self.assertRaises(ValueError):
+            self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
+                'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
+
+    def test_tz5_one_tap_meal_immediate_save_then_source_backed_totals(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        rice={'food_id':'15','name':'рис сухой','brand':None,
+              'servings':[{'serving_id':'151','grams':100,
+                            'per_serving':{'kcal':350,'protein_g':7,
+                                           'fat_g':1,'carbs_g':78}}]}
+        chicken={'food_id':'16','name':'курица','brand':None,
+              'servings':[{'serving_id':'161','grams':100,
+                            'per_serving':{'kcal':165,'protein_g':31,
+                                           'fat_g':3.6,'carbs_g':0}}]}
+        catalog={'рис сухой':rice,'курица':chicken}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        # Real FatSecret food search results carry an ID/name but often no
+        # serving list; only food.get.v5 is sufficient for verified nutrients.
+        fake.search.side_effect=lambda name,token: [
+            {'food_id':catalog[name]['food_id'],
+             'name':catalog[name]['name'],'brand':None,'servings':[]}]
+        fake.food_by_id.side_effect=lambda fid,token: {'15':rice,'16':chicken}[fid]
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake), \
+             patch.object(self.m,'food_parse_ai') as ai:
+            saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'lunch','text':'рис сухой 80 г и курица 150 г'})
+            ai.assert_not_called()
+            fake.search.assert_not_called()
+            self.assertEqual(len(saved['meals'][0]['items']),2)
+            self.assertTrue(all(x['nutrition_source'] is None
+                for x in saved['meals'][0]['items']))
+            self.m.save_onboarding(self.chat+1,self.body())
+            self.assertEqual(self.m.food_auto_enrich(self.chat+1,
+                {'date':'2026-10-18'})['catalog_matches'],0)
+            linked=self.m.food_auto_enrich(self.chat,
+                {'date':'2026-10-18'})
+            self.assertEqual(linked['catalog_matches'],2)
+            complete=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(complete['complete'])
+            self.assertEqual(complete['source'],'fatsecret')
+            self.assertEqual(complete['totals']['kcal'],527.5)
+            self.assertEqual(complete['totals']['protein_g'],52.1)
+            self.assertEqual(complete['totals']['fat_g'],6.2)
+            self.assertEqual(complete['totals']['carbs_g'],62.4)
+            self.assertEqual(self.m.food_auto_enrich(self.chat,
+                {'date':'2026-10-18'})['catalog_matches'],0)
+
+    def test_tz5_delayed_catalog_lookup_preserves_manual_nutrition(self):
+        """A verified provider response must never overwrite a user's later edit."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        source={'food_id':'16','name':'курица','brand':None,
+                'servings':[{'serving_id':'161','grams':100,
+                             'per_serving':{'kcal':165,'protein_g':31,
+                                            'fat_g':3.6,'carbs_g':0}}]}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        fake.search.return_value=[{'food_id':'16','name':'курица',
+                                   'brand':None,'servings':[]}]
+        def user_edits_during_provider_lookup(food_id,token):
+            self.m.food_change(self.chat,{'id':item_id,'name':'курица',
+                'grams':150,'nutrition_100g':{'kcal':170,'protein_g':30,
+                                               'fat_g':5,'carbs_g':0}})
+            return source
+        fake.food_by_id.side_effect=user_edits_during_provider_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            linked=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(linked['catalog_matches'],0)
+        with self.connect() as conn:
+            source_fields=conn.execute("""SELECT source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat)).fetchone()
+        self.assertEqual(source_fields,(None,None))
+        diary=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        item=diary['meals'][0]['items'][0]
+        self.assertEqual(item['nutrition_source'],'manual')
+        self.assertEqual(item['nutrition_100g']['kcal'],170.0)
+
+    def test_tz5_delayed_catalog_lookup_never_links_stale_weight(self):
+        """Provider linkage is rejected when row version changes in flight."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        source={'food_id':'16','name':'курица','brand':None,
+                'servings':[{'serving_id':'161','grams':100,
+                             'per_serving':{'kcal':165,'protein_g':31,
+                                            'fat_g':3.6,'carbs_g':0}}]}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        fake.search.return_value=[{'food_id':'16','name':'курица',
+                                   'brand':None,'servings':[]}]
+        def user_edits_during_provider_lookup(food_id,token):
+            self.m.food_change(self.chat,{'id':item_id,'name':'курица','grams':200})
+            # Ensure a distinct version even on an ultra-fast test database.
+            with self.connect() as conn:
+                conn.execute("""UPDATE manual_food_items
+                    SET updated_at=updated_at + interval '1 second'
+                    WHERE id=%s AND chat_id=%s""",(item_id,self.chat))
+            return source
+        fake.food_by_id.side_effect=user_edits_during_provider_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            linked=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(linked['catalog_matches'],0)
+        with self.connect() as conn:
+            record=conn.execute("""SELECT grams,source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat)).fetchone()
+        self.assertEqual(float(record[0]),200.0)
+        self.assertEqual(record[1:],(None,None))
+
+    def test_tz5_per_meal_unresolved_never_looks_complete(self):
+        """A resolved product does not complete a meal with unknown fragments."""
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г, стакан молока'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        self.m.food_change(self.chat,{'id':item_id,'name':'курица',
+            'grams':150,'nutrition_100g':{'kcal':165,'protein_g':31,
+                                          'fat_g':3.6,'carbs_g':0}})
+        self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'snack','text':'пюре домашнее 200 г'})
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertEqual(totals['resolved_items'],1)
+        self.assertEqual(totals['unresolved_items'],2)
+        self.assertIsNone(totals['totals'])
+        meals={m['type']:m for m in totals['meals']}
+        self.assertEqual(meals['lunch']['total_items'],2)
+        self.assertEqual(meals['lunch']['resolved_items'],1)
+        self.assertEqual(meals['lunch']['unresolved_items'],1)
+        self.assertFalse(meals['lunch']['complete'])
+        self.assertAlmostEqual(meals['lunch']['known_subtotal']['kcal'],247.5)
+        self.assertEqual(meals['snack']['total_items'],1)
+        self.assertEqual(meals['snack']['unresolved_items'],1)
+        self.assertIsNone(meals['snack']['known_subtotal'])
+        self.assertFalse(meals['snack']['complete'])
+        # Same result when the local owner's unknown item is resolved.
+        raw=next(r for r in saved['unparsed_texts'] if r['meal_type']=='lunch')
+        self.m.food_resolve_fragment(self.chat,{'meal_id':raw['meal_id'],
+            'fragment_index':0,'expected_text':'стакан молока',
+            'name':'молоко','grams':200})
+        final=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(final['unresolved_items'],1)
+        lunch=next(m for m in final['meals'] if m['type']=='lunch')
+        self.assertEqual(lunch['unresolved_items'],0)
+        self.assertFalse(lunch['complete'])  # Milk still has no verified macros.
+
+    def test_tz5_save_unknown_food_does_not_wait_for_ai(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'food_parse_ai',side_effect=RuntimeError(
+                'external AI unavailable')) as ai:
+            saved=self.m.food_add_text(self.chat,{
+                'date':'2026-10-18','meal_type':'snack','text':'стакан молока'})
+        ai.assert_not_called()
+        self.assertEqual(saved['unparsed_texts'][0]['text'],'стакан молока')
+        self.assertEqual(saved['unparsed_texts'][0]['unresolved_fragments'],
+            ['стакан молока'])
+
+    def test_tz5_one_tap_save_retry_does_not_duplicate_food(self):
+        self.m.save_onboarding(self.chat,self.body())
+        request={'date':'2026-10-18','meal_type':'lunch',
+                 'text':'рис сухой 80 г; курица 150 г',
+                 'request_id':'food-save-retry-test-123'}
+        first=self.m.food_add_text(self.chat,request)
+        second=self.m.food_add_text(self.chat,request)
+        self.assertEqual(first['meals'],second['meals'])
+        self.assertEqual(len(second['meals'][0]['items']),2)
+        with self.assertRaisesRegex(ValueError,'отличается'):
+            self.m.food_add_text(self.chat,{**request,'text':'рис сухой 500 г'})
+        with self.connect() as conn:
+            row=conn.execute("""SELECT COUNT(*) FROM food_save_requests
+                WHERE chat_id=%s""",(self.chat,)).fetchone()
+        self.assertEqual(row[0],1)
+        with self.assertRaises(ValueError):
+            self.m.food_add_text(self.chat,{**request,'request_id':'invalid id'})
+
+    def test_tz5_last_item_delete_never_erases_raw_food_history(self):
+        self.m.save_onboarding(self.chat,self.body())
+        raw='курица 150 г, стакан молока'
+        saved=self.m.food_add_text(self.chat,{
+            'date':'2026-10-18','meal_type':'lunch','text':raw})
+        iid=saved['meals'][0]['items'][0]['id']
+        self.m.food_change(self.chat,{'id':iid},delete=True)
+        restored=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(restored['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(restored['unparsed_texts'][0]['unresolved_fragments'],
+                         ['стакан молока'])
+        self.assertFalse(self.m.food_day_totals(self.chat,
+            {'date':'2026-10-18'})['complete'])
+        self.assertIn('2026-10-18',self.m.mini_history_month(
+            self.chat,{'month':'2026-10'})['food_dates'])
+        self.assertNotIn('2026-10-18',self.m.mini_history_month(
+            self.chat+1,{'month':'2026-10'})['food_dates'])
+
+    def test_tz5_homemade_mixed_meal_needs_ingredient_review(self):
+        self.m.save_onboarding(self.chat,self.body())
+        parsed=self.m.food_parse({'text':'плов 250 г, суп 300 г, рис сухой 80 г'})
+        self.assertEqual(parsed['items'],[{'name':'рис сухой','grams':80.0}])
+        self.assertEqual(len(parsed['unparsed']),2)
+        raw='плов 250 г'
+        saved=self.m.food_add_text(self.chat,{
+            'date':'2026-10-18','meal_type':'dinner','text':raw})
+        self.assertEqual(saved['meals'][0]['items'],[])
+        self.assertEqual(saved['unparsed_texts'][0]['text'],raw)
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(totals['unresolved_items'],1)
+        self.assertFalse(totals['complete'])
+        self.assertIn('2026-10-18',self.m.mini_history_month(
+            self.chat,{'month':'2026-10'})['food_dates'])
+
+    def test_tz5_soup_salad_cutlet_not_assumed_to_have_known_macros(self):
+        # Mixed home recipes do not have verified ingredient proportions.
+        parsed=self.m.food_parse({'text':
+            'салат овощной 200 г, котлета 90 г, пюре 150 г, курица 120 г'})
+        self.assertEqual(parsed['items'],[{'name':'курица','grams':120.0}])
+        self.assertEqual([row['text'] for row in parsed['unparsed']],
+            ['салат овощной 200 г','котлета 90 г','пюре 150 г'])
+        # A word containing "суп" is NOT itself an unknown soup recipe.
+        pure=self.m.food_parse({'text':'суперфуд 120 г'})
+        self.assertEqual(pure['items'],[{'name':'суперфуд','grams':120.0}])
+        self.assertFalse(pure['unparsed'])
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'салат овощной 200 г'})
+        self.assertEqual(saved['meals'][0]['items'],[])
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertIsNone(totals['totals'])
+        self.assertEqual(totals['unresolved_items'],1)
+
+    def test_tz5_explicit_kilograms_convert_without_inventing_servings(self):
+        parsed=self.m.food_parse({'text':
+            'курица 0,2 кг и 0.15 kg риса сухого; 250 г банана'})
+        self.assertEqual(parsed['items'],[
+            {'name':'курица','grams':200.0},
+            {'name':'риса сухого','grams':150.0},
+            {'name':'банана','grams':250.0}])
+        self.assertFalse(parsed['unparsed'])
+        # Cups and ambiguous decimal precision stay raw rather than guessed.
+        unknown=self.m.food_parse({'text':
+            'стакан кефира, молоко 0,005 кг, суп 0,2 кг'})
+        self.assertFalse(unknown['items'])
+        self.assertEqual(len(unknown['unparsed']),3)
+        # Mass beyond the app's validated bounds must not be silently clamped.
+        excessive=self.m.food_parse({'text':'курица 6 кг'})
+        self.assertFalse(excessive['items'])
+        self.assertEqual(len(excessive['unparsed']),1)
+
+    def test_tz5_natural_meal_mixed_leading_grams(self):
+        parsed=self.m.food_parse({'text':'я съел 150 г риса и 200 г курицы'})
+        self.assertEqual(parsed['items'],[
+            {'name':'риса','grams':150.0},{'name':'курицы','grams':200.0}])
+        self.assertFalse(parsed['unparsed'])
+
+    def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
+        self.m.save_onboarding(self.chat,self.body())
+        raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','text':raw})
+        self.assertEqual(len(saved['meals'][0]['items']),3)
+        self.assertEqual(saved['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(len(saved['unparsed']),1)
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertEqual(totals['unresolved_items'],1)
+        self.assertIsNone(totals['totals'])
+        self.assertTrue(all(item['nutrition_source'] is None
+            for item in saved['meals'][0]['items']))
+        self.assertEqual(self.m.food_history(self.chat+1,
+            {'date':'2026-10-18'})['unparsed_texts'],[])
+        unknown=self.m.food_add_text(self.chat,{'date':'2026-10-19',
+            'meal_type':'snack','text':'стакан молока'})
+        self.assertEqual(unknown['meals'][0]['items'],[])
+        self.assertEqual(unknown['unparsed_texts'][0]['text'],'стакан молока')
+        unknown_totals=self.m.food_day_totals(self.chat,{'date':'2026-10-19'})
+        self.assertFalse(unknown_totals['complete'])
+        self.assertEqual(unknown_totals['unresolved_items'],1)
+
     def test_manual_food_parse_history_edits_and_owner_isolation(self):
         parsed=self.m.food_parse({'text':'овсянка 70 грамм, творог 5% 200 грамм, яблоко'})
         self.assertEqual([(x['name'],x['grams']) for x in parsed['items']],
@@ -158,6 +657,55 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(len(self.m.food_history(self.chat,{'date':'2026-10-17'})['meals']),1)
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
+
+    def test_tz5_combined_ingredients_daily_macro_totals(self):
+        self.m.save_onboarding(self.chat,self.body())
+        source={'рис сухой':{'kcal':350,'protein_g':7,'fat_g':1,'carbs_g':78},
+                'курица':{'kcal':165,'protein_g':31,'fat_g':3.6,'carbs_g':0}}
+        parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г'})
+        self.assertEqual(len(parsed['items']),2)
+        entries=[{**row,'nutrition_100g':source[row['name']]} for row in parsed['items']]
+        self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'lunch','items':entries})
+        total=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertTrue(total['complete'])
+        self.assertEqual(total['totals']['kcal'],527.5)
+        self.assertEqual(total['totals']['protein_g'],52.1)
+        self.assertEqual(total['totals']['fat_g'],6.2)
+        self.assertEqual(total['totals']['carbs_g'],62.4)
+
+    def test_tz5_natural_food_sentence_and_unknown_composite_recipe(self):
+        parsed=self.m.food_parse({'text':'На обед я съел 150 г риса и 200 г курицы'})
+        self.assertEqual(parsed['items'],[
+            {'name':'риса','grams':150.0},
+            {'name':'курицы','grams':200.0}])
+        self.assertEqual(parsed['unparsed'],[])
+        composite=self.m.food_parse({'text':'салат (помидоры 100 г и огурцы 80 г)'})
+        self.assertEqual(composite['items'],[])
+        self.assertEqual(len(composite['unparsed']),2)
+        self.assertTrue(all('вес ингредиентов' in x['reason']
+            for x in composite['unparsed']))
+
+    def test_tz5_multiple_measured_ingredients_with_conjunction(self):
+        parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г плюс огурец 100 г'})
+        self.assertEqual(parsed['items'],[
+            {'name':'рис сухой','grams':80.0},
+            {'name':'курица','grams':150.0},
+            {'name':'огурец','grams':100.0}])
+        self.assertEqual(parsed['unparsed'],[])
+
+    def test_tz5_postweight_preparation_is_not_dropped(self):
+        parsed=self.m.food_parse({'text':
+            'гречка 200 г варёная, рис 80 г сухой; картофель 150 г жареный'})
+        self.assertEqual(parsed['items'],[
+            {'name':'гречка варёная','grams':200.0},
+            {'name':'рис сухой','grams':80.0},
+            {'name':'картофель жареный','grams':150.0}])
+        self.assertEqual(parsed['unparsed'],[])
+        # Do not convert cooked grams to dry grams by assuming a yield.
+        self.assertIsNone(self.m.food_auto_match_candidates('гречка варёная',[
+            {'food_id':'3','name':'гречка сухая','brand':None,
+             'servings':[{'serving_id':'8','grams':100,
+                          'per_serving':{'kcal':330}}]}]))
 
     def test_free_text_accepts_explicit_leading_and_trailing_grams_without_guessing(self):
         result=self.m.food_parse({'text':
@@ -412,6 +960,45 @@ class SchedulePostgresTests(unittest.TestCase):
               WHERE table_schema=%s AND table_name='manual_food_items'
               AND column_name IN ('kcal','protein','fat','carbs')""",(self.schema,)).fetchall()
         self.assertEqual(nutrients,[],'Provider macro values must not be stored')
+
+    def test_day_kbju_detects_unresolved_food_saved_during_catalogue_lookup(self):
+        """A concurrent free-text save must not make incomplete KBJU look complete."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add(self.chat,{'date':'2026-10-18',
+            'meal_type':'breakfast','items':[{'name':'Овсянка сухая','grams':100}]})
+        item_id=saved['meals'][0]['items'][0]['id']
+        with self.connect() as conn:
+            conn.execute("""UPDATE manual_food_items SET source_food_id='42',
+                source_serving_id='13' WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat))
+        sample={'food_id':'42','name':'Овсянка сухая',
+            'servings':[{'serving_id':'13','grams':100,
+                'per_serving':{'kcal':380,'protein_g':13,'fat_g':7,'carbs_g':67}}]}
+        fake=Mock()
+        fake.get_token.return_value='synthetic-token'
+        def save_unknown_during_lookup(_food_id,_token):
+            # This is the real owner-scoped write via another connection.
+            self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'lunch','text':'стакан молока'})
+            return sample
+        fake.food_by_id.side_effect=save_unknown_during_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','fake'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','fake'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            with self.assertRaisesRegex(ValueError,'Дневник изменился'):
+                self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            # After a fresh read, the raw item remains saved without fake 0s.
+            fake.food_by_id.side_effect=None
+            fake.food_by_id.return_value=sample
+            result=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(result['complete'])
+        self.assertTrue(result['partial'])
+        self.assertIsNone(result['totals'])
+        self.assertEqual(result['unresolved_items'],1)
+        self.assertEqual(result['known_subtotal']['kcal'],380)
+        history=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(history['unparsed_texts'][0]['text'],'стакан молока')
 
     def test_fatsecret_oauth_links_owner_with_one_time_callback_encrypted_tokens(self):
         from cryptography.fernet import Fernet
@@ -972,6 +1559,173 @@ class SchedulePostgresTests(unittest.TestCase):
                     .format(sql.Identifier(table))).fetchall()
                     for table in ('workouts', 'workout_items', 'workout_sets',
                                   'cardio_sessions', 'pending_inputs', 'rest_timers')}
+
+    def test_tz5_legacy_bot_finish_skip_never_delete_real_sets(self):
+        with self.connect() as conn:
+            empty=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'A') RETURNING id""",(self.chat,)).fetchone()[0]
+            cancelled=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'B') RETURNING id""",(self.chat,)).fetchone()[0]
+            partial=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'C') RETURNING id""",(self.chat,)).fetchone()[0]
+            for wid in (cancelled,partial):
+                conn.execute("""INSERT INTO workout_items(
+                    workout_id,position,exercise,target)
+                    VALUES(%s,1,'Приседания','2 по 8')""",(wid,))
+                for no in (1,2):
+                    state='done' if wid==partial and no==1 else 'pending'
+                    conn.execute("""INSERT INTO workout_sets(
+                        workout_id,position,set_no,target_min,target_max,unit,
+                        state,actual_value)
+                        VALUES(%s,1,%s,8,12,'reps',%s,%s)""",
+                        (wid,no,state,8 if state=='done' else None))
+        with patch.object(self.m,'send') as send:
+            self.m.finish_workout(self.chat,empty)
+            self.m.finish_workout(self.chat,empty)
+            self.m.cancel_workout(self.chat+1,cancelled)
+            self.m.cancel_workout(self.chat,cancelled)
+            self.m.finish_workout(self.chat,partial)
+        self.assertTrue(send.called)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT id,status,finished_at FROM workouts
+                WHERE id IN (%s,%s,%s) ORDER BY id""",
+                (empty,cancelled,partial)).fetchall()
+            self.assertEqual([row[1] for row in rows],
+                             ['finished_empty','skipped','finished'])
+            self.assertTrue(all(row[2] is not None for row in rows))
+            saved=conn.execute("""SELECT s.workout_id,s.set_no,s.state
+                FROM workout_sets s WHERE s.workout_id IN (%s,%s)
+                ORDER BY s.workout_id,s.set_no""",(cancelled,partial)).fetchall()
+            self.assertEqual(len(saved),4)
+            self.assertEqual([row[2] for row in saved],
+                             ['skipped','skipped','done','skipped'])
+            item=conn.execute("""SELECT done,skipped FROM workout_items
+                WHERE workout_id=%s AND position=1""",(partial,)).fetchone()
+            self.assertEqual(item,(False,False),
+                'One completed set must never be marked wholly skipped')
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM workout_items
+                WHERE workout_id IN (%s,%s)""",
+                (cancelled,partial)).fetchone()[0],2)
+
+    def test_tz5_zero_set_finish_skip_and_partial_progress_persist(self):
+        self.m.save_onboarding(self.chat,self.body())
+        for completed, action, expected in [
+            (False,'finish','finished_empty'),
+            (False,'skip_workout','skipped'),
+            (True,'skip_workout','finished'),
+            (False,'cancel','skipped'),
+            (True,'cancel','finished'),
+        ]:
+            with self.connect() as conn:
+                wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                    VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+                conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                    VALUES(%s,0,'Приседание','10')""",(wid,))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit,state,actual_value)
+                    VALUES(%s,0,1,8,12,'reps',%s,%s)""",
+                    (wid,'done' if completed else 'pending',10 if completed else None))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit)
+                    VALUES(%s,0,2,8,12,'reps')""",(wid,))
+            self.assertTrue(self.m.mini_write(self.chat,action,{}))
+            with self.connect() as conn:
+                result=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()
+                states=conn.execute("""SELECT state FROM workout_sets WHERE workout_id=%s
+                    ORDER BY set_no""",(wid,)).fetchall()
+            self.assertEqual(result[0],expected)
+            self.assertEqual([row[0] for row in states],
+                             ['done' if completed else 'skipped','skipped'])
+            with self.connect() as conn:
+                self.assertIsNone(self.m.mini_current(conn,self.chat))
+            history=self.m.mini_history_page(self.chat,{'limit':30})
+            self.assertTrue(any(row['id']==wid for row in history['history']))
+            detail=self.m.mini_history_detail(self.chat,wid)
+            self.assertEqual(detail['status'],expected)
+            with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
+                self.m.mini_write(self.chat,action,{})
+
+    def test_tz5_closure_retry_guard_and_owner_identity(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as c:
+            old=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        with self.connect() as c:
+            fresh=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'B','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        with self.assertRaisesRegex(ValueError,'Тренировка изменилась'):
+            self.m.mini_write(self.chat,'skip_workout',
+                              {'expected_workout':old})
+        with self.assertRaisesRegex(ValueError,'Сначала прими условия использования'):
+            self.m.mini_write(self.chat+1,'finish',
+                              {'expected_workout':old})
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'active')
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'skipped')
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM workouts WHERE chat_id=%s",
+                                       (self.chat,)).fetchone()[0],2)
+
+    def test_tz5_legacy_completed_item_without_sets_is_not_empty(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,done)
+                VALUES(%s,0,'Приседание','10',TRUE)""",(wid,))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',{}))
+        with self.connect() as conn:
+            status=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()[0]
+        self.assertEqual(status,'finished')
+
+    def test_tz5_skipped_visible_in_progress_history_and_calendar(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'cancel',{}))
+        state=self.m.mini_state(self.chat)
+        self.assertTrue(any(row['id']==wid and row['type']=='workout_skipped'
+            for row in state['history']))
+        with self.connect() as conn:
+            month=conn.execute("SELECT to_char(started_at,'YYYY-MM') FROM workouts WHERE id=%s",
+                (wid,)).fetchone()[0]
+        marks=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertTrue(marks['dates'])
+
+    def test_tz5_skip_scheduled_slot_advances_without_marking_done(self):
+        p,cycle,calendar=self.save()
+        first,second=calendar[:2]
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts
+                (chat_id,plan_day,cycle_id,week_no,source,status)
+                VALUES(%s,%s,%s,%s,'template','active') RETURNING id""",
+                (self.chat,first['day'],cycle,first['week'])).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                VALUES(%s,0,'Приседание','10')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets
+                (workout_id,position,set_no,target_min,target_max,unit)
+                VALUES(%s,0,1,8,12,'reps')""",(wid,))
+        with self.connect() as conn:
+            self.assertEqual(self.m.planned_next_in(conn,self.chat,cycle,3)[0],first['day'])
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',{}))
+        with self.connect() as conn:
+            next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
+        self.assertEqual(next_slot[0],second['day'])
+        self.assertEqual(next_slot[1],second['week'])
+        refreshed=self.m.scheduled_calendar(self.chat,p,cycle)
+        self.assertEqual(refreshed[0]['status'],'skipped')
+        self.assertNotEqual(refreshed[1]['status'],'done')
 
     def test_active_workout_overview_uses_saved_set_rows(self):
         rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),

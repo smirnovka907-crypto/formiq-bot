@@ -30,6 +30,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview',detailOrigin='';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
+let foodSaveRequestId='';
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let foodMonth='',foodMonthMarks=null,foodMonthBusy=false,foodMonthSeq=0;
@@ -464,10 +465,10 @@ function workout(){
   '<p class="intro workout-intro">Выполнено '+done+' из '+total+' подходов · результат хранится в дневнике.</p>';
  let content='';
  if(!c){
-  content='<section class="surface workout-entry"><span class="eyebrow">ТРЕНИРОВКА ЗАВЕРШЕНА</span>'+
-    '<h2 class="workout-exercise" style="font-size:25px">Все подходы обработаны</h2>'+
+  content='<section class="surface workout-entry"><span class="eyebrow">РЕЗУЛЬТАТ ЗАНЯТИЯ</span>'+
+    '<h2 class="workout-exercise" style="font-size:25px">'+(done?'Подходы обработаны':'Подходы не выполнены')+'</h2>'+
     '<p class="input-note">Сохрани результаты в истории тренировок.</p>'+
-    button('Завершить тренировку','finish-confirm',true)+'</section>';
+    button('Завершить тренировку','finish-confirm',true)+button('Пропустить тренировку','skip-workout-confirm')+'</section>';
  }else if(restUntil>Date.now()&&restFor===nextKey()){
   const seconds=Math.ceil((restUntil-Date.now())/1000);
   content='<section class="surface rest-panel"><span class="eyebrow">ОТДЫХ ПО ПРОГРАММЕ · '+
@@ -497,7 +498,7 @@ function workout(){
    '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
   '</section>':'';
  const footer=c?'<div class="fq-live-actions workout-secondary-actions" role="group" aria-label="Управление тренировкой" style="margin-top:14px">'+
-  button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
+  button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+(done===0?button('Пропустить тренировку','skip-workout-confirm'):'')+'</div>':'';
  return h()+summary+content+footer+overview;
 }
 function training(){
@@ -542,7 +543,7 @@ function training(){
   '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
   '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
- const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
+ const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&['planned','past'].includes(r.status));
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
  const trainingCoach='';
  const birthday=state?.birthday?.show_congratulations?
@@ -651,7 +652,7 @@ function trainingPlanCard(){
    '<span><span class="week-range">'+esc(periodShortLabel(i))+'</span><small class="week-meta">'+
    dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
   const entries=dates.map(r=>'<button type="button" class="plan-entry fq-plan-preview" data-cmd="training-preview" data-id="'+esc(r.id)+'" aria-label="Просмотр: '+esc(r.title)+' '+esc(r.date_ru||prettyDate(r.date))+'"><span><strong>'+esc(r.title)+'</strong><small>'+
-    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
+    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='skipped'?'Пропущено':r.status==='empty'?'Без подходов':r.status==='planned'?'Запланировано':'По расписанию')+
     '</small></span><span class="plan-chevron" aria-hidden="true">›</span></button>').join('');
   return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
    (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
@@ -879,7 +880,8 @@ async function requestFoodDaily(){
  // Any edit or re-fetch invalidates guidance for the previous food snapshot.
  ++foodRevision;aiNutritionTip='';
  const expected=foodDate,seq=++foodDailySeq;
- const hasFood=(foodHistory?.meals||[]).some(m=>(m.items||[]).length);
+ const hasFood=(foodHistory?.meals||[]).some(m=>(m.items||[]).length)||
+  (foodHistory?.unparsed_texts||[]).some(m=>(m.unresolved_fragments||[]).length);
  foodDaily=null;foodDailyError='';
  foodDailyBusy=hasFood;
  if(!foodDailyBusy){draw();return}
@@ -891,6 +893,15 @@ async function requestFoodDaily(){
   if(seq===foodDailySeq&&expected===foodDate)foodDailyError=ex.message||'Не удалось рассчитать КБЖУ';
  }finally{
   if(seq===foodDailySeq&&expected===foodDate){foodDailyBusy=false;draw()}
+ }
+}
+async function enrichFoodDayAfterSave(day){
+ try{
+  const result=await request('food_auto_enrich',{date:day});
+  // A slow catalogue call must never overwrite edits or another day's view.
+  if(day===foodDate&&(result.catalog_matches>0||result.ai_recognized>0))void loadFoodHistory();
+ }catch(_ex){
+  // Original food was already saved. Missing catalogue is not a save failure.
  }
 }
 function syncFoodDraft(){
@@ -937,7 +948,9 @@ function food(){
  const nutritionLine=n=>'≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' г · Ж '+esc(n.fat_g)+' г · У '+esc(n.carbs_g)+' г';
  const totalContent=totals?(totals.complete?
    '<p role="status"><strong>КБЖУ за день: '+nutritionLine(totals.totals)+'</strong></p>':
-   '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+esc(totals.total_items)+' продуктов.</strong>'+
+   '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+
+   esc(totals.total_items+(totals.unresolved_items||0))+' позиций.</strong>'+
+   (totals.unresolved_items?' Требуют уточнения: '+esc(totals.unresolved_items)+'.':'')+
    (totals.known_subtotal?' Сумма известных значений: '+nutritionLine(totals.known_subtotal)+'.':' Нет известных значений КБЖУ.')+'</p>'):'';
  const canRecheck=state?.food_catalog_available&&saved.some(m=>m.items.some(x=>x.nutrition_source==='fatsecret'));
  const nutritionButton=canRecheck?
@@ -956,6 +969,22 @@ function food(){
     nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
   meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
   '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
+ const rawNotes=(foodHistory?.unparsed_texts||[]).filter(x=>x.text).map(x=>{
+  const pending=Array.isArray(x.unresolved_fragments)?x.unresolved_fragments:[];
+  const fields=pending.map((fragment,i)=>{
+   const key=String(x.meal_id)+'-'+i;
+   return '<div class="fq-food-draft"><strong>'+esc(fragment)+'</strong>'+
+    '<label class="field"><span>Уточни название продукта</span><input id="food-unknown-name-'+key+'" maxlength="120" placeholder="Название без меры посуды"></label>'+
+    '<label class="field"><span>Фактический вес, г</span><input id="food-unknown-grams-'+key+'" type="number" min="0.1" max="5000" step="0.1" placeholder="Например, 200"></label>'+
+    button('Подтвердить продукт','food-resolve-fragment',false,
+      'data-meal-id="'+esc(x.meal_id)+'" data-index="'+i+'" data-fragment="'+esc(fragment)+'"')+'</div>';
+  }).join('');
+  return '<section class="surface soft"><h3>Исходная запись</h3><p>'+esc(x.text)+'</p>'+
+   (pending.length?'<details><summary>Уточнить нераспознанные продукты ('+pending.length+')</summary>'+
+     '<p class="input-note">Укажи настоящий продукт и вес. Без подтверждения КБЖУ не рассчитываются.</p>'+
+     fields+'</details>':
+     '<p class="input-note">Все найденные нераспознанные позиции уточнены.</p>')+'</section>';
+ }).join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
   '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
   '<details class="fq-food-manual"><summary>КБЖУ вручную на 100 г (необязательно)</summary>'+
@@ -969,7 +998,7 @@ function food(){
   '</select></label>'+
   '<label class="field"><span>Продукты и количество</span><textarea id="food-text" rows="3" maxlength="2000" placeholder="Овсянка 70 грамм, творог 5% 200 грамм">'+esc(foodText)+'</textarea></label>'+
   '<p class="input-note">Для продуктов, которые готовятся, указывайте вес до приготовления. Для готовых продуктов — фактический вес.</p>'+
-  button('Разобрать список','food-parse',true)+
+  button('Сохранить','food-save-text',true)+
   (foodUnparsed.length?'<p role="alert" class="input-note">Не распознано: '+esc(foodUnparsed.map(x=>x.text).join('; '))+'. Добавь вручную ниже.</p>':'')+
   (foodDraft.length?'<h3>Проверь перед сохранением</h3>'+editRows+
     button('Добавить строку вручную','food-draft-add')+
@@ -1005,7 +1034,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||(!rawNotes?'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>':''))+rawNotes+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function exerciseThumb(x){
@@ -1020,7 +1049,7 @@ function previewPanel(){
  if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
  if(!p)return '<h2>Просмотр недоступен</h2>';
  const unit=x=>x.unit==='min'?'мин':x.unit==='sec'?'сек':'повт.';
- if(p.finished&&p.actual)return '<h2>Выполненная тренировка</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
+ if(p.finished&&p.actual)return '<h2>Запись тренировки</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
  return '<h2>'+esc(p.name)+'</h2><p class="subtitle">'+esc(prettyDate(p.date))+
   ' · '+esc(p.duration_minutes)+' мин · неделя '+esc(p.week)+'</p>'+
   '<div class="fq-live-row"><span>Разминка</span><strong>'+esc(p.warmup_minutes)+' мин</strong></div>'+
@@ -1069,7 +1098,7 @@ function exerciseCardPanel(){
 }
 function actualWorkoutPanel(row){
  if(!row)return '<p class="empty">Результат не найден.</p>';
- const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':'Силовая'].filter(Boolean).join(' · ');
+ const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':row.status==='skipped'?'Пропущена':row.status==='finished_empty'?'Завершена без подходов':'Силовая'].filter(Boolean).join(' · ');
  return '<h2>'+esc(row.title||'Завершённая тренировка')+'</h2><p class="subtitle">'+esc(summary)+'</p>'+
   (row.result?'<p class="input-note">Результат: '+esc(row.result)+'</p>':'')+
   (row.items||[]).map((x,i)=>x.key?'<button type="button" class="fq-preview-exercise" data-cmd="exercise-history" data-index="'+i+'">'+exerciseThumb(x)+'<span><strong>'+esc(x.name)+'</strong><small>'+esc(x.result)+'</small></span><span>›</span></button>':
@@ -1169,7 +1198,8 @@ function modalHTML(){
  if(modal==='mood')content=state?.metrics?.sex==='female'?
   `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет Yandex AI при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
   `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
- if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>${Number(state?.workout?.done||0)===0?'Ни один подход не выполнен. Запишем завершение без результатов.':'Фактические подходы сохранятся, остальные будут пропущены.'}</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='skip-workout')content=`<h2>Пропустить тренировку?</h2><p>Запишем пропуск отдельно от выполненных тренировок. Прогресс не удалится.</p>${button('Пропустить тренировку','skip-workout',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
  if(modal==='history'){
   const rows=allRows.map(historyRow).join('');
@@ -1198,13 +1228,13 @@ app.addEventListener('input',e=>{
  if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  // Calendar month changes only through the arrow buttons; do not reset date drafts.
- if(e.target.id==='food-text')foodText=e.target.value;
+ if(e.target.id==='food-text'){foodText=e.target.value;foodSaveRequestId=''}
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
- if(e.target.id==='food-date'){fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
- if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
+ if(e.target.id==='food-date'){foodSaveRequestId='';fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-meal'){foodMeal=e.target.value;foodSaveRequestId='';return}
  if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
@@ -1441,6 +1471,35 @@ app.addEventListener('click',async e=>{
    error=ex.name==='AbortError'?'Анализ занимает слишком много времени. Попробуй позже.':ex.message;
   }finally{clearTimeout(timer);nutritionBusy=false;draw()}
   return;
+ }
+ if(cmd==='food-save-text'){
+  foodText=String(document.getElementById('food-text')?.value??foodText).trim();
+  foodMeal=document.getElementById('food-meal')?.value||foodMeal;
+  if(!foodText){fail('Напиши продукты и количество');return}
+  if(!foodSaveRequestId)foodSaveRequestId=(typeof crypto!=='undefined'&&crypto.randomUUID?
+    crypto.randomUUID():'formiq-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));
+  try{
+   const saved=await request('food_add_text',{date:foodDate,meal_type:foodMeal,text:foodText,request_id:foodSaveRequestId});
+   foodHistory=saved;foodUnparsed=saved.unparsed||[];
+   foodText='';foodSaveRequestId='';foodDraft=[];foodNotice=saved.notice||'Запись сохранена.';
+   error='';void requestFoodDaily();void loadFoodMonth();
+   void enrichFoodDayAfterSave(foodDate);
+  }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты. Текст сохранён на экране.'}
+  draw();return;
+ }
+ if(cmd==='food-resolve-fragment'){
+  const mid=Number(element.dataset.mealId),idx=Number(element.dataset.index);
+  if(!Number.isSafeInteger(mid)||mid<=0||!Number.isInteger(idx)||idx<0)return;
+  const field=String(mid)+'-'+idx;
+  const name=String(document.getElementById('food-unknown-name-'+field)?.value||'').trim();
+  const grams=String(document.getElementById('food-unknown-grams-'+field)?.value||'').trim();
+  if(!name||!grams){foodNotice='Укажи название и вес продукта';draw();return}
+  try{
+   const result=await request('food_resolve_fragment',{meal_id:mid,fragment_index:idx,expected_text:element.dataset.fragment,name,grams});
+   foodHistory=result;foodNotice='Продукт уточнён и сохранён.';
+   void requestFoodDaily();void loadFoodMonth();void enrichFoodDayAfterSave(foodDate);
+  }catch(ex){foodNotice=ex.message||'Не удалось уточнить запись'}
+  draw();return;
  }
  if(cmd==='food-parse'){
   foodText=String(document.getElementById('food-text')?.value??foodText).trim();
@@ -1721,8 +1780,10 @@ app.addEventListener('click',async e=>{
  }
  if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
+ if(cmd==='skip-workout-confirm'){modal='skip-workout';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='skip-workout'){modal='';const response=await send('skip_workout',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();progressSeries=null;loadProgressSeries()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
