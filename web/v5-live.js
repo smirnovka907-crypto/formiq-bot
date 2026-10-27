@@ -894,6 +894,16 @@ async function requestFoodDaily(){
   if(seq===foodDailySeq&&expected===foodDate){foodDailyBusy=false;draw()}
  }
 }
+async function enrichFoodDayAfterSave(day){
+ if(!state?.food_catalog_available)return;
+ try{
+  const result=await request('food_auto_enrich',{date:day});
+  // A slow catalogue call must never overwrite edits or another day's view.
+  if(day===foodDate&&result.catalog_matches>0)void loadFoodHistory();
+ }catch(_ex){
+  // Original food was already saved. Missing catalogue is not a save failure.
+ }
+}
 function syncFoodDraft(){
  const rows=document.querySelectorAll?.('[data-food-draft]')||[];
  for(const el of rows){
@@ -1205,8 +1215,8 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
- if(e.target.id==='food-date'){fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
- if(e.target.id==='food-meal'){foodMeal=e.target.value;return}
+ if(e.target.id==='food-date'){foodSaveRequestId='';fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
+ if(e.target.id==='food-meal'){foodMeal=e.target.value;foodSaveRequestId='';return}
  if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
@@ -1455,6 +1465,7 @@ app.addEventListener('click',async e=>{
    foodHistory=saved;foodUnparsed=saved.unparsed||[];
    foodText='';foodSaveRequestId='';foodDraft=[];foodNotice=saved.notice||'Запись сохранена.';
    error='';void requestFoodDaily();void loadFoodMonth();
+   void enrichFoodDayAfterSave(foodDate);
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты. Текст сохранён на экране.'}
   draw();return;
  }
