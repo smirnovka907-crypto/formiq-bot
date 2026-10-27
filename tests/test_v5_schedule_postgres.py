@@ -186,6 +186,82 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
                              [{'name':'овсянка','grams':80.0}])
 
+    def test_tz5_yandex_multi_food_masses_and_untrusted_output(self):
+        """Accept only separate, verbatim measured spans from Yandex output."""
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг'
+        chicken='курицу 150 граммов'
+        rice='рисом сухим 0,2 кг'
+        def response(rows):
+            return BytesIO(json.dumps({'result':{'alternatives':[{'message':{
+                'text':json.dumps({'items':rows},ensure_ascii=False)}}]}},
+                ensure_ascii=False).encode('utf-8'))
+        items=[{'source':chicken,'name':'курица','grams':150},
+               {'source':rice,'name':'рисом сухим','grams':200}]
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','offline-test'), \
+             patch.object(self.m,'FOLDER_ID','offline-test'), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            external.return_value.__enter__.return_value=response(items)
+            parsed=self.m.food_parse_ai(self.chat,raw)
+            self.assertEqual(parsed['items'],[
+                {'name':'курица','grams':150.0},
+                {'name':'рисом сухим','grams':200.0}])
+            for bad in (
+                [items[0]],
+                [items[0],{**items[1],'grams':250}],
+                [items[0],{**items[1],'name':'гречка'}],
+                [{**items[0],'source':rice},items[1]],
+                [{**items[0],'source':'другой текст'},items[1]],
+                [{**items[0],'grams':150,'kcal':500},items[1]],
+            ):
+                external.return_value.__enter__.return_value=response(bad)
+                self.assertIsNone(self.m.food_parse_ai(self.chat,raw),
+                    'Unsupported multi-food model reply must fail closed')
+            external.return_value.__enter__.return_value=response(items)
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'аллергия на курицу 150 г и рис 200 г'))
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'плов 150 г и курица 200 г'))
+
+    def test_tz5_multi_food_ai_persists_atomically_idempotently(self):
+        """Save original text first, then insert all validated products once."""
+        from io import BytesIO
+        import json
+        self.m.save_onboarding(self.chat,self.body())
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг'
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), \
+             patch.object(self.m,'YANDEX_KEY','offline-test'), \
+             patch.object(self.m,'FOLDER_ID','offline-test'), \
+             patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            original=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'dinner','text':raw,'request_id':'multi-raw-save-123'})
+            self.assertEqual(len(original['meals'][0]['items']),0)
+            self.assertEqual(original['unparsed_texts'][0]['text'],raw)
+            external.assert_not_called()
+            reply={'result':{'alternatives':[{'message':{'text':json.dumps(
+                {'items':[{'source':'курицу 150 граммов','name':'курица','grams':150},
+                          {'source':'рисом сухим 0,2 кг','name':'рисом сухим',
+                           'grams':200}]},ensure_ascii=False)}}]}}
+            external.return_value.__enter__.return_value=BytesIO(
+                json.dumps(reply,ensure_ascii=False).encode('utf-8'))
+            once=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+            twice=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(once['ai_recognized'],2)
+        self.assertEqual(twice['ai_recognized'],0)
+        diary=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(diary['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(diary['unparsed_texts'][0]['unresolved_fragments'],[])
+        self.assertEqual(len(diary['meals'][0]['items']),2)
+        self.assertTrue(all(i['nutrition_source'] is None
+            for i in diary['meals'][0]['items']))
+        macros=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(macros['complete'])
+        self.assertIsNone(macros['totals'])
+
     def test_tz5_ai_enrich_saved_explicit_grams_only_after_commit(self):
         from io import BytesIO
         import json
