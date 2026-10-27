@@ -1456,7 +1456,7 @@ def planned_next_in(c, chat, cycle_id, count):
       AND s.schedule_state IS DISTINCT FROM 'retired'
       AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
         AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
-        AND w.plan_day=s.day_code AND w.status='finished' AND w.source='template')
+        AND w.plan_day=s.day_code AND w.status IN ('finished','finished_empty','skipped') AND w.source='template')
       ORDER BY s.planned_date,s.week_no,s.id LIMIT 1''',
       (chat,cycle_id,chat)).fetchone()
 
@@ -1918,13 +1918,19 @@ def set_prompt(chat, wid, pos, no, mid=None):
 
 
 def recalc_item(c, wid, pos):
-    total, pending, skipped = c.execute('''SELECT COUNT(*),COUNT(*) FILTER(WHERE state='pending'),
-        COUNT(*) FILTER(WHERE state='skipped') FROM workout_sets
-        WHERE workout_id=%s AND position=%s''', (wid, pos)).fetchone()
+    total,pending,skipped,completed=c.execute('''SELECT COUNT(*),
+        COUNT(*) FILTER(WHERE state='pending'),
+        COUNT(*) FILTER(WHERE state='skipped'),
+        COUNT(*) FILTER(WHERE state='done')
+        FROM workout_sets WHERE workout_id=%s AND position=%s''',
+        (wid,pos)).fetchone()
     if total:
+        # A partially performed exercise is not an entirely skipped exercise.
+        # Preserve the actual set rows for detailed training history.
         c.execute('''UPDATE workout_items SET done=%s,skipped=%s
                      WHERE workout_id=%s AND position=%s''',
-                  (pending == 0 and skipped == 0, pending == 0 and skipped > 0, wid, pos))
+                  (pending == 0 and skipped == 0,
+                   pending == 0 and skipped > 0 and completed == 0,wid,pos))
 
 
 def record_set(chat, wid, pos, no, value, mid=None):
@@ -2039,31 +2045,36 @@ def legacy_mark(chat, wid, pos, skip, mid=None):
 
 
 def finish_workout(chat, wid, mid=None):
+    """Close a Telegram-bot session without inventing any completed sets."""
     with db() as c:
-        done = c.execute('''SELECT COUNT(*) FROM workout_sets s JOIN workouts w ON w.id=s.workout_id
-                            WHERE s.workout_id=%s AND w.chat_id=%s
-                            AND w.status='active' AND s.state='done' ''', (wid, chat)).fetchone()[0]
-        legacy = c.execute('''SELECT COUNT(*) FROM workout_items i JOIN workouts w ON w.id=i.workout_id
-                              WHERE i.workout_id=%s AND w.chat_id=%s
-                              AND w.status='active' AND i.done''', (wid, chat)).fetchone()[0]
-        if done + legacy == 0:
-            return send(chat, 'Пока ничего не выполнено. Запиши подход или отмени занятие.',
-                        [('▶️ Тренировка', 'current'), ('❌ Отменить', f'cancel:{wid}')], mid)
-        row = c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                           WHERE id=%s AND chat_id=%s AND status='active' RETURNING id''',
-                        (wid, chat)).fetchone()
-        if row:
-            affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
-                                    WHERE workout_id=%s AND state='pending' RETURNING position''',
-                                 (wid,)).fetchall()
-            for pos in set(x[0] for x in affected):
-                recalc_item(c, wid, pos)
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    if not row:
-        return send(chat, 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
-    send(chat, '🏁 Тренировка сохранена! Как ощущалась нагрузка?',
-         [('🙂 Легко', f'rate:{wid}:easy'), ('💪 Нормально', f'rate:{wid}:ok'),
-          ('😮‍💨 Тяжело', f'rate:{wid}:hard')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'finished_empty'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    if state=='finished_empty':
+        return send(chat,'Занятие закрыто без выполненных подходов. История сохранена.',
+                    [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
+    send(chat,'🏁 Тренировка сохранена! Как ощущалась нагрузка?',
+         [('🙂 Легко',f'rate:{wid}:easy'),('💪 Нормально',f'rate:{wid}:ok'),
+          ('😮‍💨 Тяжело',f'rate:{wid}:hard')],mid)
 
 
 def rate_workout(chat, wid, grade, mid=None):
@@ -2088,17 +2099,39 @@ def valid_signature(kind, chat, wid, until, sig):
 
 def confirm_cancel(chat, wid, mid=None):
     until = int(time.time()) + 600
-    send(chat, 'Отменить тренировку? Запись не попадёт в статистику.',
+    send(chat, 'Пропустить тренировку? Выполненные подходы сохранятся в истории.',
          [('❌ Подтвердить', f'cancel_yes:{wid}:{until}:{signed("cancel",chat,wid,until)}'),
           ('↩️ Продолжить', 'current')], mid)
 
 
 def cancel_workout(chat, wid, mid=None):
+    """Skip an active Telegram session; never delete its historical records."""
     with db() as c:
-        row = c.execute("DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' RETURNING id",
-                        (wid, chat)).fetchone()
-        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    send(chat, 'Тренировка отменена.' if row else 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'skipped'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    send(chat,'Подходы сохранены, остальные пропущены.' if state=='finished'
+         else 'Занятие пропущено без выполненных подходов.',
+         [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
 
 
 def stats(chat, mid=None):
@@ -3428,18 +3461,25 @@ def scheduled_calendar(chat,p,cycle):
             FROM scheduled_sessions WHERE chat_id=%s AND cycle_id=%s
             AND schedule_state IS DISTINCT FROM 'retired'
             ORDER BY planned_date,week_no,day_code''',(chat,cycle)).fetchall()
-        done=conn.execute('''SELECT week_no,plan_day,COUNT(*) FROM workouts
-            WHERE chat_id=%s AND cycle_id=%s AND status='finished' AND source='template'
-            GROUP BY week_no,plan_day''',(chat,cycle)).fetchall()
-    remaining={(week,day):total for week,day,total in done}
+        closed=conn.execute('''SELECT week_no,plan_day,status FROM workouts
+            WHERE chat_id=%s AND cycle_id=%s
+            AND status IN ('finished','finished_empty','skipped') AND source='template'
+            ORDER BY CASE status WHEN 'finished' THEN 0
+                WHEN 'finished_empty' THEN 1 ELSE 2 END,finished_at DESC''',
+            (chat,cycle)).fetchall()
+    closed_slots={}
+    for week,day,status in closed:
+        closed_slots.setdefault((week,day),status)
     today=local_today(chat)
     items=[]
     for sid,week,day,dt in rows:
-        count_done=remaining.get((week,day),0)
-        if count_done>0:remaining[(week,day)]-=1
+        closed_status=closed_slots.get((week,day))
         items.append({'id':sid,'week':week,'day':day,'date':dt.isoformat(),
           'date_ru':dt.strftime('%d.%m.%Y'),'title':day_title(p,day),
-          'status':'done' if count_done>0 else ('past' if dt<today else 'planned')})
+          'status':('done' if closed_status=='finished' else
+                    'empty' if closed_status=='finished_empty' else
+                    'skipped' if closed_status=='skipped' else
+                    'past' if dt<today else 'planned')})
     return items
 
 
@@ -4790,7 +4830,7 @@ def mini_training_preview(chat, body):
         sid,cycle,week,day,planned=slot
         completed_row=conn.execute("""SELECT id FROM workouts WHERE chat_id=%s
             AND cycle_id=%s AND week_no=%s AND plan_day=%s
-            AND source='template' AND status='finished'
+            AND source='template' AND status IN ('finished','finished_empty','skipped')
             ORDER BY finished_at DESC NULLS LAST,id DESC LIMIT 1""",
             (chat,cycle,week,day)).fetchone()
         completed=completed_row is not None
@@ -4800,7 +4840,7 @@ def mini_training_preview(chat, body):
               AND NOT EXISTS(SELECT 1 FROM workouts w WHERE w.chat_id=%s
                 AND w.cycle_id=s.cycle_id AND w.week_no=s.week_no
                 AND w.plan_day=s.day_code AND w.source='template'
-                AND w.status='finished')
+                AND w.status IN ('finished','finished_empty','skipped'))
             ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
             (chat,cycle,chat)).fetchone()
     if completed_row:
@@ -5233,7 +5273,7 @@ def mini_history_detail(chat,wid):
         return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
                 'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty,status FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
@@ -5242,7 +5282,8 @@ def mini_history_detail(chat,wid):
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
     elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
     return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
-      'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
+      'type':'workout','duration_minutes':elapsed,'result':w[4],
+      'status':w[5],'items':[
        {'name':visible_exercise_name(name),'key':key if key in EX else None,
         'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
          f' · {kg} кг' if kg is not None else ''),
@@ -5279,10 +5320,12 @@ def mini_history_page(chat, body):
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
         "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
-        "SELECT id AS entry_id, started_at AS occurred_at, 'workout'::text AS entry_type,"
+        "SELECT id AS entry_id, started_at AS occurred_at, "
+        "CASE WHEN status='skipped' THEN 'workout_skipped' "
+        "WHEN status='finished_empty' THEN 'workout_empty' ELSE 'workout' END AS entry_type,"
         "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
         "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
-        "WHERE chat_id=%s AND status='finished' " + filter_w +
+        "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
         "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
@@ -5298,7 +5341,9 @@ def mini_history_page(chat, body):
             'id': ident,
             'date': history_local_date(timestamp, zone),
             'type': kind,
-            'title': (custom or day_title(p, day)) if kind == 'workout'
+            'title': ((('Пропущена · ' if kind=='workout_skipped' else
+                       'Без подходов · ' if kind=='workout_empty' else '')+
+                      (custom or day_title(p,day)))) if kind.startswith('workout')
                      else cardio_history_title(equipment,minutes,activity,kcal),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
@@ -5321,7 +5366,7 @@ def mini_history_month(chat, body):
     with db() as conn:
         dates_workout = conn.execute(
             "SELECT DISTINCT (started_at AT TIME ZONE %s)::date FROM workouts "
-            "WHERE chat_id=%s AND status='finished' "
+            "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') "
             "AND started_at >= %s AND started_at < %s",
             (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_cardio = conn.execute(
@@ -5439,8 +5484,9 @@ def mini_state(chat, just_finished=False):
             result['workout'] = workout
     # A single progress screen: dates and drill-down, without duplicate reports.
     with db() as c:
-        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title FROM workouts
-          WHERE chat_id=%s AND status='finished' ORDER BY started_at DESC,id DESC LIMIT 15''',
+        history_rows=c.execute('''SELECT id,plan_day,started_at,manual_title,status FROM workouts
+          WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped')
+          ORDER BY started_at DESC,id DESC LIMIT 15''',
           (chat,)).fetchall()
         cardio=c.execute('''SELECT COALESCE(SUM(minutes),0) FROM cardio_sessions
           WHERE chat_id=%s AND performed_at >= NOW()-INTERVAL '7 days' ''',(chat,)).fetchone()[0]
@@ -5448,9 +5494,13 @@ def mini_state(chat, just_finished=False):
           WHERE chat_id=%s ORDER BY performed_at DESC,id DESC LIMIT 15''',(chat,)).fetchall()
     history_zone=history_local_zone(chat)
     combined=[{'id':wid,'date':history_local_date(dt, history_zone),
-        'sort_at':dt.isoformat(),'type':'workout',
-        'title':manual_title or day_title(p,day)}
-        for wid,day,dt,manual_title in history_rows]
+        'sort_at':dt.isoformat(),
+        'type':('workout_skipped' if status=='skipped' else
+                'workout_empty' if status=='finished_empty' else 'workout'),
+        'title':(('Пропущена · ' if status=='skipped' else
+                  'Без подходов · ' if status=='finished_empty' else '')+
+                 (manual_title or day_title(p,day)))}
+        for wid,day,dt,manual_title,status in history_rows]
     combined.extend({'id':-cid,'date':history_local_date(dt, history_zone),
         'sort_at':dt.isoformat(),'type':'cardio',
         'title':cardio_history_title(equipment,mins,activity,kcal)}
@@ -5753,7 +5803,7 @@ def mini_write(chat, action, body):
             raise ValueError(error)
         return {'options':[{'key':k,'name':EX[k][0]} for k in keys]}
 
-    if action not in ('record','skip','replace','finish','cancel','rate'):
+    if action not in ('record','skip','replace','finish','skip_workout','cancel','rate'):
         raise ValueError('Неизвестная операция')
 
     with db() as c:
@@ -5766,20 +5816,36 @@ def mini_write(chat, action, body):
                 AND difficulty IS NULL ORDER BY finished_at DESC,id DESC LIMIT 1)
                 AND chat_id=%s''',(grade,chat,chat))
             return False
+        # Serialize set recording and closure for one Telegram user.
+        c.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        expected_id = body.get('expected_workout')
+        if expected_id is not None and (type(expected_id) is not int or expected_id <= 0):
+            raise ValueError('Обнови тренировку перед повторным запросом')
         wid = mini_current(c,chat)
         if not wid:
+            if action in ('finish','skip_workout','cancel') and expected_id:
+                previous = c.execute('''SELECT status FROM workouts
+                    WHERE id=%s AND chat_id=%s''',(expected_id,chat)).fetchone()
+                if previous and previous[0] in ('finished','finished_empty','skipped'):
+                    return True
             raise ValueError('Активной тренировки нет')
-        if action == 'cancel':
-            c.execute('''DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
-            return False
-        if action == 'finish':
+        if expected_id is not None and expected_id != wid:
+            raise ValueError('Тренировка изменилась. Обнови тренировку')
+        # Old cancel requests remain valid, but never delete training history.
+        if action in ('finish','skip_workout','cancel'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
                 WHERE workout_id=%s AND state='done' ''',(wid,)).fetchone()[0]
-            if done == 0:
-                raise ValueError('Сначала запиши хотя бы один подход')
-            c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                WHERE id=%s AND chat_id=%s AND status='active' ''',(wid,chat))
+            legacy_done = c.execute('''SELECT COUNT(*) FROM workout_items
+                WHERE workout_id=%s AND done=TRUE''',(wid,)).fetchone()[0]
+            # A skipped session must never count as a completed workout.
+            # Explicit early finish with no sets is also recorded, not blocked.
+            # Preserve completed work even if the user chooses "skip" later:
+            # a partially completed session must not disappear from progress.
+            final_status = ('finished' if done or legacy_done else
+                            'skipped' if action in ('skip_workout','cancel')
+                            else 'finished_empty')
+            c.execute('''UPDATE workouts SET status=%s,finished_at=NOW()
+                WHERE id=%s AND chat_id=%s AND status='active' ''',(final_status,wid,chat))
             affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
                 WHERE workout_id=%s AND state='pending' RETURNING position''',(wid,)).fetchall()
             for pos in {r[0] for r in affected}:

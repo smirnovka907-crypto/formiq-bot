@@ -6,6 +6,7 @@ on:
       - feat/tz5-p0-one-tap-food-20261027
   push:
     branches:
+      - test/integration-p31-p34-20261027
       - feature/health-integrations-38.1.0
       - release/formiq-38.1.2
       - release/formiq-38.1.3

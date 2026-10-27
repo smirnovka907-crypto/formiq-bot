@@ -469,7 +469,7 @@ async function run(){
    });
    await page.getByRole('button',{name:'Пропустить отдых',exact:true}).click();
    assert.equal(await page.locator('#reps').inputValue(),'','Saved repetitions are cleared for the next set');
-   await page.getByRole('button',{name:'Завершить',exact:true}).click();
+   await page.getByRole('button',{name:'Завершить досрочно',exact:true}).click();
    await page.locator('.fq-live-dialog').getByRole('button',{name:'Завершить',exact:true}).click();
    await page.getByText('Силовая · завершена в браузере',{exact:true}).waitFor();
    await page.locator('.fq-progress-chart').waitFor();

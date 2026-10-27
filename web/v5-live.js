@@ -465,10 +465,10 @@ function workout(){
   '<p class="intro workout-intro">Выполнено '+done+' из '+total+' подходов · результат хранится в дневнике.</p>';
  let content='';
  if(!c){
-  content='<section class="surface workout-entry"><span class="eyebrow">ТРЕНИРОВКА ЗАВЕРШЕНА</span>'+
-    '<h2 class="workout-exercise" style="font-size:25px">Все подходы обработаны</h2>'+
+  content='<section class="surface workout-entry"><span class="eyebrow">РЕЗУЛЬТАТ ЗАНЯТИЯ</span>'+
+    '<h2 class="workout-exercise" style="font-size:25px">'+(done?'Подходы обработаны':'Подходы не выполнены')+'</h2>'+
     '<p class="input-note">Сохрани результаты в истории тренировок.</p>'+
-    button('Завершить тренировку','finish-confirm',true)+'</section>';
+    button('Завершить тренировку','finish-confirm',true)+button('Пропустить тренировку','skip-workout-confirm')+'</section>';
  }else if(restUntil>Date.now()&&restFor===nextKey()){
   const seconds=Math.ceil((restUntil-Date.now())/1000);
   content='<section class="surface rest-panel"><span class="eyebrow">ОТДЫХ ПО ПРОГРАММЕ · '+
@@ -498,7 +498,7 @@ function workout(){
    '<span>'+esc(e.name)+'</span><strong>'+esc(e.done)+' / '+esc(e.total)+'</strong></div>').join('')+
   '</section>':'';
  const footer=c?'<div class="fq-live-actions workout-secondary-actions" role="group" aria-label="Управление тренировкой" style="margin-top:14px">'+
-  button('Пропустить упражнение','skip-confirm')+button('Завершить','finish-confirm')+'</div>':'';
+  button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+(done===0?button('Пропустить тренировку','skip-workout-confirm'):'')+'</div>':'';
  return h()+summary+content+footer+overview;
 }
 function training(){
@@ -543,7 +543,7 @@ function training(){
   '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
   '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
- const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&r.status!=='done'&&r.status!=='retired');
+ const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&['planned','past'].includes(r.status));
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
  const trainingCoach='';
  const birthday=state?.birthday?.show_congratulations?
@@ -652,7 +652,7 @@ function trainingPlanCard(){
    '<span><span class="week-range">'+esc(periodShortLabel(i))+'</span><small class="week-meta">'+
    dates.length+' занятий по сохранённому расписанию</small></span><span class="week-chevron" aria-hidden="true">'+(week===i?'⌄':'›')+'</span></button>';
   const entries=dates.map(r=>'<button type="button" class="plan-entry fq-plan-preview" data-cmd="training-preview" data-id="'+esc(r.id)+'" aria-label="Просмотр: '+esc(r.title)+' '+esc(r.date_ru||prettyDate(r.date))+'"><span><strong>'+esc(r.title)+'</strong><small>'+
-    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='planned'?'Запланировано':'По расписанию')+
+    esc(r.date_ru||prettyDate(r.date))+' · '+(r.status==='done'?'Выполнено':r.status==='skipped'?'Пропущено':r.status==='empty'?'Без подходов':r.status==='planned'?'Запланировано':'По расписанию')+
     '</small></span><span class="plan-chevron" aria-hidden="true">›</span></button>').join('');
   return '<div class="week-group">'+toggle+(week===i?'<div class="week-details"><div class="plan-list">'+
    (entries||'<p class="empty">На этот период занятий нет.</p>')+'</div></div>':'')+'</div>';
@@ -1049,7 +1049,7 @@ function previewPanel(){
  if(trainingPreviewBusy)return '<h2>Загружаем тренировку…</h2>';
  if(!p)return '<h2>Просмотр недоступен</h2>';
  const unit=x=>x.unit==='min'?'мин':x.unit==='sec'?'сек':'повт.';
- if(p.finished&&p.actual)return '<h2>Выполненная тренировка</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
+ if(p.finished&&p.actual)return '<h2>Запись тренировки</h2>'+actualWorkoutPanel(p.actual)+button('Закрыть','close');
  return '<h2>'+esc(p.name)+'</h2><p class="subtitle">'+esc(prettyDate(p.date))+
   ' · '+esc(p.duration_minutes)+' мин · неделя '+esc(p.week)+'</p>'+
   '<div class="fq-live-row"><span>Разминка</span><strong>'+esc(p.warmup_minutes)+' мин</strong></div>'+
@@ -1098,7 +1098,7 @@ function exerciseCardPanel(){
 }
 function actualWorkoutPanel(row){
  if(!row)return '<p class="empty">Результат не найден.</p>';
- const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':'Силовая'].filter(Boolean).join(' · ');
+ const summary=[row.date,row.duration_minutes!=null?row.duration_minutes+' мин':null,row.type==='cardio'?'Кардио':row.status==='skipped'?'Пропущена':row.status==='finished_empty'?'Завершена без подходов':'Силовая'].filter(Boolean).join(' · ');
  return '<h2>'+esc(row.title||'Завершённая тренировка')+'</h2><p class="subtitle">'+esc(summary)+'</p>'+
   (row.result?'<p class="input-note">Результат: '+esc(row.result)+'</p>':'')+
   (row.items||[]).map((x,i)=>x.key?'<button type="button" class="fq-preview-exercise" data-cmd="exercise-history" data-index="'+i+'">'+exerciseThumb(x)+'<span><strong>'+esc(x.name)+'</strong><small>'+esc(x.result)+'</small></span><span>›</span></button>':
@@ -1198,7 +1198,8 @@ function modalHTML(){
  if(modal==='mood')content=state?.metrics?.sex==='female'?
   `<h2>Самочувствие перед началом</h2><p>Выбирай по реальному состоянию, не по фазе цикла.</p>${button('Хорошо — обычная тренировка','start-normal',true)}${button('Небольшой дискомфорт — облегчить','start-tired')}${button('Сильная боль или слабость — восстановление','start-severe')}${button('Совет Yandex AI при дискомфорте (если разрешён)','ai-tip-discomfort')}`:
   `<h2>Самочувствие перед началом</h2><p>Как себя чувствуешь?</p>${button('Хорошо','start-normal',true)}${button('Устал','start-tired')}`;
- if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>Оставшиеся подходы будут пропущены.</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='finish')content=`<h2>Завершить тренировку?</h2><p>${Number(state?.workout?.done||0)===0?'Ни один подход не выполнен. Запишем завершение без результатов.':'Фактические подходы сохранятся, остальные будут пропущены.'}</p>${button('Завершить','finish',true)}${button('Продолжить','close')}`;
+ if(modal==='skip-workout')content=`<h2>Пропустить тренировку?</h2><p>Запишем пропуск отдельно от выполненных тренировок. Прогресс не удалится.</p>${button('Пропустить тренировку','skip-workout',true)}${button('Продолжить','close')}`;
  if(modal==='skip')content=`<h2>Пропустить упражнение?</h2>${button('Пропустить','skip',true)}${button('Продолжить','close')}`;
  if(modal==='history'){
   const rows=allRows.map(historyRow).join('');
@@ -1779,8 +1780,10 @@ app.addEventListener('click',async e=>{
  }
  if(cmd==='rest-skip'){restSkippedKey=nextKey();restUntil=0;restFor='';storeRestTimer();draw();return}
  if(cmd==='finish-confirm'){modal='finish';draw();return}
+ if(cmd==='skip-workout-confirm'){modal='skip-workout';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='skip-workout'){modal='';const response=await send('skip_workout',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();progressSeries=null;loadProgressSeries()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
