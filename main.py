@@ -3981,7 +3981,13 @@ def food_parse(body):
             '',part,flags=re.IGNORECASE).strip()
         # Compound dishes with nested descriptions are NOT a single
         # verified ingredient. Preserve them verbatim for user review.
-        if any(mark in clean for mark in '()'):
+        if (any(mark in clean for mark in '()') or
+                re.search(r'(?<!\\w)(?:плов|борщ|суп|лазанья|пицца|шаурма|'
+                          r'омлет|запеканка|оливье|цезарь|карбонара|'
+                          r'бутерброд|сэндвич|котлеты?|рагу)(?!\\w)',
+                          clean,re.IGNORECASE)):
+            # Homemade mixed dishes have unknown ingredient proportions.
+            # Preserve the eaten meal, but never invent recipe macros.
             manual.append({'text':part,'reason':'Уточни состав и вес ингредиентов'})
             continue
         trailing=prep_tail.fullmatch(clean)
@@ -4329,8 +4335,12 @@ def food_change(chat,body,delete=False):
                   AND m.chat_id=%s RETURNING m.id,m.eaten_on""",
                 (iid,chat,chat)).fetchone()
             if changed:
+                # A user deleting one product must not erase the original
+                # free-text diary or unresolved products from the same meal.
                 conn.execute("""DELETE FROM manual_food_meals m WHERE id=%s
-                    AND chat_id=%s AND NOT EXISTS (
+                    AND chat_id=%s AND raw_input_text IS NULL
+                    AND jsonb_array_length(unresolved_fragments)=0
+                    AND NOT EXISTS (
                     SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
                     (changed[0],chat))
         else:
@@ -5152,8 +5162,9 @@ def mini_history_month(chat, body):
             (zone.key, chat, utc_start, utc_end)).fetchall()
         dates_food = conn.execute("""SELECT DISTINCT m.eaten_on FROM manual_food_meals m
             WHERE m.chat_id=%s AND m.eaten_on >= %s AND m.eaten_on < %s
-            AND EXISTS(SELECT 1 FROM manual_food_items i
-                       WHERE i.meal_id=m.id AND i.chat_id=m.chat_id)
+            AND (m.raw_input_text IS NOT NULL OR
+                 EXISTS(SELECT 1 FROM manual_food_items i
+                        WHERE i.meal_id=m.id AND i.chat_id=m.chat_id))
             ORDER BY m.eaten_on""",(chat,start,end)).fetchall()
     marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
     saved_food = sorted({value.isoformat() for (value,) in dates_food})
