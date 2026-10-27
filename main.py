@@ -3982,9 +3982,10 @@ def food_parse(body):
         # Compound dishes with nested descriptions are NOT a single
         # verified ingredient. Preserve them verbatim for user review.
         if (any(mark in clean for mark in '()') or
-                re.search(r'(?<!\\w)(?:плов|борщ|суп|лазанья|пицца|шаурма|'
+                re.search(r'(?<!\w)(?:плов|борщ|суп|лазанья|пицца|шаурма|'
                           r'омлет|запеканка|оливье|цезарь|карбонара|'
-                          r'бутерброд|сэндвич|котлеты?|рагу)(?!\\w)',
+                          r'бутерброд|сэндвич|котлет[а-яё]*|рагу|'
+                          r'салат|пюре)(?!\w)',
                           clean,re.IGNORECASE)):
             # Homemade mixed dishes have unknown ingredient proportions.
             # Preserve the eaten meal, but never invent recipe macros.
