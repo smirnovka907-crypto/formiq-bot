@@ -3973,9 +3973,18 @@ def food_parse(body):
     if len(parts)>30:
         raise ValueError('Максимум 30 продуктов за один ввод')
     for part in parts:
-        trailing=prep_tail.fullmatch(part)
-        ending=suffix.fullmatch(part) if trailing is None else None
-        leading=prefix.fullmatch(part) if ending is None and trailing is None else None
+        # Natural diary phrasing does not belong in the ingredient identity.
+        clean=re.sub(r'^(?:сегодня\\s+)?(?:на\\s+(?:завтрак|обед|ужин|перекус)\\s*[:,]?\\s*)?'
+            r'(?:(?:я\\s+)?(?:съел|съела|поел|поела|выпил|выпила|ел|ела)\\s+)?',
+            '',part,flags=re.IGNORECASE).strip()
+        # Compound dishes with nested descriptions are NOT a single
+        # verified ingredient. Preserve them verbatim for user review.
+        if any(mark in clean for mark in '()'):
+            manual.append({'text':part,'reason':'Уточни состав и вес ингредиентов'})
+            continue
+        trailing=prep_tail.fullmatch(clean)
+        ending=suffix.fullmatch(clean) if trailing is None else None
+        leading=prefix.fullmatch(clean) if ending is None and trailing is None else None
         if trailing or ending or leading:
             try:
                 name,grams=(food_item(trailing.group(1)+' '+trailing.group(3),trailing.group(2))
