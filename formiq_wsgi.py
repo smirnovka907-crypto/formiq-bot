@@ -35,3 +35,28 @@ def timeweb_release_health():
     if len(sha) != 40 or any(c not in "0123456789abcdef" for c in sha):
         return "release invalid", 503
     return sha + "\n", 200, {"Cache-Control": "no-store"}
+
+
+@application.get("/__timeweb_db_health")
+def timeweb_db_health():
+    """Loopback-only read-only PG18/schema readiness; never expose user data."""
+    from flask import request
+    if request.remote_addr not in ("127.0.0.1", "::1"):
+        return "not found", 404
+    try:
+        from main import db
+        with db() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            ok = conn.execute("""
+                SELECT (current_setting('server_version_num')::int / 10000 = 18)
+                  AND to_regclass('public.profiles') IS NOT NULL
+                  AND to_regclass('public.workouts') IS NOT NULL
+                  AND to_regclass('public.training_cycles') IS NOT NULL
+                  AND to_regclass('public.scheduled_sessions') IS NOT NULL
+            """).fetchone()[0]
+        if not ok:
+            return "database not ready", 503
+        return "DATABASE_READY\n", 200, {"Cache-Control": "no-store"}
+    except Exception:
+        # Never disclose DSN, credentials, SQL error details or data.
+        return "database unavailable", 503
