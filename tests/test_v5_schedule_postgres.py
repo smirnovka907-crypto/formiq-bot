@@ -251,6 +251,46 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.food_add_text(self.chat,{**request,'request_id':'invalid id'})
 
+    def test_tz5_last_item_delete_never_erases_raw_food_history(self):
+        self.m.save_onboarding(self.chat,self.body())
+        raw='курица 150 г, стакан молока'
+        saved=self.m.food_add_text(self.chat,{
+            'date':'2026-10-18','meal_type':'lunch','text':raw})
+        iid=saved['meals'][0]['items'][0]['id']
+        self.m.food_change(self.chat,{'id':iid},delete=True)
+        restored=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(restored['unparsed_texts'][0]['text'],raw)
+        self.assertEqual(restored['unparsed_texts'][0]['unresolved_fragments'],
+                         ['стакан молока'])
+        self.assertFalse(self.m.food_day_totals(self.chat,
+            {'date':'2026-10-18'})['complete'])
+        self.assertIn('2026-10-18',self.m.mini_history_month(
+            self.chat,{'month':'2026-10'})['food_dates'])
+        self.assertNotIn('2026-10-18',self.m.mini_history_month(
+            self.chat+1,{'month':'2026-10'})['food_dates'])
+
+    def test_tz5_homemade_mixed_meal_needs_ingredient_review(self):
+        self.m.save_onboarding(self.chat,self.body())
+        parsed=self.m.food_parse({'text':'плов 250 г, суп 300 г, рис сухой 80 г'})
+        self.assertEqual(parsed['items'],[{'name':'рис сухой','grams':80.0}])
+        self.assertEqual(len(parsed['unparsed']),2)
+        raw='плов 250 г'
+        saved=self.m.food_add_text(self.chat,{
+            'date':'2026-10-18','meal_type':'dinner','text':raw})
+        self.assertEqual(saved['meals'][0]['items'],[])
+        self.assertEqual(saved['unparsed_texts'][0]['text'],raw)
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(totals['unresolved_items'],1)
+        self.assertFalse(totals['complete'])
+        self.assertIn('2026-10-18',self.m.mini_history_month(
+            self.chat,{'month':'2026-10'})['food_dates'])
+
+    def test_tz5_natural_meal_mixed_leading_grams(self):
+        parsed=self.m.food_parse({'text':'я съел 150 г риса и 200 г курицы'})
+        self.assertEqual(parsed['items'],[
+            {'name':'риса','grams':150.0},{'name':'курицы','grams':200.0}])
+        self.assertFalse(parsed['unparsed'])
+
     def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
         self.m.save_onboarding(self.chat,self.body())
         raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
