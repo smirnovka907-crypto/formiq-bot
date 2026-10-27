@@ -87,3 +87,4 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/FORMIQ_Backup_Windows.ps1
           if ($LASTEXITCODE -ne 2) { throw 'Windows launcher did not refuse inherited database credentials' }
           Write-Host 'WINDOWS_LAUNCHER_FAIL_CLOSED; no production connections'
+          exit 0 # expected child error code 2 was the successful negative test
