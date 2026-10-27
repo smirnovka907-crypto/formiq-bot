@@ -3976,6 +3976,48 @@ def food_parse(body):
     return {'items':recognized,'unparsed':manual,'nutrition_source':'not_available'}
 
 
+
+def food_parse_ai(chat, text):
+    """Optional Yandex text recognition, never an authority on food nutrients.
+
+    Validate model rows against the source text; discard unsupported claims.
+    """
+    if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
+        return None
+    system=('Extract only explicitly stated foods and their gram weights from the text. '
+            'Keep raw/cooked qualifiers. Never infer grams from pieces, cups, or portions. '
+            'Do not estimate calories or nutrients. Reply only JSON '
+            '{"items":[{"name":"original food phrase","grams":100}]}. '
+            'No more than 30 entries. Preserve names and gram weights exactly.')
+    request_body={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
+        'completionOptions':{'stream':False,'temperature':0,'maxTokens':'900'},
+        'messages':[{'role':'system','text':system},{'role':'user','text':text}]}
+    try:
+        req=urllib.request.Request(AI_URL,
+            data=json.dumps(request_body,ensure_ascii=False).encode('utf-8'),
+            headers={'Authorization':'Api-Key '+YANDEX_KEY,
+                     'Content-Type':'application/json'},method='POST')
+        with urllib.request.urlopen(req,timeout=12) as response:
+            reply=json.load(response)
+        response_text=reply['result']['alternatives'][0]['message']['text']
+        obj=json.loads(response_text[response_text.index('{'):response_text.rindex('}')+1])
+        rows=obj.get('items')
+        if not isinstance(rows,list) or len(rows)>30:
+            return None
+        # The deterministic parser is authoritative for every explicit amount.
+        # AI is currently advisory only: it cannot silently alter source grams.
+        baseline=food_parse({'text':text})
+        trusted={(row['name'].casefold(),row['grams']) for row in baseline['items']}
+        if any(not isinstance(row,dict) or set(row)!={'name','grams'} or
+               not isinstance(row['name'],str) or
+               (row['name'].casefold(),row['grams']) not in trusted for row in rows):
+            return None
+        return baseline
+    except (ValueError,TypeError,KeyError,IndexError,urllib.error.HTTPError,
+            urllib.error.URLError,TimeoutError,json.JSONDecodeError):
+        return None
+
+
 def food_history(chat,body):
     day=food_day(body.get('date'))
     with db() as conn:
@@ -4059,7 +4101,7 @@ def food_add_text(chat,body):
     if meal_type not in ('breakfast','lunch','dinner','snack'):
         raise ValueError('Выбери приём пищи')
     raw_text=body.get('text')
-    parsed=food_parse({'text':raw_text})
+    parsed=food_parse_ai(chat,raw_text) or food_parse({'text':raw_text})
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
         existing=conn.execute("""SELECT id FROM manual_food_meals
