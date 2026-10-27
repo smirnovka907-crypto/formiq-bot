@@ -484,6 +484,10 @@ def init_db():
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
         c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS raw_input_text TEXT")
         c.execute("ALTER TABLE manual_food_meals ADD COLUMN IF NOT EXISTS unresolved_fragments JSONB NOT NULL DEFAULT '[]'::jsonb")
+        c.execute("""CREATE TABLE IF NOT EXISTS food_save_requests (
+            chat_id BIGINT NOT NULL, request_id TEXT NOT NULL,
+            meal_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY(chat_id,request_id))""")
         c.execute("""CREATE INDEX IF NOT EXISTS manual_food_meals_owner_date
             ON manual_food_meals(chat_id,eaten_on,id)""")
         c.execute("""CREATE TABLE IF NOT EXISTS manual_food_items (
@@ -4104,8 +4108,19 @@ def food_add_text(chat,body):
     raw_text=body.get('text')
     parsed=food_parse_ai(chat,raw_text) or food_parse({'text':raw_text})
     unresolved=[str(row['text']) for row in parsed['unparsed']]
+    request_id=body.get('request_id')
+    if request_id is not None and (
+            not isinstance(request_id,str) or
+            not re.fullmatch(r'[a-zA-Z0-9_-]{12,80}',request_id)):
+        raise ValueError('Некорректный идентификатор сохранения')
+    replay=False
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        replay=bool(request_id and conn.execute(
+            """SELECT 1 FROM food_save_requests WHERE chat_id=%s AND request_id=%s""",
+            (chat,request_id)).fetchone())
+        if replay:
+            return food_history(chat,{'date':day.isoformat()})
         existing=conn.execute("""SELECT id FROM manual_food_meals
             WHERE chat_id=%s AND eaten_on=%s AND meal_type=%s
             ORDER BY id LIMIT 1""",(chat,day,meal_type)).fetchone()
@@ -4126,6 +4141,9 @@ def food_add_text(chat,body):
             item_id=conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
                 VALUES(%s,%s,%s,%s) RETURNING id""",(meal_id,chat,name,grams)).fetchone()[0]
             inserted.append((item_id,name))
+        if request_id:
+            conn.execute("""INSERT INTO food_save_requests(chat_id,request_id,meal_id)
+                VALUES(%s,%s,%s)""",(chat,request_id,meal_id))
     linked=food_auto_link_recent(chat,inserted)
     result=food_history(chat,{'date':day.isoformat()})
     result['unparsed']=parsed['unparsed']
