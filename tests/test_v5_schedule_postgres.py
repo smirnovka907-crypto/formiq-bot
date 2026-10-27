@@ -1560,6 +1560,173 @@ class SchedulePostgresTests(unittest.TestCase):
                     for table in ('workouts', 'workout_items', 'workout_sets',
                                   'cardio_sessions', 'pending_inputs', 'rest_timers')}
 
+    def test_tz5_legacy_bot_finish_skip_never_delete_real_sets(self):
+        with self.connect() as conn:
+            empty=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'A') RETURNING id""",(self.chat,)).fetchone()[0]
+            cancelled=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'B') RETURNING id""",(self.chat,)).fetchone()[0]
+            partial=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'C') RETURNING id""",(self.chat,)).fetchone()[0]
+            for wid in (cancelled,partial):
+                conn.execute("""INSERT INTO workout_items(
+                    workout_id,position,exercise,target)
+                    VALUES(%s,1,'Приседания','2 по 8')""",(wid,))
+                for no in (1,2):
+                    state='done' if wid==partial and no==1 else 'pending'
+                    conn.execute("""INSERT INTO workout_sets(
+                        workout_id,position,set_no,target_min,target_max,unit,
+                        state,actual_value)
+                        VALUES(%s,1,%s,8,12,'reps',%s,%s)""",
+                        (wid,no,state,8 if state=='done' else None))
+        with patch.object(self.m,'send') as send:
+            self.m.finish_workout(self.chat,empty)
+            self.m.finish_workout(self.chat,empty)
+            self.m.cancel_workout(self.chat+1,cancelled)
+            self.m.cancel_workout(self.chat,cancelled)
+            self.m.finish_workout(self.chat,partial)
+        self.assertTrue(send.called)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT id,status,finished_at FROM workouts
+                WHERE id IN (%s,%s,%s) ORDER BY id""",
+                (empty,cancelled,partial)).fetchall()
+            self.assertEqual([row[1] for row in rows],
+                             ['finished_empty','skipped','finished'])
+            self.assertTrue(all(row[2] is not None for row in rows))
+            saved=conn.execute("""SELECT s.workout_id,s.set_no,s.state
+                FROM workout_sets s WHERE s.workout_id IN (%s,%s)
+                ORDER BY s.workout_id,s.set_no""",(cancelled,partial)).fetchall()
+            self.assertEqual(len(saved),4)
+            self.assertEqual([row[2] for row in saved],
+                             ['skipped','skipped','done','skipped'])
+            item=conn.execute("""SELECT done,skipped FROM workout_items
+                WHERE workout_id=%s AND position=1""",(partial,)).fetchone()
+            self.assertEqual(item,(False,False),
+                'One completed set must never be marked wholly skipped')
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM workout_items
+                WHERE workout_id IN (%s,%s)""",
+                (cancelled,partial)).fetchone()[0],2)
+
+    def test_tz5_zero_set_finish_skip_and_partial_progress_persist(self):
+        self.m.save_onboarding(self.chat,self.body())
+        for completed, action, expected in [
+            (False,'finish','finished_empty'),
+            (False,'skip_workout','skipped'),
+            (True,'skip_workout','finished'),
+            (False,'cancel','skipped'),
+            (True,'cancel','finished'),
+        ]:
+            with self.connect() as conn:
+                wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                    VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+                conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                    VALUES(%s,0,'Приседание','10')""",(wid,))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit,state,actual_value)
+                    VALUES(%s,0,1,8,12,'reps',%s,%s)""",
+                    (wid,'done' if completed else 'pending',10 if completed else None))
+                conn.execute("""INSERT INTO workout_sets
+                    (workout_id,position,set_no,target_min,target_max,unit)
+                    VALUES(%s,0,2,8,12,'reps')""",(wid,))
+            self.assertTrue(self.m.mini_write(self.chat,action,{}))
+            with self.connect() as conn:
+                result=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()
+                states=conn.execute("""SELECT state FROM workout_sets WHERE workout_id=%s
+                    ORDER BY set_no""",(wid,)).fetchall()
+            self.assertEqual(result[0],expected)
+            self.assertEqual([row[0] for row in states],
+                             ['done' if completed else 'skipped','skipped'])
+            with self.connect() as conn:
+                self.assertIsNone(self.m.mini_current(conn,self.chat))
+            history=self.m.mini_history_page(self.chat,{'limit':30})
+            self.assertTrue(any(row['id']==wid for row in history['history']))
+            detail=self.m.mini_history_detail(self.chat,wid)
+            self.assertEqual(detail['status'],expected)
+            with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
+                self.m.mini_write(self.chat,action,{})
+
+    def test_tz5_closure_retry_guard_and_owner_identity(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as c:
+            old=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+                                          {'expected_workout':old}))
+        with self.connect() as c:
+            fresh=c.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'B','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        with self.assertRaisesRegex(ValueError,'Тренировка изменилась'):
+            self.m.mini_write(self.chat,'skip_workout',
+                              {'expected_workout':old})
+        with self.assertRaisesRegex(ValueError,'Сначала прими условия использования'):
+            self.m.mini_write(self.chat+1,'finish',
+                              {'expected_workout':old})
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'active')
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',
+                                          {'expected_workout':fresh}))
+        with self.connect() as c:
+            self.assertEqual(c.execute("SELECT status FROM workouts WHERE id=%s",
+                                       (fresh,)).fetchone()[0],'skipped')
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM workouts WHERE chat_id=%s",
+                                       (self.chat,)).fetchone()[0],2)
+
+    def test_tz5_legacy_completed_item_without_sets_is_not_empty(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target,done)
+                VALUES(%s,0,'Приседание','10',TRUE)""",(wid,))
+        self.assertTrue(self.m.mini_write(self.chat,'finish',{}))
+        with self.connect() as conn:
+            status=conn.execute("SELECT status FROM workouts WHERE id=%s",(wid,)).fetchone()[0]
+        self.assertEqual(status,'finished')
+
+    def test_tz5_skipped_visible_in_progress_history_and_calendar(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+        self.assertTrue(self.m.mini_write(self.chat,'cancel',{}))
+        state=self.m.mini_state(self.chat)
+        self.assertTrue(any(row['id']==wid and row['type']=='workout_skipped'
+            for row in state['history']))
+        with self.connect() as conn:
+            month=conn.execute("SELECT to_char(started_at,'YYYY-MM') FROM workouts WHERE id=%s",
+                (wid,)).fetchone()[0]
+        marks=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertTrue(marks['dates'])
+
+    def test_tz5_skip_scheduled_slot_advances_without_marking_done(self):
+        p,cycle,calendar=self.save()
+        first,second=calendar[:2]
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts
+                (chat_id,plan_day,cycle_id,week_no,source,status)
+                VALUES(%s,%s,%s,%s,'template','active') RETURNING id""",
+                (self.chat,first['day'],cycle,first['week'])).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,target)
+                VALUES(%s,0,'Приседание','10')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets
+                (workout_id,position,set_no,target_min,target_max,unit)
+                VALUES(%s,0,1,8,12,'reps')""",(wid,))
+        with self.connect() as conn:
+            self.assertEqual(self.m.planned_next_in(conn,self.chat,cycle,3)[0],first['day'])
+        self.assertTrue(self.m.mini_write(self.chat,'skip_workout',{}))
+        with self.connect() as conn:
+            next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
+        self.assertEqual(next_slot[0],second['day'])
+        self.assertEqual(next_slot[1],second['week'])
+        refreshed=self.m.scheduled_calendar(self.chat,p,cycle)
+        self.assertEqual(refreshed[0]['status'],'skipped')
+        self.assertNotEqual(refreshed[1]['status'],'done')
+
     def test_active_workout_overview_uses_saved_set_rows(self):
         rows = [(0, 1, 8, 12, 'reps', 'done', 'Жим ногами', 'leg_press'),
                 (0, 2, 8, 12, 'reps', 'pending', 'Жим ногами', 'leg_press'),
