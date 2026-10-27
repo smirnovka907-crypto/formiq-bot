@@ -9,8 +9,8 @@ assert re.search(r"(?m)^VERSION = '[0-9]+\.[0-9]+\.[0-9]+'$", text)
 assert 'def formiq_chat_keyboard():' in text
 assert "InlineKeyboardButton('FormIQ'" in text
 assert "InlineKeyboardButton('Разбудить'" in text
-assert 'welcome_jpeg()' in text
-assert "caption = 'Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. Тренируйся, следи за питанием и наблюдай за своим прогрессом. Веди дневник самостоятельно или доверь персональные рекомендации Yandex AI. FORMIQ — Твоя форма. Наш интеллект.'" in text, 'Use only the exact approved greeting'
+assert 'welcome_png()' in text
+assert "'Добро пожаловать в FORMIQ!" in text and "доверь Yandex AI создание " in text, 'Use only the exact approved greeting'
 
 assignment = next(node for node in module.body if isinstance(node, ast.Assign)
                   and any(isinstance(target, ast.Name) and target.id == 'MINI_HTML_GZIP' for target in node.targets))

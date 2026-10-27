@@ -74,10 +74,10 @@ WORKERS = ThreadPoolExecutor(max_workers=1)
 ADMIN_ID = int(os.getenv('FORMIQ_ADMIN_ID', '0') or '0')
 PREMIUM_ENFORCED = os.getenv('FORMIQ_PREMIUM_ENFORCED', '0') == '1'
 TRIAL_DAYS = 14
-START_PRICE_RUB = 100
-COMFORT_PRICE_RUB = 100
+START_PRICE_RUB = 0
+COMFORT_PRICE_RUB = 0
 MAX_PRICE_RUB = 1000
-MONTH_PRICES_RUB = {'start':100,'comfort':100,'max':1000}
+MONTH_PRICES_RUB = {'start':0,'comfort':0,'max':1000}
 YANDEX_VISION_MODEL = os.getenv('YANDEX_VISION_MODEL','qwen3.6-35b-a3b').strip()
 AI_DAILY_LIMIT = 10
 FEEDBACK_SHEETS_WEBHOOK = os.getenv('FORMIQ_FEEDBACK_SHEETS_WEBHOOK', '').strip()
@@ -454,6 +454,15 @@ def init_db():
             weight_kg NUMERIC(6,2), resting_hr INT, sex TEXT,
             timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
             updated_at TIMESTAMPTZ DEFAULT NOW())""")
+        # New fields are additive: never manufacture birthdays for legacy ages.
+        c.execute("ALTER TABLE profile_metrics ADD COLUMN IF NOT EXISTS birth_date DATE")
+        c.execute("""ALTER TABLE profile_metrics ADD COLUMN IF NOT EXISTS
+            birthday_telegram_consent BOOLEAN NOT NULL DEFAULT FALSE""")
+        c.execute("""CREATE TABLE IF NOT EXISTS birthday_greetings(
+            chat_id BIGINT NOT NULL, birthday_year INT NOT NULL,
+            shown_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            telegram_claimed_at TIMESTAMPTZ, telegram_sent_at TIMESTAMPTZ,
+            PRIMARY KEY(chat_id,birthday_year))""")
         c.execute("""CREATE TABLE IF NOT EXISTS scheduled_sessions(
             id BIGSERIAL PRIMARY KEY,chat_id BIGINT NOT NULL,
             cycle_id BIGINT NOT NULL,week_no INT NOT NULL,
@@ -488,6 +497,10 @@ def init_db():
         # values and names returned by the provider are not persisted.
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_food_id TEXT')
         c.execute('ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS source_serving_id TEXT')
+        # Only explicitly user-supplied nutrient values may be persisted.
+        # FatSecret provider nutrient contents remain transient/licence-bound.
+        for field in ('kcal','protein_g','fat_g','carbs_g'):
+            c.execute(f'ALTER TABLE manual_food_items ADD COLUMN IF NOT EXISTS manual_{field}_100g NUMERIC(8,2)')
         # Official Garmin Business API: zero connected accounts until its
         # approved OAuth2 user mapping and consent have actually succeeded.
         # Tokens deliberately do not exist in this schema.
@@ -890,11 +903,10 @@ def sync_feedback_pending():
 def premium_screen(chat, mid=None):
     status, expiry = premium_state(chat)
     msg = ('Тарифы FORMIQ · тестовый режим\n'
-        f'Старт — 700 ₽/мес. или {START_PRICE_RUB} ₽/мес. на 3 месяца\n'
-        f'Свой план — 1 300 ₽/мес. или {COMFORT_PRICE_RUB} ₽/мес. на 3 месяца\n'
-        f'Тренер — 1 900 ₽/мес. или {MAX_PRICE_RUB} ₽/мес. на 3 месяца\n'
-        '14 дней пробного доступа · 10 запросов Yandex AI/сутки.\n'
-        'Оплата пока не подключена.')
+           'Дневник — бесплатно, навсегда.\n'
+           f'Тренер AI — {MAX_PRICE_RUB} ₽/месяц.\n'
+           'AI-доступ: первые 14 дней, затем автоматически бесплатный Дневник.\n'
+           'Данные и история сохраняются. Оплата пока не подключена.')
     if expiry:msg += f'\nПробный период до {expiry:%d.%m.%Y}'
     send(chat,msg,[('🏋️ Приложение','mini'),('🏠 Меню','menu')],mid)
 
@@ -1057,11 +1069,17 @@ def home(chat, mid=None, welcome_image=False):
         LOG.exception('Failed to remove old Mini App menu button for chat')
     markup = formiq_chat_keyboard()
     # Exact owner-approved welcome copy; keep it identical for photo and text fallback.
-    caption = 'Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. Тренируйся, следи за питанием и наблюдай за своим прогрессом. Веди дневник самостоятельно или доверь персональные рекомендации Yandex AI. FORMIQ — Твоя форма. Наш интеллект.'
+    caption = (
+        'Добро пожаловать в FORMIQ!\n\n'
+        'Твоя форма заслуживает умного подхода.\n\n'
+        'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\n\n'
+        'Веди дневник самостоятельно или доверь Yandex AI создание '
+        'персонального плана, анализ результатов и адаптацию тренировок.'
+    )
     if welcome_image:
-        from welcome_art import welcome_jpeg
-        picture = BytesIO(welcome_jpeg())
-        picture.name = 'formiq-welcome.jpg'
+        from welcome_art import welcome_png
+        picture = BytesIO(welcome_png())
+        picture.name = 'formiq-welcome.png'
         try:
             return BOT.send_photo(chat, picture, caption=caption, parse_mode='HTML',
                                   reply_markup=markup)
@@ -2982,23 +3000,26 @@ def onboarding_number(raw,name,low,high,required=True,whole=False):
 
 
 def validate_health(raw):
-    if not isinstance(raw,dict):raise ValueError('Заполни раздел об ограничениях')
-    limits=raw.get('affected')
+    # Health text is optional; retain server-side movement and danger safeguards.
+    if raw is None:raw={}
+    if not isinstance(raw,dict):raise ValueError('Некорректные данные здоровья')
+    limits=raw.get('affected',[])
     if not isinstance(limits,list) or len(limits)>len(LIMIT_LABELS) or \
        any(type(x) is not str or x not in LIMIT_LABELS for x in limits) or len(limits)!=len(set(limits)):
         raise ValueError('Выбери ограничения из списка')
-    score=onboarding_number(raw.get('pain_score'), 'интенсивность боли',0,10,whole=True)
-    course=raw.get('symptom_course')
+    score=onboarding_number(raw.get('pain_score',0), 'интенсивность боли',0,10,whole=True)
+    course=raw.get('symptom_course') or ('unspecified' if limits else 'none')
     if course not in ('none','stable','recent','worsening','unspecified'):
         raise ValueError('Проверь описание ограничений')
-    danger=raw.get('danger_signs')
-    cleared=raw.get('activity_cleared')
+    danger=raw.get('danger_signs',False)
+    cleared=raw.get('activity_cleared',False)
     if type(danger) is not bool or type(cleared) is not bool:
         raise ValueError('Подтверди ответы о безопасности нагрузки')
     if not limits and score:
         raise ValueError('Если есть боль, отметь область, которая беспокоит')
     if limits and course=='none':
-        raise ValueError('Укажи характер симптомов или выбери отсутствие ограничений')
+        # The obsolete symptom questionnaire is no longer required for saving.
+        course='unspecified'
     if not limits:
         course='none'
     return {'affected':limits,'pain_score':score,'symptom_course':course,
@@ -3122,6 +3143,27 @@ def analyze_equipment_description(chat,body):
         raise ValueError('Не получилось разобрать список. Проверь описание и попробуй ещё раз')
 
 
+def _birthday_civil_date(birth, year):
+    """29 February is celebrated on 28 February in non-leap years."""
+    leap=year%4==0 and (year%100!=0 or year%400==0)
+    return (2,28) if birth.month==2 and birth.day==29 and not leap else (birth.month,birth.day)
+
+
+def years_old(birth, today):
+    return today.year-birth.year-(_birthday_civil_date(birth,today.year)>(today.month,today.day))
+
+
+def parse_birth_date(raw, today):
+    if not isinstance(raw,str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',raw):
+        raise ValueError('Укажи полную дату рождения')
+    try:born=date.fromisoformat(raw)
+    except ValueError:raise ValueError('Проверь дату рождения')
+    age=years_old(born,today)
+    if not 18<=age<=100:
+        raise ValueError('FORMIQ доступен с 18 лет; проверь дату рождения')
+    return born,age
+
+
 def save_onboarding(chat,body):
     require_schedule_writes_enabled()
     vals=body.get('answers')
@@ -3152,7 +3194,12 @@ def save_onboarding(chat,body):
         if vals.get(field) not in choices:raise ValueError('Проверь анкету: '+field)
     raw=body.get('metrics')
     if not isinstance(raw,dict):raise ValueError('Заполни показатели')
-    age=onboarding_number(raw.get('age'),'возраст',18,100,whole=True)
+    birth_raw=raw.get('birth_date')
+    birth_date,age=(parse_birth_date(birth_raw,datetime.now(ZoneInfo(user_tz)).date())
+        if birth_raw is not None else (None,onboarding_number(raw.get('age'),'возраст',18,100,whole=True)))
+    birthday_optin=body.get('birthday_telegram_consent')
+    if birthday_optin is not None and type(birthday_optin) is not bool:
+        raise ValueError('Проверь согласие на поздравление в Telegram')
     height=onboarding_number(raw.get('height_cm'),'рост',100,240)
     weight=onboarding_number(raw.get('weight_kg'),'вес',25,300)
     hr=onboarding_number(raw.get('resting_hr'),'пульс в покое',35,120,required=False,whole=True)
@@ -3208,13 +3255,17 @@ def save_onboarding(chat,body):
             VALUES(%s,%s,NOW(),NOW(),NOW()) ON CONFLICT(chat_id) DO UPDATE SET
             version=EXCLUDED.version,terms_accepted_at=NOW(),privacy_ack_at=NOW(),
             health_notice_ack_at=NOW()''',(chat,AGREEMENT_VERSION))
-        c.execute('''INSERT INTO profile_metrics(chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone)
-            VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
+        c.execute('''INSERT INTO profile_metrics(
+            chat_id,age,height_cm,weight_kg,resting_hr,sex,timezone,birth_date,birthday_telegram_consent)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(chat_id) DO UPDATE SET
             age=EXCLUDED.age,height_cm=EXCLUDED.height_cm,weight_kg=EXCLUDED.weight_kg,
             resting_hr=COALESCE(EXCLUDED.resting_hr,profile_metrics.resting_hr),
-            sex=EXCLUDED.sex,
-            timezone=EXCLUDED.timezone,updated_at=NOW()''',
-            (chat,age,height,weight,hr,sex,user_tz))
+            sex=EXCLUDED.sex,timezone=EXCLUDED.timezone,
+            birth_date=COALESCE(EXCLUDED.birth_date,profile_metrics.birth_date),
+            birthday_telegram_consent=CASE WHEN %s THEN EXCLUDED.birthday_telegram_consent
+                 ELSE profile_metrics.birthday_telegram_consent END,updated_at=NOW()''',
+            (chat,age,height,weight,hr,sex,user_tz,birth_date,
+             birthday_optin is True,birthday_optin is not None))
         c.execute('''INSERT INTO health_limits(chat_id,affected,pain_score,symptom_course,
             danger_signs,activity_cleared) VALUES(%s,%s::jsonb,%s,%s,%s,%s)
             ON CONFLICT(chat_id) DO UPDATE SET affected=EXCLUDED.affected,
@@ -3287,9 +3338,10 @@ DOC_TERMS = """<h1>Пользовательское соглашение FORMIQ<
 
 DOC_PRIVACY = """<h1>Политика конфиденциальности FORMIQ</h1>
 <p><b>Редакция 25.10.2026 · закрытое тестирование.</b></p>
-<p>Для работы персонального кабинета FORMIQ обрабатывает Telegram-идентификатор для авторизации, возраст, пол, рост, массу тела, часовой пояс IANA, цели, выбранные дни тренировок, длительность и место занятий, имеющийся инвентарь, выполненные подходы, веса, историю, дополнительную активность и рассчитанные по MET ориентировочные энергозатраты. Необязательное описание ограничений здоровья сохраняется после принятия политики конфиденциальности и заполнения анкеты; для женского профиля доступен необязательный приватный менструальный календарь с ручным вводом и осторожным прогнозом.</p>
+<p>Для работы персонального кабинета FORMIQ обрабатывает Telegram-идентификатор для авторизации, указанную дату рождения (если она предоставлена) и автоматически вычисляемый возраст, пол, рост, массу тела, часовой пояс IANA, цели, выбранные дни тренировок, длительность и место занятий, имеющийся инвентарь, выполненные подходы, веса, историю, дополнительную активность и рассчитанные по MET ориентировочные энергозатраты. Необязательное описание ограничений здоровья сохраняется после принятия политики конфиденциальности и заполнения анкеты; для женского профиля доступен необязательный приватный менструальный календарь с ручным вводом и осторожным прогнозом.</p>
 <p>История и профиль хранятся в PostgreSQL на Render и доступны через проверку подписанной авторизации Telegram и привязку к владельцу записи. Данные календаря не открываются другим пользователям. Технические журналы и обращения об ошибках могут обрабатываться для обеспечения работы сервиса. Отзывы и предложения сохраняются для рассмотрения разработчиком; обезличенные тексты пожеланий могут отправляться в рабочую таблицу при включённой технической синхронизации.</p>
 <p>По умолчанию персональные данные не передаются в Yandex AI для персонализации. Передача при отдельном добровольном согласии, объём, отзыв согласия, ограничения здоровья и сведения цикла подробно изложены в документе <a href="/mini/yandex-privacy">«Конфиденциальность Yandex AI»</a>. Разовая отправка выбранного отчёта питания требует отдельного действия и подтверждения именно для файла. Исходный файл отчёта не сохраняется как часть дневника FORMIQ.</p>
+<p>Дата рождения хранится как отдельный закрытый показатель: старый возраст без даты не преобразуется в вымышленный день рождения. Для поздравления и разового информационного предложения «Тренер AI» (скидка 10% на один период) используется календарная дата в сохранённом часовом поясе; в невисокосные годы 29 февраля отмечается 28 февраля. Сообщение в Telegram отправляется только после отдельного добровольного согласия, которое можно отозвать в профиле. Повторного поздравления за один календарный год не создаётся. Дата рождения не передаётся в Yandex AI. Оплата и активация скидки до подключения платёжной системы недоступны.</p>
 <p>Часовой пояс определяется автоматически по настройкам устройства при сохранении анкеты; геолокация не запрашивается. Реальные отчёты умных весов (например, Fitdays) пользователь загружает добровольно: после просмотра измерений выбранные записи сохраняются в PostgreSQL, исходный файл не хранится и в Yandex AI не передаётся. Удаление или исправление профиля и данных проводится через предусмотренные функции сервиса; наличие отдельных записей у внешних провайдеров и ограничения их обработки регулируются политиками этих провайдеров. Обработка может продолжаться в пределах обязательных требований законодательства.</p>
 <p>До открытого запуска должны быть опубликованы установленные сведения об операторе персональных данных и контакты, сроки хранения, основания обработки, трансграничные передачи при их наличии, порядок запросов на доступ, исправление и удаление, а также юридически проверенные гарантии. Этот документ не объявляет полного соответствия закону без такой проверки.</p>"""
 
@@ -3554,6 +3606,35 @@ def fatsecret_user_status(chat):
         'last_sync_at':link[1].isoformat() if link and link[1] else None}
 
 
+def integrations_status(chat):
+    """Private, read-only integration state. Do not expose IDs or OAuth secrets.
+
+    Garmin integration receives data only after a provider-authorized identity;
+    there is no public user OAuth entry point to offer for Garmin yet.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    with db() as conn:
+        fs=conn.execute("""SELECT last_sync_at
+            FROM fatsecret_user_connections WHERE chat_id=%s""",(chat,)).fetchone()
+        garmin=conn.execute("""SELECT last_sync_at
+            FROM garmin_authorized_identities
+            WHERE chat_id=%s AND health_consent_at IS NOT NULL
+                AND disconnected_at IS NULL""",(chat,)).fetchone()
+    return {
+        'fatsecret':{
+            'available':fatsecret_user_oauth_ready(),
+            'connected':fs is not None,
+            'last_sync_at':fs[0].isoformat() if fs and fs[0] else None,
+        },
+        'garmin':{
+            'available':False,  # Official OAuth onboarding is not configured.
+            'connected':garmin is not None,
+            'last_sync_at':garmin[0].isoformat() if garmin and garmin[0] else None,
+        },
+    }
+
+
 def fatsecret_user_start(chat):
     """One explicit opt-in per owner; never take a FatSecret password."""
     if not has_agreement(chat):
@@ -3736,6 +3817,14 @@ def fatsecret_user_import(chat,body):
     if len(ids)>150 or any(not isinstance(i,str) or
          not i.isdecimal() or len(i)>40 for i in ids):
         raise ValueError('FatSecret вернул недопустимый идентификатор записи')
+    expected=body.get('expected_ids')
+    if expected is not None:
+        if (not isinstance(expected,list) or len(expected)>150 or
+            any(not isinstance(i,str) or not i.isdecimal() or len(i)>40
+                for i in expected)):
+            raise ValueError('Некорректный предварительный просмотр FatSecret')
+        if sorted(set(expected)) != sorted(set(ids)):
+            raise ValueError('Отчёт FatSecret изменился после просмотра. Обнови данные перед импортом')
     with db() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
         valid=conn.execute("""SELECT 1 FROM fatsecret_user_connections
@@ -3822,6 +3911,31 @@ def food_item(name,grams):
     return name,amount
 
 
+FOOD_MANUAL_KEYS = ('kcal','protein_g','fat_g','carbs_g')
+
+
+def food_user_nutrition(raw):
+    """Explicit owner-entered values per 100 g, never derived from AI or name."""
+    if raw is None:
+        return None
+    if not isinstance(raw,dict) or set(raw)!=set(FOOD_MANUAL_KEYS):
+        raise ValueError('Укажи все четыре значения КБЖУ на 100 г или оставь пустыми')
+    values=[]
+    for key in FOOD_MANUAL_KEYS:
+        value=raw[key]
+        if type(value) is bool or value is None or value=='':
+            raise ValueError('Укажи все четыре значения КБЖУ на 100 г')
+        try:
+            n=Decimal(str(value).strip().replace(',','.'))
+        except (TypeError,ValueError,InvalidOperation):
+            raise ValueError('КБЖУ на 100 г должны быть числами') from None
+        limit=Decimal('1000') if key=='kcal' else Decimal('100')
+        if not n.is_finite() or n<0 or n>limit or n.as_tuple().exponent < -2:
+            raise ValueError('Проверь значения КБЖУ на 100 г (0–1000 ккал, БЖУ 0–100 г)')
+        values.append(n)
+    return tuple(values)
+
+
 def food_parse(body):
     text=body.get('text')
     if not isinstance(text,str) or not 2<=len(text.strip())<=2000:
@@ -3857,7 +3971,8 @@ def food_history(chat,body):
     day=food_day(body.get('date'))
     with db() as conn:
         rows=conn.execute("""SELECT m.id,m.meal_type,i.id,i.name,i.grams,
-                i.source_food_id,i.source_serving_id
+                i.source_food_id,i.source_serving_id,
+                i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
             FROM manual_food_meals m LEFT JOIN manual_food_items i
               ON i.meal_id=m.id AND i.chat_id=%s
             WHERE m.chat_id=%s AND m.eaten_on=%s
@@ -3865,14 +3980,19 @@ def food_history(chat,body):
     # Older releases allowed multiple rows for the same meal/day. Combine
     # their visible cards without rewriting, merging or deleting any history.
     meals={}
-    for mid,meal_type,iid,name,grams,food_id,serving_id in rows:
+    for mid,meal_type,iid,name,grams,food_id,serving_id,*manual in rows:
         entry=meals.setdefault(meal_type,{'id':mid,'type':meal_type,'items':[]})
         if iid is not None:
+            user_values=(dict(zip(FOOD_MANUAL_KEYS,(float(v) for v in manual)))
+                         if all(v is not None for v in manual) else None)
             entry['items'].append({'id':iid,'name':name,'grams':float(grams),
                 'kcal':None,'protein':None,'fat':None,'carbs':None,
-                'nutrition_source':'fatsecret' if food_id and serving_id else None})
+                'nutrition_100g':user_values,
+                'nutrition_source':'manual' if user_values is not None
+                     else 'fatsecret' if food_id and serving_id else None})
     return {'date':day.isoformat(),'meals':list(meals.values()),
-        'nutrients_available':False}
+        'nutrients_available':any(item['nutrition_source'] for meal in meals.values()
+            for item in meal['items'])}
 
 
 def food_add(chat,body):
@@ -3889,7 +4009,9 @@ def food_add(chat,body):
     for row in raw:
         if not isinstance(row,dict):
             raise ValueError('Некорректная строка продукта')
-        items.append(food_item(row.get('name'),row.get('grams')))
+        name,grams=food_item(row.get('name'),row.get('grams'))
+        values=food_user_nutrition(row.get('nutrition_100g'))
+        items.append((name,grams,values))
     with db() as conn:
         # Transaction-scoped per-user lock prevents two simultaneous saves
         # from creating duplicate meal groups. Existing duplicate rows stay
@@ -3903,9 +4025,12 @@ def food_add(chat,body):
         else:
             meal_id=conn.execute("""INSERT INTO manual_food_meals(chat_id,eaten_on,meal_type)
                 VALUES(%s,%s,%s) RETURNING id""",(chat,day,meal_type)).fetchone()[0]
-        for name,grams in items:
-            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
-                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+        for name,grams,values in items:
+            conn.execute("""INSERT INTO manual_food_items(
+                meal_id,chat_id,name,grams,manual_kcal_100g,
+                manual_protein_g_100g,manual_fat_g_100g,manual_carbs_g_100g)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (meal_id,chat,name,grams,*(values or (None,)*4)))
     return food_history(chat,{'date':day.isoformat()})
 
 
@@ -3915,6 +4040,7 @@ def food_change(chat,body,delete=False):
         raise ValueError('Выбери продукт')
     if not delete:
         name,grams=food_item(body.get('name'),body.get('grams'))
+        manual_input=food_user_nutrition(body['nutrition_100g']) if 'nutrition_100g' in body else 'keep'
     with db() as conn:
         if delete:
             changed=conn.execute("""DELETE FROM manual_food_items i
@@ -3928,15 +4054,28 @@ def food_change(chat,body,delete=False):
                     SELECT 1 FROM manual_food_items i WHERE i.meal_id=m.id)""",
                     (changed[0],chat))
         else:
+            old=conn.execute("""SELECT i.name,i.manual_kcal_100g,
+                i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
+                FROM manual_food_items i JOIN manual_food_meals m ON m.id=i.meal_id
+                WHERE i.id=%s AND i.chat_id=%s AND m.chat_id=%s FOR UPDATE OF i""",
+                (iid,chat,chat)).fetchone()
+            if not old:
+                raise ValueError('Продукт не найден')
+            keep_name=old[0]==name
+            user_values=(tuple(old[1:]) if keep_name else (None,)*4) if manual_input=='keep' else (
+                manual_input if manual_input is not None else (None,)*4)
+            clear_provider=(not keep_name) or (manual_input!='keep' and manual_input is not None)
             changed=conn.execute("""UPDATE manual_food_items i
                 SET name=%s,grams=%s,
-                    source_food_id=CASE WHEN name=%s THEN source_food_id ELSE NULL END,
-                    source_serving_id=CASE WHEN name=%s THEN source_serving_id ELSE NULL END,
+                    manual_kcal_100g=%s,manual_protein_g_100g=%s,
+                    manual_fat_g_100g=%s,manual_carbs_g_100g=%s,
+                    source_food_id=CASE WHEN %s THEN NULL ELSE i.source_food_id END,
+                    source_serving_id=CASE WHEN %s THEN NULL ELSE i.source_serving_id END,
                     updated_at=NOW()
                 FROM manual_food_meals m WHERE i.id=%s AND i.chat_id=%s
                 AND m.id=i.meal_id AND m.chat_id=%s
                 RETURNING m.id,m.eaten_on""",
-                (name,grams,name,name,iid,chat,chat)).fetchone()
+                (name,grams,*user_values,clear_provider,clear_provider,iid,chat,chat)).fetchone()
     if not changed:
         raise ValueError('Продукт не найден')
     return food_history(chat,{'date':changed[1].isoformat()})
@@ -3961,7 +4100,8 @@ def food_day_totals(chat, body):
     day=food_day(body.get('date'))
     with db() as conn:
         records=conn.execute("""SELECT i.id,m.meal_type,i.grams,
-                   i.source_food_id,i.source_serving_id,i.updated_at
+                   i.source_food_id,i.source_serving_id,i.updated_at,
+                   i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
             FROM manual_food_meals m JOIN manual_food_items i
               ON i.meal_id=m.id AND i.chat_id=m.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s
@@ -3969,13 +4109,12 @@ def food_day_totals(chat, body):
     if len(records)>250:
         raise ValueError('За день слишком много продуктов для одного расчёта')
     linked={r[3] for r in records if r[3] and r[4]}
-    if not FATSECRET_CLIENT_ID or not FATSECRET_CLIENT_SECRET:
-        # Do not claim a '0 kcal' total when there is no real provider.
-        raise ValueError('Расчёт КБЖУ недоступен: FatSecret пока не подключён')
+    # User-entered values are independently usable offline. Missing FatSecret
+    # credentials never turn manual macros into "unavailable" or guessed zero.
     if len(linked)>FOOD_DAY_MAX_PROVIDER_IDS:
         raise ValueError('Слишком много разных продуктов FatSecret за день для одного запроса')
     sources={}
-    if linked:
+    if linked and FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET:
         try:
             provider=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
             token=provider.get_token()
@@ -3995,7 +4134,7 @@ def food_day_totals(chat, body):
     subtotal={key:Decimal('0') for key in keys}
     meal_values={}
     items=[]
-    for item_id,meal_type,grams,fid,sid,modified in records:
+    for item_id,meal_type,grams,fid,sid,modified,*manual in records:
         meal=meal_values.setdefault(meal_type,{'type':meal_type,'total_items':0,
                                                'resolved_items':0,
                                                'subtotal':{key:Decimal('0') for key in keys}})
@@ -4003,7 +4142,14 @@ def food_day_totals(chat, body):
         detail=sources.get(fid) if fid and sid else None
         serving=next((p for p in detail['servings'] if p.get('serving_id')==sid),None) if detail else None
         values=None
-        if serving and serving.get('grams') and serving.get('per_serving'):
+        if all(v is not None for v in manual):
+            try:
+                factor=Decimal(str(grams))/Decimal('100')
+                values={key:(Decimal(str(v))*factor).quantize(Decimal('0.01'))
+                        for key,v in zip(keys,manual)}
+            except (InvalidOperation,ValueError,TypeError):
+                values=None
+        if values is None and serving and serving.get('grams') and serving.get('per_serving'):
             try:
                 mass=Decimal(str(serving['grams']))
                 factor=Decimal(str(grams))/mass
@@ -4022,8 +4168,9 @@ def food_day_totals(chat, body):
             for key in keys:
                 subtotal[key]+=values[key]
                 meal['subtotal'][key]+=values[key]
+        user_values=all(v is not None for v in manual)
         items.append({'id':item_id,'meal_type':meal_type,
-            'source':'fatsecret' if values is not None else None,
+            'source':('manual' if user_values else 'fatsecret') if values is not None else None,
             'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
     # If a product changed during an API request, never present a stale number
     # as belonging to its newer grams or provider identity.
@@ -4038,7 +4185,9 @@ def food_day_totals(chat, body):
         if [(r[0],r[2],r[3],r[4],r[5]) for r in records] != current:
             raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
     complete=bool(records) and all(item['nutrition'] is not None for item in items)
-    return {'date':day.isoformat(), 'source':'fatsecret',
+    origins={item['source'] for item in items if item['source']}
+    origin='mixed' if len(origins)>1 else next(iter(origins),None)
+    return {'date':day.isoformat(), 'source':origin,
         'complete':complete,'total_items':len(records),
         'resolved_items':sum(item['nutrition'] is not None for item in items),
         'partial':bool(records) and not complete,
@@ -4143,7 +4292,9 @@ def food_catalog_attach(chat,body):
                for key,value in portion['per_serving'].items()}
     with db() as conn:
         result=conn.execute("""UPDATE manual_food_items SET
-            source_food_id=%s,source_serving_id=%s,updated_at=NOW()
+            source_food_id=%s,source_serving_id=%s,
+            manual_kcal_100g=NULL,manual_protein_g_100g=NULL,
+            manual_fat_g_100g=NULL,manual_carbs_g_100g=NULL,updated_at=NOW()
             WHERE id=%s AND chat_id=%s AND name=%s AND grams=%s RETURNING id""",
             (fid,sid,item_id,chat,old[0],old[1])).fetchone()
         if not result:
@@ -4175,10 +4326,12 @@ def mini_training_preview(chat, body):
         if not slot:
             raise ValueError('Тренировка не найдена')
         sid,cycle,week,day,planned=slot
-        completed=bool(conn.execute("""SELECT 1 FROM workouts WHERE chat_id=%s
+        completed_row=conn.execute("""SELECT id FROM workouts WHERE chat_id=%s
             AND cycle_id=%s AND week_no=%s AND plan_day=%s
-            AND source='template' AND status='finished' LIMIT 1""",
-            (chat,cycle,week,day)).fetchone())
+            AND source='template' AND status='finished'
+            ORDER BY finished_at DESC NULLS LAST,id DESC LIMIT 1""",
+            (chat,cycle,week,day)).fetchone()
+        completed=completed_row is not None
         next_slot=conn.execute("""SELECT s.id FROM scheduled_sessions s
             WHERE s.chat_id=%s AND s.cycle_id=%s
               AND s.schedule_state IS DISTINCT FROM 'retired'
@@ -4188,6 +4341,12 @@ def mini_training_preview(chat, body):
                 AND w.status='finished')
             ORDER BY s.planned_date,s.week_no,s.id LIMIT 1""",
             (chat,cycle,chat)).fetchone()
+    if completed_row:
+        # Saved results, not an empty template. Owner-scoped detail enforces identity.
+        actual=mini_history_detail(chat,completed_row[0])
+        return {'preview':{'id':sid,'week':week,'day':day,
+            'date':planned.isoformat(),'name':actual['title'],
+            'finished':True,'can_start':False,'actual':actual,'exercises':[]}}
     warning=ready(p,chat)
     plan=[]
     if not warning and not completed:
@@ -4250,11 +4409,58 @@ def mini_training_preview(chat, body):
 
 def metrics(chat):
     with db() as conn:
-        row=conn.execute('''SELECT age,height_cm,weight_kg,resting_hr,sex,timezone
+        row=conn.execute('''SELECT age,height_cm,weight_kg,resting_hr,sex,timezone,
+            birth_date,birthday_telegram_consent
             FROM profile_metrics WHERE chat_id=%s''',(chat,)).fetchone()
     if not row:return {}
-    cols=('age','height_cm','weight_kg','resting_hr','sex','timezone')
-    return {name:float(v) if isinstance(v,Decimal) else v for name,v in zip(cols,row)}
+    cols=('age','height_cm','weight_kg','resting_hr','sex','timezone','birth_date',
+          'birthday_telegram_consent')
+    result={name:float(v) if isinstance(v,Decimal) else v for name,v in zip(cols,row)}
+    born=result.get('birth_date')
+    if isinstance(born,date):
+        try:today=datetime.now(ZoneInfo(result.get('timezone') or 'Europe/Moscow')).date()
+        except (ValueError,KeyError,TypeError):today=datetime.now(timezone.utc).date()
+        result['age']=years_old(born,today)
+        result['birth_date']=born.isoformat()
+    return result
+
+def _send_birthday_telegram(chat, year):
+    try:
+        BOT.send_message(chat,'🎉 С днём рождения! FORMIQ желает крепкого здоровья и новых достижений. '
+            'Сегодня тебе доступно предложение: 10% на один месяц «Тренера AI» — 900 ₽ вместо 1 000 ₽. '
+            'Оплата пока не подключена, предложение информационное.')
+        with db() as conn:
+            conn.execute('''UPDATE birthday_greetings SET telegram_sent_at=NOW()
+                WHERE chat_id=%s AND birthday_year=%s''',(chat,year))
+    except Exception:
+        LOG.exception('Birthday greeting delivery failed for year=%s',year)
+
+
+def birthday_offer(chat, m):
+    """Idempotent local-calendar greeting, never inferred from a legacy integer age."""
+    raw=m.get('birth_date')
+    if not raw:return None
+    try:
+        born=date.fromisoformat(raw)
+        today=datetime.now(ZoneInfo(m.get('timezone') or 'Europe/Moscow')).date()
+    except (ValueError,KeyError,TypeError):return None
+    if _birthday_civil_date(born,today.year)!=(today.month,today.day):
+        return None
+    with db() as conn:
+        first=conn.execute('''INSERT INTO birthday_greetings(chat_id,birthday_year)
+            VALUES(%s,%s) ON CONFLICT DO NOTHING RETURNING 1''',
+            (chat,today.year)).fetchone()
+        send=False
+        if m.get('birthday_telegram_consent'):
+            claim=conn.execute('''UPDATE birthday_greetings SET telegram_claimed_at=NOW()
+                WHERE chat_id=%s AND birthday_year=%s AND telegram_claimed_at IS NULL
+                RETURNING 1''',(chat,today.year)).fetchone()
+            send=bool(claim)
+    if send:WORKERS.submit(_send_birthday_telegram,chat,today.year)
+    return {'show_congratulations':bool(first),'discount_percent':10,
+        'coach_price_rub':900,'regular_price_rub':1000,'billing_available':False,
+        'one_period_only':True}
+
 
 
 def heart_zones(m):
@@ -4562,18 +4768,24 @@ def mini_history_detail(chat,wid):
         if kcal is not None:
             items.append({'name':'Примерный расход энергии','key':None,
                           'result':f'≈ {kcal} ккал (MET {met}; не измерение датчика)'})
-        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,'items':items}
+        return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
+                'type':'cardio','duration_minutes':minutes,'items':items}
     with db() as conn:
-        w=conn.execute("SELECT plan_day,started_at,manual_title FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
+        w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty FROM workouts WHERE id=%s AND chat_id=%s AND status='finished'",
             (wid,chat)).fetchone()
         if not w:raise ValueError('Занятие не найдено')
         rows=conn.execute('''SELECT i.exercise,s.actual_value,s.weight_kg,s.unit,i.exercise_key
            FROM workout_sets s JOIN workout_items i ON i.workout_id=s.workout_id
            AND i.position=s.position WHERE s.workout_id=%s AND s.state='done'
            ORDER BY s.position,s.set_no''',(wid,)).fetchall()
-    return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),'items':[
-       {'name':visible_exercise_name(name),'key':key if key in EX else None,'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
-       f' · {kg} кг' if kg is not None else '')} for name,count,kg,unit,key in rows]}
+    elapsed=max(0,int((w[3]-w[1]).total_seconds()//60)) if w[3] is not None else None
+    return {'date':history_local_date(w[1], zone),'title':w[2] or day_title_for_code(chat,w[0]),
+      'type':'workout','duration_minutes':elapsed,'result':w[4],'items':[
+       {'name':visible_exercise_name(name),'key':key if key in EX else None,
+        'result':f'{count} '+('сек' if unit=='sec' else 'мин' if unit=='min' else 'повт.')+(
+         f' · {kg} кг' if kg is not None else ''),
+        **(exercise_card_details(key) if key in EX else {})}
+       for name,count,kg,unit,key in rows]}
 
 def mini_history_page(chat, body):
     """Read-only, authenticated, owner-scoped history pagination for Aluminium v5."""
@@ -4654,8 +4866,17 @@ def mini_history_month(chat, body):
             "SELECT DISTINCT (performed_at AT TIME ZONE %s)::date FROM cardio_sessions "
             "WHERE chat_id=%s AND performed_at >= %s AND performed_at < %s",
             (zone.key, chat, utc_start, utc_end)).fetchall()
+        dates_food = conn.execute("""SELECT DISTINCT m.eaten_on FROM manual_food_meals m
+            WHERE m.chat_id=%s AND m.eaten_on >= %s AND m.eaten_on < %s
+            AND EXISTS(SELECT 1 FROM manual_food_items i
+                       WHERE i.meal_id=m.id AND i.chat_id=m.chat_id)
+            ORDER BY m.eaten_on""",(chat,start,end)).fetchall()
     marked = sorted({value.isoformat() for (value,) in dates_workout + dates_cardio})
-    return {'month': raw, 'dates': marked}
+    saved_food = sorted({value.isoformat() for (value,) in dates_food})
+    # Backward-compatible dates list for the Progress history, with separate
+    # true-result markers for the Nutrition calendar. Planned slots are excluded.
+    return {'month': raw, 'dates': marked, 'workout_dates':marked,
+            'food_dates':saved_food}
 
 
 def mini_state(chat, just_finished=False):
@@ -4777,6 +4998,7 @@ def mini_state(chat, just_finished=False):
     result['history']=combined[:20]
     result['stats']['cardio7']=cardio
     result['metrics']=metrics(chat)
+    result['birthday']=birthday_offer(chat,result['metrics']) if result['agreed'] else None
     with db() as c:
         private_note=c.execute('SELECT description FROM profile_health_notes WHERE chat_id=%s',
                                (chat,)).fetchone()
@@ -4846,8 +5068,9 @@ def mini_current(conn, chat):
 
 
 def period_history(chat):
-    """Only the authenticated owner's optional private period data."""
-    if metrics(chat).get('sex')!='female':
+    """Read only the authenticated owner's confirmed periods and conservative estimate."""
+    user_metrics=metrics(chat)
+    if user_metrics.get('sex')!='female':
         raise ValueError('Женский календарь доступен только в женском профиле')
     with db() as conn:
         rows=conn.execute("""SELECT id,starts_on,ends_on FROM menstrual_periods
@@ -4861,7 +5084,8 @@ def period_history(chat):
         gaps=[(last[index+1]-last[index]).days for index in range(2)]
         if all(21<=gap<=35 for gap in gaps) and abs(gaps[1]-gaps[0])<=7:
             next_on=last[-1]+timedelta(days=round(sum(gaps)/2))
-            today=datetime.now(timezone.utc).date()
+            try:today=datetime.now(ZoneInfo(user_metrics.get('timezone') or 'Europe/Moscow')).date()
+            except (ValueError,KeyError,TypeError):today=datetime.now(timezone.utc).date()
             # A past estimate is NOT a "next" period. A stale history is not
             # sufficient for a current prediction; never repeatedly project
             # old averages into an assumed diagnosis or future certainty.
@@ -4882,11 +5106,8 @@ def period_save(chat,body):
         raise ValueError('Проверь даты календаря') from None
     if end<start or (end-start).days>14:
         raise ValueError('Дата окончания должна быть не раньше начала, период до 15 дней')
-    # These are *observed* entries, not predictions. Disallow absurd/future
-    # dates, which also prevents out-of-range forecast arithmetic near year 9999.
-    if start>datetime.now(timezone.utc).date() + timedelta(days=1) or \
-       end>datetime.now(timezone.utc).date() + timedelta(days=1):
-        raise ValueError('Указывай только уже начавшиеся периоды')
+    # Validate observed dates against the authenticated profile timezone
+    # INSIDE the user lock; never use UTC + one-day leeway for future dates.
     record=body.get('id')
     if record is not None and (type(record) is not int or record<1):
         raise ValueError('Неверная запись календаря')
@@ -4896,10 +5117,14 @@ def period_save(chat,body):
             # The female access check and write must be atomic relative to
             # changing profile sex, and two simultaneous writes must serialize.
             conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
-            sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',
+            sex_row=conn.execute('SELECT sex,timezone FROM profile_metrics WHERE chat_id=%s',
                                  (chat,)).fetchone()
             if not sex_row or sex_row[0]!='female':
                 raise ValueError('Женский календарь доступен только в женском профиле')
+            try:local_day=datetime.now(ZoneInfo(sex_row[1] or 'Europe/Moscow')).date()
+            except (ValueError,KeyError,TypeError):local_day=datetime.now(timezone.utc).date()
+            if start>local_day or end>local_day:
+                raise ValueError('Указывай только фактические прошедшие дни')
             overlap=conn.execute("""SELECT EXISTS(
                 SELECT 1 FROM menstrual_periods WHERE chat_id=%s
                 AND starts_on<=%s AND ends_on>=%s
@@ -4917,6 +5142,25 @@ def period_save(chat,body):
                     raise ValueError('Запись календаря не найдена')
     except psycopg.errors.UniqueViolation:
         raise ValueError('Запись на эту дату уже существует') from None
+    return period_history(chat)
+
+
+def period_delete(chat,body):
+    """Delete only one confirmed period after explicit UI confirmation.
+    Profile edits and competing saves serialize on the same owner lock.
+    """
+    record=body.get('id') if isinstance(body,dict) else None
+    if type(record) is not int or record<1:
+        raise ValueError('Неверная запись календаря')
+    with db() as conn:
+        conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+        sex_row=conn.execute('SELECT sex FROM profile_metrics WHERE chat_id=%s',(chat,)).fetchone()
+        if not sex_row or sex_row[0]!='female':
+            raise ValueError('Женский календарь доступен только в женском профиле')
+        deleted=conn.execute('''DELETE FROM menstrual_periods WHERE chat_id=%s AND id=%s
+            RETURNING id''',(chat,record)).fetchone()
+        if not deleted:
+            raise ValueError('Запись календаря не найдена')
     return period_history(chat)
 
 
@@ -5782,6 +6026,8 @@ def mini_api():
             payload = {'ok':True, **period_history(chat)}
         elif action == 'period_save':
             payload = {'ok':True, **period_save(chat,data)}
+        elif action == 'period_delete':
+            payload = {'ok':True, **period_delete(chat,data)}
         elif action == 'history_page':
             payload = {'ok': True, **mini_history_page(chat, data)}
         elif action == 'history_month':
@@ -5794,6 +6040,8 @@ def mini_api():
             payload = {'ok':True, **garmin_connected_day(chat,data)}
         elif action == 'garmin_disconnect':
             payload = {'ok':True, **garmin_disconnect_owner(chat)}
+        elif action == 'integrations_status':
+            payload = {'ok':True, **integrations_status(chat)}
         elif action == 'fatsecret_account_status':
             payload = {'ok':True, **fatsecret_user_status(chat)}
         elif action == 'fatsecret_account_connect':
@@ -5908,7 +6156,7 @@ FORMIQ_BOT_DESCRIPTION = (
     '📊 Отслеживание прогресса '
     '🤖 Умный тренер, который адаптируется под тебя '
     '🎁 Первые 14 дней бесплатно! '
-    'Твоя цель. Твой темп. Твой результат.'
+    'Твоя форма. Наш интелект.'
 )
 
 

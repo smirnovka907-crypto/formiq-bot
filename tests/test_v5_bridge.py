@@ -21,6 +21,51 @@ class V5StagingContract(unittest.TestCase):
             cls.mod = importlib.import_module('main')
         cls.client = cls.mod.APP.test_client()
 
+    def test_tz3_profile_connections_use_only_owner_state(self):
+        from datetime import datetime, timezone
+        from unittest.mock import MagicMock
+        stamp=datetime(2026,10,25,8,30,tzinfo=timezone.utc)
+        conn=MagicMock()
+        conn.__enter__.return_value=conn
+        conn.execute.return_value.fetchone.side_effect=[(stamp,),(None,)]
+        with patch.object(self.mod,'has_agreement',return_value=True), \
+             patch.object(self.mod,'db',return_value=conn), \
+             patch.object(self.mod,'fatsecret_user_oauth_ready',return_value=False):
+            result=self.mod.integrations_status(777)
+        self.assertEqual(result['fatsecret'],{
+            'available':False,'connected':True,'last_sync_at':stamp.isoformat()})
+        self.assertEqual(result['garmin'],{
+            'available':False,'connected':True,'last_sync_at':None})
+        self.assertEqual(len(conn.execute.call_args_list),2)
+        for call in conn.execute.call_args_list:
+            self.assertEqual(call.args[1],(777,))
+            self.assertNotIn('oauth_token',call.args[0])
+            self.assertNotIn('access_token',call.args[0])
+        self.assertIn('health_consent_at IS NOT NULL',conn.execute.call_args_list[1].args[0])
+        self.assertIn('disconnected_at IS NULL',conn.execute.call_args_list[1].args[0])
+        self.assertNotIn('provider_user_id',str(result))
+        self.assertNotIn('access_token',str(result))
+
+    def test_tz3_fatsecret_import_rejects_changed_preview_before_db(self):
+        snapshot=({'entries':[{'external_id':'17'}]},(b'ENCRYPTED_TEST_TOKEN',b'ENCRYPTED_TEST_SECRET','test-connection'))
+        with patch.object(self.mod,'fatsecret_user_diary',return_value=snapshot), \
+             patch.object(self.mod,'db') as database:
+            with self.assertRaisesRegex(ValueError,'изменился'):
+                self.mod.fatsecret_user_import(777,{'date':'2026-10-25','expected_ids':['18']})
+            with self.assertRaisesRegex(ValueError,'Некорректный'):
+                self.mod.fatsecret_user_import(777,{'date':'2026-10-25','expected_ids':[123]})
+            database.assert_not_called()
+
+    def test_tz3_profile_connections_denied_without_agreement(self):
+        with patch.object(self.mod,'has_agreement',return_value=False), \
+             patch.object(self.mod,'db') as database:
+            with self.assertRaises(ValueError):
+                self.mod.integrations_status(777)
+            database.assert_not_called()
+        with patch.object(self.mod,'mini_auth',return_value=None):
+            response=self.client.post('/mini/api',json={'action':'integrations_status'})
+        self.assertEqual(response.status_code,401)
+
     def test_provider_callback_query_params_are_redacted_from_access_logs(self):
         import logging
         from unittest.mock import patch
@@ -234,21 +279,28 @@ class V5StagingContract(unittest.TestCase):
         conn.execute.return_value.fetchall.side_effect = [
             [(date(2026, 10, 23),), (date(2026, 10, 19),)],
             [(date(2026, 10, 23),)],
+            [(date(2026, 10, 23),)],
         ]
         with patch.object(self.mod, 'db', return_value=conn):
             result = self.mod.mini_history_month(777, {'month': '2026-10'})
         self.assertEqual(result['dates'], ['2026-10-19', '2026-10-23'])
+        self.assertEqual(result['workout_dates'], ['2026-10-19', '2026-10-23'])
+        self.assertEqual(result['food_dates'], ['2026-10-23'])
         from datetime import datetime, timezone
         month_queries = [c for c in conn.execute.call_args_list
                          if 'SELECT DISTINCT' in c.args[0]]
-        self.assertEqual(len(month_queries), 2)
-        for c in month_queries:
+        self.assertEqual(len(month_queries), 3)
+        for c in month_queries[:2]:
             self.assertEqual(c.args[1], (
                 'Europe/Moscow', 777,
                 datetime(2026,9,30,21,tzinfo=timezone.utc),
                 datetime(2026,10,31,21,tzinfo=timezone.utc)))
             self.assertIn('chat_id=%s', c.args[0])
             self.assertIn('AT TIME ZONE %s', c.args[0])
+        self.assertEqual(month_queries[2].args[1],(
+            777,date(2026,10,1),date(2026,11,1)))
+        self.assertIn('manual_food_meals',month_queries[2].args[0])
+        self.assertIn('EXISTS',month_queries[2].args[0])
 
     def test_history_validation_rejects_bad_dates_and_offsets(self):
         for payload in [

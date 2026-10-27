@@ -283,6 +283,76 @@ class SchedulePostgresTests(unittest.TestCase):
                 FROM manual_food_items WHERE id=%s''',(iid,)).fetchone()
         self.assertEqual(row,('творог 5%',70,None,None))
 
+    def test_tz3_food_calendar_only_marks_actual_owner_records(self):
+        p,cycle,slots=self.save((0,2,4))
+        month='2026-10'
+        before=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(before['food_dates'],[])
+        self.assertEqual(before['workout_dates'],[],
+                         'Planned scheduled sessions are not completed workouts')
+        self.m.food_add(self.chat,{'date':'2026-10-19','meal_type':'breakfast',
+            'items':[{'name':'Голубика','grams':70}]})
+        partial=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(partial['food_dates'],['2026-10-19'])
+        self.assertEqual(partial['workout_dates'],[])
+        with self.connect() as conn:
+            conn.execute("""INSERT INTO workouts(chat_id,cycle_id,week_no,plan_day,
+                status,started_at,finished_at,source)
+                VALUES(%s,%s,%s,%s,'finished',%s,%s,'template')""",
+                (self.chat,cycle,slots[0]['week'],slots[0]['day'],
+                 Clock.instant,Clock.instant+timedelta(minutes=32)))
+        both=self.m.mini_history_month(self.chat,{'month':month})
+        self.assertEqual(both['workout_dates'],['2026-10-19'])
+        self.assertEqual(both['food_dates'],['2026-10-19'])
+        self.assertEqual(both['dates'],['2026-10-19'])
+        other=self.m.mini_history_month(self.chat+1,{'month':month})
+        self.assertFalse(other['food_dates'])
+        self.assertFalse(other['workout_dates'])
+
+    def test_tz3_user_supplied_food_macros_recalculate_without_fatsecret(self):
+        self.m.save_onboarding(self.chat,self.body())
+        per100={'kcal':57,'protein_g':0.7,'fat_g':0.3,'carbs_g':14.5}
+        curd={'kcal':121,'protein_g':17,'fat_g':5,'carbs_g':3}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''), patch.object(self.m,'FATSECRET_CLIENT_SECRET',''):
+            meal=self.m.food_add(self.chat,{'date':'2026-10-18','meal_type':'breakfast',
+                'items':[{'name':'Голубика','grams':70,'nutrition_100g':per100},
+                         {'name':'Творог 5%','grams':200,'nutrition_100g':curd}]})
+            items=meal['meals'][0]['items']
+            self.assertEqual([r['nutrition_source'] for r in items],['manual','manual'])
+            self.assertEqual(items[0]['nutrition_100g']['kcal'],57.0)
+            day=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(day['complete'])
+            self.assertEqual(day['source'],'manual')
+            self.assertEqual(day['totals']['kcal'],281.9)
+            self.assertEqual(day['totals']['protein_g'],34.49)
+            self.assertEqual(day['totals']['carbs_g'],16.15)
+            self.assertEqual(day['items'][0]['source'],'manual')
+            iid=items[0]['id']
+            changed=self.m.food_change(self.chat,{'id':iid,'name':'Голубика','grams':140})
+            self.assertEqual(changed['meals'][0]['items'][0]['nutrition_100g']['kcal'],57.0)
+            refreshed=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertEqual(refreshed['totals']['kcal'],321.8)
+            with self.assertRaises(ValueError):
+                self.m.food_change(self.chat+1,{'id':iid,'name':'Голубика','grams':300,
+                    'nutrition_100g':per100})
+            with self.assertRaises(ValueError):
+                self.m.food_change(self.chat,{'id':iid,'name':'Голубика','grams':140,
+                    'nutrition_100g':{'kcal':60}})
+            self.assertEqual(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals']['kcal'],321.8)
+            renamed=self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140})
+            self.assertIsNone(renamed['meals'][0]['items'][0]['nutrition_100g'])
+            partial=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertFalse(partial['complete'])
+            self.assertIsNone(partial['totals'])
+            self.assertEqual(partial['known_subtotal']['kcal'],242.0)
+            restored=self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140,
+                'nutrition_100g':per100})
+            self.assertEqual(restored['meals'][0]['items'][0]['nutrition_source'],'manual')
+            self.assertEqual(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals']['kcal'],321.8)
+            # Explicit removal of user-entered macros never invents zero kcal.
+            self.m.food_change(self.chat,{'id':iid,'name':'Черника','grams':140,'nutrition_100g':None})
+            self.assertIsNone(self.m.food_day_totals(self.chat,{'date':'2026-10-18'})['totals'])
+
     def test_day_kbju_uses_only_owned_verified_portions_and_never_invents_totals(self):
         from unittest.mock import Mock
         self.m.save_onboarding(self.chat,self.body())
@@ -703,6 +773,117 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(preview['exercises'][0]['weight_kg'])
         self.assertTrue(preview['can_start'])
         self.assertEqual(self.snapshot_history(),before)
+        with self.assertRaises(ValueError):
+            self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
+
+
+    def test_tz3_birth_date_is_real_optional_for_legacy_profiles_and_recalculates(self):
+        old=self.body()
+        self.m.save_onboarding(self.chat,old)
+        stored=self.m.metrics(self.chat)
+        self.assertEqual(stored['age'],34)
+        self.assertIsNone(stored['birth_date'],'Never invent date of birth from legacy age')
+        updated=self.body()
+        updated['metrics']['birth_date']='1992-10-20'
+        self.m.save_onboarding(self.chat,updated)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+        self.assertEqual(self.m.metrics(self.chat)['age'],33)
+        Clock.instant=datetime(2026,10,20,12,tzinfo=timezone.utc)
+        self.assertEqual(self.m.metrics(self.chat)['age'],34)
+        # A stale signed client must not overwrite the new birthday with a guessed date.
+        self.m.save_onboarding(self.chat,old)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM workouts WHERE chat_id=%s",
+                (self.chat,)).fetchone()[0],0)
+        for invalid in ('2026-10-26','2020-02-29','1992-02-30','garbage','1900-01-01'):
+            candidate=self.body()
+            candidate['metrics']['birth_date']=invalid
+            with self.assertRaises(ValueError,msg=invalid):
+                self.m.save_onboarding(self.chat,candidate)
+        self.assertEqual(self.m.metrics(self.chat)['birth_date'],'1992-10-20')
+
+    def test_tz3_birthday_one_greeting_per_year_and_opt_in_only(self):
+        old=self.body()
+        old['metrics']['birth_date']='1992-10-20'
+        self.m.save_onboarding(self.chat,old)
+        Clock.instant=datetime(2026,10,20,12,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.birthday_offer(self.chat+1,{}))
+        first=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        second=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertTrue(first['show_congratulations'])
+        self.assertFalse(second['show_congratulations'])
+        self.assertEqual(first['coach_price_rub'],900)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute("""SELECT COUNT(*),COUNT(telegram_claimed_at)
+                FROM birthday_greetings WHERE chat_id=%s""",(self.chat,)).fetchone(),(1,0))
+        changed=self.body()
+        changed['metrics']['birth_date']='1991-10-20'
+        changed['birthday_telegram_consent']=True
+        self.m.save_onboarding(self.chat,changed)
+        with patch.object(self.m.WORKERS,'submit') as submit:
+            third=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+            fourth=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertFalse(third['show_congratulations'])
+        self.assertFalse(fourth['show_congratulations'])
+        submit.assert_called_once()
+        Clock.instant=datetime(2026,10,21,12,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.birthday_offer(self.chat,self.m.metrics(self.chat)))
+        Clock.instant=datetime(2027,10,20,12,tzinfo=timezone.utc)
+        with patch.object(self.m.WORKERS,'submit') as next_submit:
+            following=self.m.birthday_offer(self.chat,self.m.metrics(self.chat))
+        self.assertTrue(following['show_congratulations'])
+        next_submit.assert_called_once()
+
+    def test_tz3_feb29_has_explicit_nonleap_policy(self):
+        born=date(2000,2,29)
+        self.assertEqual(self.m._birthday_civil_date(born,2026),(2,28))
+        self.assertEqual(self.m._birthday_civil_date(born,2028),(2,29))
+        self.assertEqual(self.m.years_old(born,date(2026,2,27)),25)
+        self.assertEqual(self.m.years_old(born,date(2026,2,28)),26)
+        self.assertEqual(self.m.years_old(born,date(2028,2,29)),28)
+
+    def test_tz3_optional_health_note_does_not_require_obsolete_questionnaire(self):
+        data=self.body()
+        data['health_profile']=None
+        self.m.save_onboarding(self.chat,data)
+        self.assertEqual(self.m.health_profile(self.chat)['affected'],[])
+        data['health_profile']={'affected':['shoulder'],'pain_score':0,
+            'symptom_course':'none','danger_signs':False,'activity_cleared':False}
+        self.m.save_onboarding(self.chat,data)
+        stored=self.m.health_profile(self.chat)
+        self.assertEqual(stored['affected'],['shoulder'])
+        self.assertEqual(stored['symptom_course'],'unspecified')
+
+    def test_tz3_completed_slot_shows_only_real_stored_sets(self):
+        profile,cycle,calendar=self.save((0,2,4))
+        slot=calendar[0]
+        began=Clock.instant
+        finished=began+timedelta(minutes=37)
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(
+                chat_id,cycle_id,week_no,plan_day,status,started_at,
+                finished_at,source,difficulty)
+                VALUES(%s,%s,%s,%s,'finished',%s,%s,'template','ok')
+                RETURNING id""",(self.chat,cycle,slot['week'],slot['day'],began,finished)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items(workout_id,position,exercise,
+                target,exercise_key) VALUES(%s,0,'Жим ногами','3 x 10','leg_press')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets(workout_id,position,set_no,
+                target_min,target_max,unit,actual_value,state,weight_kg,completed_at)
+                VALUES(%s,0,1,8,12,'reps',11,'done',42.5,%s)""",(wid,finished))
+        history_before=self.snapshot_history()
+        preview=self.m.mini_training_preview(self.chat,{'id':slot['id']})['preview']
+        self.assertTrue(preview['finished'])
+        self.assertFalse(preview['can_start'])
+        self.assertEqual(preview['exercises'],[])
+        self.assertEqual(preview['actual']['duration_minutes'],37)
+        self.assertEqual(preview['actual']['result'],'ok')
+        self.assertIn('11 повт.',preview['actual']['items'][0]['result'])
+        self.assertIn('/Leg_Press/0.jpg',preview['actual']['items'][0]['image_url'])
+        self.assertEqual(preview['actual']['items'][0]['image_license_url'],
+                         'https://creativecommons.org/licenses/by-sa/4.0/')
+        self.assertRegex(preview['actual']['items'][0]['result'],r'42[.]50? кг')
+        self.assertEqual(self.snapshot_history(),history_before)
         with self.assertRaises(ValueError):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
 
@@ -1743,6 +1924,67 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(stolen.status_code,400)
         with patch.object(self.m,'mini_auth',return_value=None):
             self.assertEqual(client.post('/mini/api',json={'action':'period_list'}).status_code,401)
+
+    def test_tz3_period_delete_requires_female_owner_and_existing_record(self):
+        self.m.save_onboarding(self.chat,{**self.body(), 'metrics':{
+            **self.body()['metrics'],'sex':'female'}})
+        first=self.m.period_save(self.chat,{'start':'2026-09-01','end':'2026-09-05'})
+        rid=first['periods'][0]['id']
+        self.m.save_onboarding(999,{**self.body(), 'metrics':{
+            **self.body()['metrics'],'sex':'female'}})
+        self.m.period_save(999,{'start':'2026-09-12','end':'2026-09-15'})
+        client=self.m.APP.test_client()
+        for bad in (None,True,1.0,'1',-1,0):
+            with patch.object(self.m,'mini_auth',return_value=self.chat):
+                invalid=client.post('/mini/api',json={'action':'period_delete','id':bad})
+                self.assertEqual(invalid.status_code,400)
+        with patch.object(self.m,'mini_auth',return_value=999):
+            stolen=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(stolen.status_code,400,'Another account cannot delete it')
+        self.assertEqual(len(self.m.period_history(self.chat)['periods']),1)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            deleted=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(deleted.status_code,200,deleted.get_json())
+            self.assertEqual(deleted.json['periods'],[])
+            repeated=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(repeated.status_code,400,'No success for a missing record')
+        self.assertEqual(len(self.m.period_history(999)['periods']),1,
+                         'Deleting a single owner period does not erase other history')
+        changed=self.body();changed['metrics']['sex']='male'
+        self.m.save_onboarding(self.chat,changed)
+        with patch.object(self.m,'mini_auth',return_value=self.chat):
+            denial=client.post('/mini/api',json={'action':'period_delete','id':rid})
+            self.assertEqual(denial.status_code,400)
+
+    def test_tz3_period_save_rejects_unobserved_tomorrow_in_saved_timezone(self):
+        self.m.save_onboarding(self.chat,{**self.body(zone='Pacific/Honolulu'),
+            'metrics':{**self.body()['metrics'],'sex':'female'}})
+        # UTC may already be the following day; the Hawaii user still has today.
+        Clock.instant=datetime(2026,10,20,1,30,tzinfo=timezone.utc)
+        today=self.m.local_today(self.chat)
+        self.assertEqual(today,date(2026,10,19))
+        with self.assertRaises(ValueError):
+            self.m.period_save(self.chat,{'start':'2026-10-19','end':'2026-10-20'})
+        good=self.m.period_save(self.chat,{'start':'2026-10-18','end':'2026-10-19'})
+        self.assertEqual(good['periods'][0]['end'],'2026-10-19')
+        self.assertEqual(len(self.m.period_history(self.chat)['periods']),1)
+
+    def test_tz3_period_forecast_uses_saved_calendar_timezone_at_midnight(self):
+        data=self.body(zone='Europe/Helsinki')
+        data['metrics']['sex']='female'
+        self.m.save_onboarding(self.chat,data)
+        for day in ('2026-07-05','2026-08-02','2026-08-30'):
+            self.m.period_save(self.chat,{'start':day,
+                'end':(date.fromisoformat(day)+timedelta(days=4)).isoformat()})
+        Clock.instant=datetime(2026,9,26,21,30,tzinfo=timezone.utc)
+        expected=self.m.period_history(self.chat)['next_period']
+        self.assertEqual(expected['date'],'2026-09-27')
+        Clock.instant=datetime(2026,9,27,21,30,tzinfo=timezone.utc)
+        self.assertIsNone(self.m.period_history(self.chat)['next_period'],
+                          '28 September in Helsinki: 27 Sept estimate is already past')
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM menstrual_periods WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],3,'Forecast does not create fake history')
 
     def test_v6_onboarding_frontend_contract(self):
         from pathlib import Path

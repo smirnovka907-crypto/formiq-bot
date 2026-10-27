@@ -1,17 +1,26 @@
-"""Telegram welcome artwork approved for FORMIQ.
-
-The original approved art is embedded in approved_assets.py for reliability.
-The same JPEG bytes are displayed in chat; no image hosting is required.
-"""
+"""Telegram artwork: unchanged PNG source; JPEG only for Bot API avatar upload."""
 from functools import lru_cache
-from approved_assets import WELCOME_JPEG, AVATAR_JPEG
+from io import BytesIO
+from PIL import Image
+from approved_assets import WELCOME_PNG, AVATAR_PNG, WELCOME_JPEG
 
 
 @lru_cache(maxsize=1)
-def welcome_jpeg():
-    return WELCOME_JPEG
+def welcome_png():
+    return WELCOME_PNG
 
 
 @lru_cache(maxsize=1)
 def avatar_jpeg():
-    return AVATAR_JPEG
+    with Image.open(BytesIO(AVATAR_PNG)) as source:
+        output = BytesIO()
+        source.convert('RGB').save(
+            output, format='JPEG', quality=95, subsampling=0, optimize=True
+        )
+        return output.getvalue()
+
+
+@lru_cache(maxsize=1)
+def welcome_jpeg():
+    """Preserve legacy Mini App image endpoint; not used by Telegram /start."""
+    return WELCOME_JPEG

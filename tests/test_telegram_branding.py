@@ -1,5 +1,6 @@
 """Telegram profile read-back regressions; offline, never call production API."""
 import importlib
+import hashlib
 import io
 import os
 import unittest
@@ -20,14 +21,20 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
             cls.m = importlib.import_module('main')
 
     def test_approved_art_is_same_bytes_as_welcome_art(self):
-        from approved_assets import WELCOME_JPEG, AVATAR_JPEG
-        from welcome_art import welcome_jpeg, avatar_jpeg
-        self.assertEqual(welcome_jpeg(), WELCOME_JPEG)
-        self.assertEqual(avatar_jpeg(), AVATAR_JPEG)
-        for jpeg in (WELCOME_JPEG, AVATAR_JPEG):
-            with Image.open(io.BytesIO(jpeg)) as pic:
-                self.assertEqual(pic.format, 'JPEG')
-                self.assertGreaterEqual(min(pic.size), 200)
+        from approved_assets import WELCOME_PNG, AVATAR_PNG
+        from welcome_art import welcome_png, avatar_jpeg
+        self.assertEqual(welcome_png(), WELCOME_PNG)
+        self.assertEqual(hashlib.sha256(AVATAR_PNG).hexdigest(),
+                         '690c038a70c18250c0c4e68775dd7419b13078a0a66177b66b59d04c133ca9dd')
+        self.assertEqual(hashlib.sha256(WELCOME_PNG).hexdigest(),
+                         '8a485bae6e08b0027a8a9f30a9a578e9990ddceabd0d626e6ba082fa184d9bae')
+        for png in (WELCOME_PNG, AVATAR_PNG):
+            with Image.open(io.BytesIO(png)) as pic:
+                self.assertEqual(pic.format, 'PNG')
+                self.assertGreaterEqual(min(pic.size), 1024)
+        with Image.open(io.BytesIO(avatar_jpeg())) as jpeg:
+            self.assertEqual(jpeg.format, 'JPEG')
+            self.assertEqual(jpeg.size, (1254,1254))
         self.assertLess(len(self.m.FORMIQ_BOT_ABOUT), 121)
         self.assertLess(len(self.m.FORMIQ_BOT_DESCRIPTION), 513)
 
@@ -90,6 +97,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
                 m.apply_approved_avatar_once()
         upload.assert_not_called()
 
+    def test_owner_approved_telegram_description_slogan(self):
+        description = self.m.FORMIQ_BOT_DESCRIPTION
+        self.assertTrue(description.endswith('Твоя форма. Наш интелект.'))
+        self.assertNotIn('Твоя цель. Твой темп. Твой результат.', description)
+
     def test_about_description_checked_in_both_telegram_locales(self):
         m=self.m
         state={loc:{'about':'OLD','desc':'OLD'} for loc in (None,'ru')}
@@ -148,10 +160,11 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
 
     def test_start_photo_has_the_exact_approved_caption_and_only_two_buttons(self):
         m=self.m
-        expected=('Добро пожаловать в FORMIQ. Твоя форма заслуживает умного подхода. '
-                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом. '
-                  'Веди дневник самостоятельно или доверь персональные рекомендации '
-                  'Yandex AI. FORMIQ — Твоя форма. Наш интеллект.')
+        expected=('Добро пожаловать в FORMIQ!\n\n'
+                  'Твоя форма заслуживает умного подхода.\n\n'
+                  'Тренируйся, следи за питанием и наблюдай за своим прогрессом.\n\n'
+                  'Веди дневник самостоятельно или доверь Yandex AI создание '
+                  'персонального плана, анализ результатов и адаптацию тренировок.')
         with patch.object(m.BOT,'set_chat_menu_button'), \
              patch.object(m.BOT,'get_chat_menu_button',
                           return_value=SimpleNamespace(type='commands')), \
@@ -161,6 +174,9 @@ class TelegramBrandingVerificationTests(unittest.TestCase):
         photo.assert_called_once()
         fallback.assert_not_called()
         self.assertEqual(photo.call_args.kwargs['caption'],expected)
+        from approved_assets import WELCOME_PNG
+        self.assertEqual(photo.call_args.args[1].getvalue(),WELCOME_PNG)
+        self.assertEqual(photo.call_args.args[1].name,'formiq-welcome.png')
         keyboard=photo.call_args.kwargs['reply_markup'].keyboard
         self.assertEqual([item.text for row in keyboard for item in row],
                          ['FormIQ','Разбудить'])
