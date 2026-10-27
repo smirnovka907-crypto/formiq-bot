@@ -183,9 +183,9 @@ class SchedulePostgresTests(unittest.TestCase):
         fake.get_token.return_value='OFFLINE_TOKEN'
         fake.search.side_effect=lambda name,token: [catalog[name]]
         fake.food_by_id.side_effect=lambda fid,token: {'15':rice,'16':chicken}[fid]
-        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \\
-             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \\
-             patch.object(self.m,'FatSecretCatalogClient',return_value=fake), \\
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake), \
              patch.object(self.m,'food_parse_ai') as ai:
             saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
                 'meal_type':'lunch','text':'рис сухой 80 г и курица 150 г'})
