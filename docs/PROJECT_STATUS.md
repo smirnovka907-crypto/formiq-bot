@@ -1,3 +1,21 @@
+# FORMIQ | ТЗ после Issue #35 — Windows backup, synthetic PG18 restore и Timeweb cutover (27.10.2026)
+
+**Стадия:** развитие существующего **Draft PR #36**, без merge, deploy, затрат, реальных SSH/Telegram/Render/production PostgreSQL. Основание: основная инструкция Google Drive редакции 1.4, пункты 30.9–30.11 и 31.
+
+**Что добавлено в PR #36:**
+1. `scripts/FORMIQ_Backup_Windows.cmd` + `.ps1`: локальное меню, проверка Python>=3.12 и `pg_dump`/`pg_restore`/`psql`/`createdb` строго PostgreSQL 18; скрытые запросы URL Render и длинной парольной фразы; безопасное создание AES-256-GCM `.fiqenc`, GCM/TOC verify, SHA256; только новая пустая localhost `formiq_restore`, без удаления или перезаписи существующей БД. Скрипт backup из `main` сохранён без изменения формата архива. Секреты не записываются в репозиторий/файлы/лог, владелец вводит их только на доверенном ПК.
+2. `scripts/formiq_pg_restore_audit.py`: после успешного восстановления сравнивает PostgreSQL18 source и localhost только read-only SQL, полный список таблиц, количество строк в каждой, ограничения FK/PK/unique/check, значения sequence и явные связи истории тренировок/питания. При несовпадении — **NO-GO** без раскрытия пользовательских данных. При изменениях в источнике после дампа сопоставление может не пройти и не является транзакционной гарантией cutover.
+3. `tests/test_windows_pg18_restore.py`: настоящий end-to-end дамп **только синтетической** Docker PostgreSQL 18 через изолированные клиентские оболочки, поточное AES-шифрование, проверка, восстановление и сверка истории/PK/FK/sequences. Исправлена PostgreSQL 18 совместимость `contype::text`. [Integrations CI #40525472134](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40525472134) **SUCCESS** на предыдущем HEAD `5b17286a4b94f14e54dfd317ea87aa1bb0a16c2e`.
+4. `formiq_wsgi.py`: localhost-only DB readiness (PostgreSQL18 + обязательные таблицы) без изменения webhook или миграций. `scripts/timeweb_release.py`: будущий live healthcheck принимает релиз только если верны **и exact Git SHA, и PostgreSQL readiness**; при сбое синтетически восстанавливает предыдущий SHA, **не трогая БД**.
+5. `docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md` — подробная инструкция владельцу с пронумерованными шагами; `docs/FORMIQ_CUTOVER_PLAN.md` — отдельные bootstrap/DDL, replay_pending, freeze-write, single Telegram webhook, финальная зашифрованная копия и rollback без потери новых записей. Никаких реальных server/bootstrap действий не было.
+6. `.github/workflows/timeweb-pilot.yml`: offline-only плюс синтаксическая проверка Windows PowerShell и отказ при синтетических секретах; будущий deployment остаётся `if: false`. Exact-head CI после новых изменений проверяется отдельно.
+
+**NO-GO:** на настоящий production backup и успешный real-data restore подтверждений нет; Windows пользователя недоступен; Timeweb ресурсы, TLS/firewall, приватная managed PostgreSQL, protected GitHub Environment и SSH ещё не настроены/не проверены. 152-ФЗ для реального сегмента не согласован. Live Render PostgreSQL Free истекает **19.11.2026, 22:50 МСК**. Для корректного host-to-host rollback после новых записей нужна согласованная миграция/delta, не просто откат бинарника.
+
+**Следующий шаг владельца:** на своём Windows ПК пройти `docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md`: установить Python 3.12+, PostgreSQL 18, локально выполнить выбор 2, а затем выбор 4 в `scripts/FORMIQ_Backup_Windows.cmd`. Секреты вводятся только локально, сообщать разрешается только статус трёх проверок без URL/паролей.
+
+---
+
 # FORMIQ | Issue #35 — результаты offline dry-run CI (27.10.2026)
 
 **Верификация:** [Timeweb pilot Actions #40519894046](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519894046) **SUCCESS** на кодовом SHA `9b33785875618826426cb8a405e8dc9b767f754c` (WSGI импорт без внешних соединений, охрана реквизитов, systemd синтаксис, Python-тесты переключения и отката, allowlist SHA-архива). [Integrations offline #40519227208](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519227208) **SUCCESS** на предыдущем кодовом SHA `cda18fa526c1fa273f1f68472fa1745a153b6da2` (API/Python, JavaScript, Chromium mobile, временная PostgreSQL 18). Полный тест на последнем кодовом SHA запускается отдельно, итог проверяется по точному HEAD после этого журнального коммита.
