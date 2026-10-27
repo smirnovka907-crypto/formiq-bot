@@ -455,7 +455,7 @@ async function send(action,more={}){
   }else error=e.name==='AbortError'?((action==='record'||action==='cardio')?'Ответ сервера не получен. Перед повтором проверь запись в дневнике, чтобы не создать дубль.':'Сервер не отвечает. Попробуй позже.'):e.message;
   return null
  }
- finally{busy=false;draw()}
+ finally{busy=false;draw();if(action==='state'&&ready()&&view==='home')void loadGarminDay()}
 }
 function workout(){
  const w=state.workout,c=w.current;
@@ -550,7 +550,7 @@ function training(){
   '<p>🎁 Скидка 10% на один период «Тренера AI»: 900 ₽ вместо 1 000 ₽. Оплата пока не подключена.</p></section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p>'+birthday+'<section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+garminPanel()+trainingPlanCard()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -740,7 +740,7 @@ async function loadGarminDay(){
   const result=await request('garmin_day',{date:expected});
   if(seq===garminSeq&&expected===garminDate)garminSnapshot=result;
  }catch(ex){if(seq===garminSeq&&expected===garminDate)garminError=ex.message||'Нет доступа к данным Garmin'}
- finally{if(seq===garminSeq&&expected===garminDate){garminLoading=false;if(view==='progress')draw()}}
+ finally{if(seq===garminSeq&&expected===garminDate){garminLoading=false;if(view==='home')draw()}}
 }
 function garminPanel(){
  const g=garminSnapshot;
@@ -816,7 +816,7 @@ function progress(){
   '<div class="summary-grid"><div class="metric"><span>Тренировок</span><strong>'+esc(stats.total??0)+'</strong></div>'+
   '<div class="metric"><span>Подходы</span><strong>'+esc(stats.sets??0)+'</strong></div></div></section>';
  return h()+'<span class="kicker">История и результаты</span><h1 class="title">Прогресс</h1>'+
-  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+garminPanel()+summary+history();
+  '<p class="intro">Результаты из сохранённого дневника.</p>'+strength+body+summary+history();
 }
 const mealLabels={breakfast:'Завтрак',lunch:'Обед',dinner:'Ужин',snack:'Перекус'};
 async function loadFoodMonth(){
@@ -1228,7 +1228,7 @@ window.visualViewport?.addEventListener('resize',updateViewportPosition);
 window.visualViewport?.addEventListener('scroll',updateViewportPosition);
 app.addEventListener('click',async e=>{
  const element=e.target.closest('button');if(!element||busy)return;
- if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight();void loadGarminDay()}if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods();void loadConnections()}return}
+ if(element.dataset.nav){if(!ready()){onboardOpen=true;view='home';error='';draw();return}onboardOpen=false;onboard=null;view=element.dataset.nav;error='';draw();window.scrollTo(0,0);if(view==='progress'){loadProgressSeries();loadBodyWeight()}if(view==='home')void loadGarminDay();if(view==='food'){loadFoodHistory();loadFatSecretAccount()}if(view==='profile'){initOnboard();loadFemalePeriods();void loadConnections()}return}
  if(element.dataset.foodDate){
   const chosen=element.dataset.foodDate;
   if(!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chosen))return;

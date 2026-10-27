@@ -351,8 +351,16 @@ async function run(){
  assert.match(garminClient.root.innerHTML,/Garmin Connect/);
  assert.match(garminClient.root.innerHTML,/Последняя успешная синхронизация/);
  assert.doesNotMatch(garminClient.root.innerHTML,/data-cmd="garmin-connect"/,'Garmin OAuth does not exist');
- await garminClient.click({nav:'progress'});await settle();
+ await garminClient.click({nav:'home'});await settle();
  assert.ok(garminClient.requests.some(x=>x.action==='garmin_day'&&x.date==='2026-10-25'));
+ assert.match(garminClient.root.innerHTML,/Garmin Connect/);
+ assert.ok(garminClient.root.innerHTML.indexOf('id="cardio-entry"')<
+           garminClient.root.innerHTML.indexOf('Garmin Connect'),
+           'Garmin follows additional training');
+ await garminClient.click({nav:'progress'});await settle();
+ assert.doesNotMatch(garminClient.root.innerHTML,/Garmin Connect/,
+           'Progress contains actual history, not Garmin panel');
+ await garminClient.click({nav:'home'});await settle();
  assert.match(garminClient.root.innerHTML,/Garmin Connect/);
  assert.match(garminClient.root.innerHTML,/Последняя синхронизация/);
  assert.match(garminClient.root.innerHTML,/7600/,'Only observed Garmin steps');
