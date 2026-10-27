@@ -447,6 +447,26 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIn('2026-10-18',self.m.mini_history_month(
             self.chat,{'month':'2026-10'})['food_dates'])
 
+    def test_tz5_soup_salad_cutlet_not_assumed_to_have_known_macros(self):
+        # Mixed home recipes do not have verified ingredient proportions.
+        parsed=self.m.food_parse({'text':
+            'салат овощной 200 г, котлета 90 г, пюре 150 г, курица 120 г'})
+        self.assertEqual(parsed['items'],[{'name':'курица','grams':120.0}])
+        self.assertEqual([row['text'] for row in parsed['unparsed']],
+            ['салат овощной 200 г','котлета 90 г','пюре 150 г'])
+        # A word containing "суп" is NOT itself an unknown soup recipe.
+        pure=self.m.food_parse({'text':'суперфуд 120 г'})
+        self.assertEqual(pure['items'],[{'name':'суперфуд','grams':120.0}])
+        self.assertFalse(pure['unparsed'])
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'салат овощной 200 г'})
+        self.assertEqual(saved['meals'][0]['items'],[])
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertIsNone(totals['totals'])
+        self.assertEqual(totals['unresolved_items'],1)
+
     def test_tz5_natural_meal_mixed_leading_grams(self):
         parsed=self.m.food_parse({'text':'я съел 150 г риса и 200 г курицы'})
         self.assertEqual(parsed['items'],[
