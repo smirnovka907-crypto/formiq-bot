@@ -3974,8 +3974,8 @@ def food_parse(body):
         raise ValueError('Максимум 30 продуктов за один ввод')
     for part in parts:
         # Natural diary phrasing does not belong in the ingredient identity.
-        clean=re.sub(r'^(?:сегодня\\s+)?(?:на\\s+(?:завтрак|обед|ужин|перекус)\\s*[:,]?\\s*)?'
-            r'(?:(?:я\\s+)?(?:съел|съела|поел|поела|выпил|выпила|ел|ела)\\s+)?',
+        clean=re.sub(r'^(?:сегодня\s+)?(?:на\s+(?:завтрак|обед|ужин|перекус)\s*[:,]?\s*)?'
+            r'(?:(?:я\s+)?(?:съел|съела|поел|поела|выпил|выпила|ел|ела)\s+)?',
             '',part,flags=re.IGNORECASE).strip()
         # Compound dishes with nested descriptions are NOT a single
         # verified ingredient. Preserve them verbatim for user review.
