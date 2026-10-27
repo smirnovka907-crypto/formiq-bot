@@ -4324,7 +4324,9 @@ def food_auto_link_recent(chat, item_ids):
     except Exception:
         return 0
     updated=0
-    for item_id,name in item_ids[:6]:
+    # Each lookup can outlive a user's edits. Tie the provider result to
+    # the exact pre-lookup row version, not merely to its immutable item ID.
+    for item_id,name,observed_at in item_ids[:6]:
         try:
             candidate_id=food_auto_candidate_id(name,client.search(name,token))
             if not candidate_id:
@@ -4339,8 +4341,13 @@ def food_auto_link_recent(chat, item_ids):
                 changed=conn.execute("""UPDATE manual_food_items SET
                     source_food_id=%s,source_serving_id=%s,updated_at=NOW()
                     WHERE id=%s AND chat_id=%s AND name=%s
+                      AND updated_at=%s
                       AND source_food_id IS NULL AND source_serving_id IS NULL
-                    RETURNING id""",(*match,item_id,chat,name)).fetchone()
+                      AND manual_kcal_100g IS NULL
+                      AND manual_protein_g_100g IS NULL
+                      AND manual_fat_g_100g IS NULL
+                      AND manual_carbs_g_100g IS NULL
+                    RETURNING id""",(*match,item_id,chat,name,observed_at)).fetchone()
             updated+=bool(changed)
         except Exception:
             continue
@@ -4396,7 +4403,7 @@ def food_auto_enrich(chat, body):
     day=food_day(body.get('date'))
     recognized=food_ai_resolve_saved_fragments(chat,day)
     with db() as conn:
-        rows=conn.execute("""SELECT i.id,i.name
+        rows=conn.execute("""SELECT i.id,i.name,i.updated_at
             FROM manual_food_items i JOIN manual_food_meals m
                 ON m.id=i.meal_id AND m.chat_id=i.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s
