@@ -148,6 +148,18 @@ function createClient(auth=true,shared={}){
     for(const m of shared.foodMeals||[])for(const i of m.items||[])if(i.id===p.id)i.nutrition_source='fatsecret';
     response={ok:true,item_id:p.id,source:'fatsecret',nutrients:{kcal:266,protein_g:9.1,fat_g:4.9,carbs_g:46.9}};
    }
+   else if(p.action==='food_add_text'){
+    assert.ok(p.request_id&&p.request_id.length>=12,'One-tap food save has a retry key');
+    shared.foodMeals=[{id:88,type:p.meal_type,items:[
+      {id:301,name:'рис сухой',grams:80},
+      {id:302,name:'курица',grams:150}]}];
+    response={ok:true,date:p.date,meals:shared.foodMeals,unparsed:[],
+      notice:'Запись сохранена.'};
+   }else if(p.action==='food_auto_enrich'){
+    for(const meal of shared.foodMeals||[])for(const item of meal.items)
+      item.nutrition_source='fatsecret';
+    response={ok:true,date:p.date,catalog_matches:2};
+   }
    else if(p.action==='food_add'){
     shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
     response={ok:true,date:p.date,meals:shared.foodMeals,nutrients_available:false};
@@ -469,6 +481,19 @@ async function run(){
  await app.click({cmd:'food-delete',id:'100'});
  await app.click({cmd:'food-delete-confirm'});
  assert.ok(app.requests.some(x=>x.action==='food_delete'&&x.id===100));
+ const quick=createClient(true,{foodCatalogAvailable:true});
+ await settle();await quick.click({nav:'food'});await settle();
+ quick.input('food-text','рис сухой 80 г и курица 150 г');
+ const finishCatalogue=quick.deferOnce('food_auto_enrich');
+ await quick.click({cmd:'food-save-text'});
+ assert.match(quick.root.innerHTML,/рис сухой/,
+  'Meal is visible before optional catalogue request finishes');
+ assert.equal(quick.requests.filter(x=>x.action==='food_add_text').length,1);
+ assert.ok(quick.requests.some(x=>x.action==='food_auto_enrich'));
+ finishCatalogue();await settle();
+ assert.ok(quick.requests.some(x=>x.action==='food_nutrition_day'),
+  'Daily macro check runs after verified catalogue enrichment');
+
  const catalogClient=createClient(true,{foodCatalogAvailable:true,
   foodMeals:[{id:81,type:'breakfast',items:[{id:202,name:'овсянка сухая',grams:70}]}]});
  await settle();await catalogClient.click({nav:'food'});await settle();
