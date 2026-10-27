@@ -3970,7 +3970,7 @@ def food_parse(body):
     # do not split ordinary ingredient names or decimal gram values.
     expanded=[]
     for part in parts:
-        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм))',part,flags=re.IGNORECASE))
+        expanded.extend(re.split(r'\s+(?:и|плюс)\s+(?=(?:[^,;\n]{2,100}?\s+\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм)|\d{1,4}(?:[.,]\d{1,2})?\s*(?:г|гр|грамм)\s+[^,;\n]{2,100}))',part,flags=re.IGNORECASE))
     parts=[part.strip() for part in expanded if part.strip()]
     if len(parts)>30:
         raise ValueError('Максимум 30 продуктов за один ввод')
