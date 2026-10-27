@@ -3121,6 +3121,30 @@ def food_allergy_check(chat,payload):
                                           trusted_server_source=False)}
 
 
+
+def check_food_safety(chat, ingredient_or_product, composition, *, source_verified=False):
+    """Server-owned safety decision for future AI menus, recipes and baskets.
+
+    source_verified may be supplied ONLY by a backend adapter after checking
+    source provenance; the public food_allergy_check API never accepts it.
+    'safe' means no detected conflict with stored restrictions under a
+    verified full composition, not an absolute medical guarantee.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала сохрани анкету')
+    stored=food_allergy_state(chat)
+    if not stored['recommendations_allowed']:
+        return {'status':'needs_review',
+                'reason':'Не подтверждены пищевые ограничения или согласие'}
+    candidate={'name':str(ingredient_or_product or '')[:150],
+               'composition':composition}
+    decision=evaluate_composition(candidate,stored['items'],
+                                  trusted_server_source=source_verified is True)
+    return {**decision,'status':{
+        'excluded':'blocked','no_conflicts_detected':'safe'
+        }.get(decision['status'],'needs_review')}
+
+
 def food_allergy_recommendation_gate(chat):
     stored=food_allergy_state(chat)
     if not stored['recommendations_allowed']:
