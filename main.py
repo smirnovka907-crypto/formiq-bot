@@ -4174,6 +4174,14 @@ def food_auto_match_candidates(name, options):
               and all(k in p['per_serving'] for k in FOOD_MANUAL_KEYS)]
     if len(portions)!=1:
         return None
+    # Reject malformed, negative and nonfinite upstream nutrients before linking.
+    try:
+        vals=[Decimal(str(portions[0]['per_serving'][key])) for key in FOOD_MANUAL_KEYS]
+    except (InvalidOperation,TypeError,ValueError,KeyError):
+        return None
+    if any(not val.is_finite() or val<0 or val>(1000 if key=='kcal' else 100)
+           for key,val in zip(FOOD_MANUAL_KEYS,vals)):
+        return None
     if food_preparation_state(name)!=food_preparation_state(option['name']):
         return None
     # Dry vs cooked nutrition is very different for these foods; an unspecified
