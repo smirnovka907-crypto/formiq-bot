@@ -312,6 +312,78 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_auto_enrich(self.chat,
                 {'date':'2026-10-18'})['catalog_matches'],0)
 
+    def test_tz5_delayed_catalog_lookup_preserves_manual_nutrition(self):
+        """A verified provider response must never overwrite a user's later edit."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        source={'food_id':'16','name':'курица','brand':None,
+                'servings':[{'serving_id':'161','grams':100,
+                             'per_serving':{'kcal':165,'protein_g':31,
+                                            'fat_g':3.6,'carbs_g':0}}]}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        fake.search.return_value=[{'food_id':'16','name':'курица',
+                                   'brand':None,'servings':[]}]
+        def user_edits_during_provider_lookup(food_id,token):
+            self.m.food_change(self.chat,{'id':item_id,'name':'курица',
+                'grams':150,'nutrition_100g':{'kcal':170,'protein_g':30,
+                                               'fat_g':5,'carbs_g':0}})
+            return source
+        fake.food_by_id.side_effect=user_edits_during_provider_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            linked=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(linked['catalog_matches'],0)
+        with self.connect() as conn:
+            source_fields=conn.execute("""SELECT source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat)).fetchone()
+        self.assertEqual(source_fields,(None,None))
+        diary=self.m.food_history(self.chat,{'date':'2026-10-18'})
+        item=diary['meals'][0]['items'][0]
+        self.assertEqual(item['nutrition_source'],'manual')
+        self.assertEqual(item['nutrition_100g']['kcal'],170.0)
+
+    def test_tz5_delayed_catalog_lookup_never_links_stale_weight(self):
+        """Provider linkage is rejected when row version changes in flight."""
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+            'meal_type':'lunch','text':'курица 150 г'})
+        item_id=saved['meals'][0]['items'][0]['id']
+        source={'food_id':'16','name':'курица','brand':None,
+                'servings':[{'serving_id':'161','grams':100,
+                             'per_serving':{'kcal':165,'protein_g':31,
+                                            'fat_g':3.6,'carbs_g':0}}]}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        fake.search.return_value=[{'food_id':'16','name':'курица',
+                                   'brand':None,'servings':[]}]
+        def user_edits_during_provider_lookup(food_id,token):
+            self.m.food_change(self.chat,{'id':item_id,'name':'курица','grams':200})
+            # Ensure a distinct version even on an ultra-fast test database.
+            with self.connect() as conn:
+                conn.execute("""UPDATE manual_food_items
+                    SET updated_at=updated_at + interval '1 second'
+                    WHERE id=%s AND chat_id=%s""",(item_id,self.chat))
+            return source
+        fake.food_by_id.side_effect=user_edits_during_provider_lookup
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            linked=self.m.food_auto_enrich(self.chat,{'date':'2026-10-18'})
+        self.assertEqual(linked['catalog_matches'],0)
+        with self.connect() as conn:
+            record=conn.execute("""SELECT grams,source_food_id,source_serving_id
+                FROM manual_food_items WHERE id=%s AND chat_id=%s""",
+                (item_id,self.chat)).fetchone()
+        self.assertEqual(float(record[0]),200.0)
+        self.assertEqual(record[1:],(None,None))
+
     def test_tz5_save_unknown_food_does_not_wait_for_ai(self):
         self.m.save_onboarding(self.chat,self.body())
         with patch.object(self.m,'food_parse_ai',side_effect=RuntimeError(
