@@ -1073,7 +1073,7 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Тренировка изменилась'):
             self.m.mini_write(self.chat,'skip_workout',
                               {'expected_workout':old})
-        with self.assertRaisesRegex(ValueError,'Активной тренировки нет'):
+        with self.assertRaisesRegex(ValueError,'Сначала прими условия использования'):
             self.m.mini_write(self.chat+1,'finish',
                               {'expected_workout':old})
         with self.connect() as c:
