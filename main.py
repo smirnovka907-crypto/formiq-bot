@@ -5353,9 +5353,21 @@ def mini_write(chat, action, body):
                 AND difficulty IS NULL ORDER BY finished_at DESC,id DESC LIMIT 1)
                 AND chat_id=%s''',(grade,chat,chat))
             return False
+        # Serialize set recording and closure for one Telegram user.
+        c.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+        expected_id = body.get('expected_workout')
+        if expected_id is not None and (type(expected_id) is not int or expected_id <= 0):
+            raise ValueError('Обнови тренировку перед повторным запросом')
         wid = mini_current(c,chat)
         if not wid:
+            if action in ('finish','skip_workout','cancel') and expected_id:
+                previous = c.execute('''SELECT status FROM workouts
+                    WHERE id=%s AND chat_id=%s''',(expected_id,chat)).fetchone()
+                if previous and previous[0] in ('finished','finished_empty','skipped'):
+                    return True
             raise ValueError('Активной тренировки нет')
+        if expected_id is not None and expected_id != wid:
+            raise ValueError('Тренировка изменилась. Обнови дневник')
         # Old cancel requests remain valid, but never delete training history.
         if action in ('finish','skip_workout','cancel'):
             done = c.execute('''SELECT COUNT(*) FROM workout_sets
