@@ -50,3 +50,11 @@ jobs:
         run: python scripts/timeweb_release.py simulate
       - name: Package immutable tracked source (no artifact upload)
         run: bash scripts/timeweb-pilot.sh
+
+  future-deployment-disabled:
+    if: ${{ false }}
+    needs: offline-pilot
+    runs-on: ubuntu-latest
+    environment: timeweb-production
+    steps:
+      - run: echo 'No real deployment in Issue 35 pilot'
