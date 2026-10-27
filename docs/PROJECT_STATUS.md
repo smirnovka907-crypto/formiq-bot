@@ -1,3 +1,16 @@
+# FORMIQ | Issue #35 — Timeweb VPS + GitHub Actions, offline pilot (27.10.2026)
+
+**Состояние:** подготовка только в отдельной ветке `pilot/issue-35-timeweb-vps-offline-20261027`, на базе опубликованного main `f0f46c2b2e598b2e3811fc8af66d5f161a3d8643`. Релиз, merge, Render, Telegram, production PostgreSQL и покупка ресурсов **не выполнялись**.
+
+- Отдельный WSGI `formiq_wsgi.py` не запускает `init_db`, `replay_pending`, изменение аватара/брендинга и `BOT.set_webhook`. Текущий Render `python main.py` сохраняет прежнее поведение.
+- Проект `deploy/timeweb/formiq-web.service` и `requirements-timeweb.txt` описывают будущий единственный web-процесс. Права, systemd, TLS и Pg18 в Timeweb ещё не настроены.
+- `.github/workflows/timeweb-pilot.yml` — только изолированный CI `pull_request` или ручной offline запуск, без SSH, секретов и любого deploy. `scripts/timeweb-pilot.sh` упаковывает allowlist отслеживаемых файлов и маркер SHA внутри временного CI runner без выгрузки артефакта. `scripts/timeweb_release.py simulate` проверяет атомарный указатель release, healthcheck, откат, фальшивые SHA и защиту от секретов; **производственная активация отключена без отдельного разрешения**.
+- Добавлены отрицательные тесты `tests/test_timeweb_pilot.py`. **Exact-head CI пока подлежит отдельной проверке**; успех не заявлять до готового workflow run.
+- Подробнее: `docs/TIMEWEB_PILOT_RUNBOOK.md`. Для реального автоматического обновления нужны закупка, защищённые окружения GitHub с required reviewer, ограниченный SSH, настройка ОС/TLS/managed PG18, контрольный backup+restore, cutover без двойного Telegram webhook и отдельное разрешение владельца.
+- **Критический NO-GO:** encrypted production PG backup + isolated restore отсутствуют. Render PostgreSQL Free истекает 19.11.2026 22:50 МСК. Юридическая оценка конкретной 152-ФЗ инфраструктуры не выполнена.
+
+---
+
 # FORMIQ | ТЗ №3 — Подключения и подтверждение FatSecret (26.10.2026)
 
 **Статус: написано в Draft PR #29, НЕ опубликовано.** Ветка `fix/tz3-p0-history-health-viewport-20261026`. Основная ветка и Render Live ранее подтверждены на `20c2efcadff6fe2f15844ee273604ad638414a68`. Разрешения на merge/deploy ТЗ №3 нет.
