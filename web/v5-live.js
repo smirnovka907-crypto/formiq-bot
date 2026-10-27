@@ -948,7 +948,9 @@ function food(){
  const nutritionLine=n=>'≈ '+esc(n.kcal)+' ккал · Б '+esc(n.protein_g)+' г · Ж '+esc(n.fat_g)+' г · У '+esc(n.carbs_g)+' г';
  const totalContent=totals?(totals.complete?
    '<p role="status"><strong>КБЖУ за день: '+nutritionLine(totals.totals)+'</strong></p>':
-   '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+esc(totals.total_items)+' продуктов.</strong>'+
+   '<p role="status"><strong>Данные за день неполные: '+esc(totals.resolved_items)+' из '+
+   esc(totals.total_items+(totals.unresolved_items||0))+' позиций.</strong>'+
+   (totals.unresolved_items?' Требуют уточнения: '+esc(totals.unresolved_items)+'.':'')+
    (totals.known_subtotal?' Сумма известных значений: '+nutritionLine(totals.known_subtotal)+'.':' Нет известных значений КБЖУ.')+'</p>'):'';
  const canRecheck=state?.food_catalog_available&&saved.some(m=>m.items.some(x=>x.nutrition_source==='fatsecret'));
  const nutritionButton=canRecheck?
