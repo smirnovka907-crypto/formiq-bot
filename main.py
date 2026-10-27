@@ -1910,13 +1910,19 @@ def set_prompt(chat, wid, pos, no, mid=None):
 
 
 def recalc_item(c, wid, pos):
-    total, pending, skipped = c.execute('''SELECT COUNT(*),COUNT(*) FILTER(WHERE state='pending'),
-        COUNT(*) FILTER(WHERE state='skipped') FROM workout_sets
-        WHERE workout_id=%s AND position=%s''', (wid, pos)).fetchone()
+    total,pending,skipped,completed=c.execute('''SELECT COUNT(*),
+        COUNT(*) FILTER(WHERE state='pending'),
+        COUNT(*) FILTER(WHERE state='skipped'),
+        COUNT(*) FILTER(WHERE state='done')
+        FROM workout_sets WHERE workout_id=%s AND position=%s''',
+        (wid,pos)).fetchone()
     if total:
+        # A partially performed exercise is not an entirely skipped exercise.
+        # Preserve the actual set rows for detailed training history.
         c.execute('''UPDATE workout_items SET done=%s,skipped=%s
                      WHERE workout_id=%s AND position=%s''',
-                  (pending == 0 and skipped == 0, pending == 0 and skipped > 0, wid, pos))
+                  (pending == 0 and skipped == 0,
+                   pending == 0 and skipped > 0 and completed == 0,wid,pos))
 
 
 def record_set(chat, wid, pos, no, value, mid=None):
