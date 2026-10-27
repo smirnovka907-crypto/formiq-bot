@@ -135,6 +135,12 @@ class SchedulePostgresTests(unittest.TestCase):
                             'per_serving':{'kcal':370,'protein_g':12,
                                            'fat_g':6,'carbs_g':62}}]}
         match=self.m.food_auto_match_candidates
+        candidate=self.m.food_auto_candidate_id
+        search_hit={'food_id':'123','name':'Овсянка сухая','brand':None,'servings':[]}
+        self.assertEqual(candidate('Овсянка сухая',[search_hit]),'123')
+        self.assertIsNone(candidate('Овсянка сухая',[search_hit,search_hit]))
+        self.assertIsNone(candidate('Овсянка сухая',[{**search_hit,'brand':'Бренд'}]))
+        self.assertIsNone(match('Овсянка сухая',[search_hit]))
         self.assertEqual(match('Овсянка сухая',[valid]),('123','4'))
         self.assertIsNone(match('Овсянка вареная',[valid]))
         self.assertIsNone(match('Овсянка сухая',[valid,valid]))
@@ -204,7 +210,11 @@ class SchedulePostgresTests(unittest.TestCase):
         catalog={'рис сухой':rice,'курица':chicken}
         fake=Mock()
         fake.get_token.return_value='OFFLINE_TOKEN'
-        fake.search.side_effect=lambda name,token: [catalog[name]]
+        # Real FatSecret food search results carry an ID/name but often no
+        # serving list; only food.get.v5 is sufficient for verified nutrients.
+        fake.search.side_effect=lambda name,token: [
+            {'food_id':catalog[name]['food_id'],
+             'name':catalog[name]['name'],'brand':None,'servings':[]}]
         fake.food_by_id.side_effect=lambda fid,token: {'15':rice,'16':chicken}[fid]
         with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \
              patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \

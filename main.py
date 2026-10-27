@@ -4224,6 +4224,23 @@ def food_resolve_fragment(chat, body):
     return food_history(chat,{'date':meal[0].isoformat()})
 
 
+def food_auto_candidate_id(name, options):
+    """Select a unique unbranded search hit before fetching verified food details.
+
+    FatSecret search/v5 generally has no servings, so search hits must NEVER
+    be treated as sufficient evidence of nutrition.
+    """
+    if not isinstance(options,list):
+        return None
+    canon=lambda s:' '.join(str(s).casefold().replace('ё','е').split())
+    exact=[row for row in options if isinstance(row,dict)
+           and canon(row.get('name',''))==canon(name)
+           and not row.get('brand')
+           and isinstance(row.get('food_id'),str)
+           and row['food_id'].isdecimal() and len(row['food_id'])<=20]
+    return exact[0]['food_id'] if len(exact)==1 else None
+
+
 def food_auto_match_candidates(name, options):
     """Only unambiguous exact catalogue names may receive automatic provider IDs.
 
@@ -4275,12 +4292,14 @@ def food_auto_link_recent(chat, item_ids):
     updated=0
     for item_id,name in item_ids[:6]:
         try:
-            match=food_auto_match_candidates(name,client.search(name,token))
-            if not match:
+            candidate_id=food_auto_candidate_id(name,client.search(name,token))
+            if not candidate_id:
                 continue
-            # Re-fetch exact ID: a search result is insufficient to certify a serving.
-            verified=client.food_by_id(match[0],token)
-            if food_auto_match_candidates(name,[verified])!=match:
+            # Search results have no verified servings. Require food.get.v5,
+            # then validate the exact name, unbranded identity and nutrients.
+            verified=client.food_by_id(candidate_id,token)
+            match=food_auto_match_candidates(name,[verified])
+            if not match or match[0]!=candidate_id:
                 continue
             with db() as conn:
                 changed=conn.execute("""UPDATE manual_food_items SET
