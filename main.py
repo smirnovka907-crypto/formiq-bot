@@ -4134,9 +4134,8 @@ def food_add_text(chat,body):
         raise ValueError('Выбери приём пищи')
     raw_text=body.get('text')
     parsed=food_parse({'text':raw_text})
-    # Do not send already understood food to AI or delay a routine save.
-    if parsed['unparsed']:
-        parsed=food_parse_ai(chat,raw_text) or parsed
+    # Persist first. An external AI outage must not delay or prevent diary
+    # saving. Verified catalogue enrichment remains a separate API request.
     unresolved=[str(row['text']) for row in parsed['unparsed']]
     request_id=body.get('request_id')
     if request_id is not None and (

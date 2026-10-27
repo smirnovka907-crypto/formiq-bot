@@ -243,6 +243,17 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_auto_enrich(self.chat,
                 {'date':'2026-10-18'})['catalog_matches'],0)
 
+    def test_tz5_save_unknown_food_does_not_wait_for_ai(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'food_parse_ai',side_effect=RuntimeError(
+                'external AI unavailable')) as ai:
+            saved=self.m.food_add_text(self.chat,{
+                'date':'2026-10-18','meal_type':'snack','text':'стакан молока'})
+        ai.assert_not_called()
+        self.assertEqual(saved['unparsed_texts'][0]['text'],'стакан молока')
+        self.assertEqual(saved['unparsed_texts'][0]['unresolved_fragments'],
+            ['стакан молока'])
+
     def test_tz5_one_tap_save_retry_does_not_duplicate_food(self):
         self.m.save_onboarding(self.chat,self.body())
         request={'date':'2026-10-18','meal_type':'lunch',
