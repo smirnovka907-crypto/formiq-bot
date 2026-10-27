@@ -175,8 +175,8 @@ class FoodAllergyPrivacyTests(unittest.TestCase):
     def test_tz6_server_safety_gate_returns_requested_three_states(self):
         prefs={'recommendations_allowed':True,'choice':'declared',
                'items':normalise_restrictions([{'name':'Яйца','kind':'allergy'}])}
-        with patch.object(self.m,'has_agreement',return_value=True), \\
-             patch.object(self.m,'food_allergy_state',return_value=prefs):
+        with (patch.object(self.m,'has_agreement',return_value=True),
+              patch.object(self.m,'food_allergy_state',return_value=prefs)):
             verified=evidence(['рис','вода'])['composition']
             egg=evidence(['яичный порошок'])['composition']
             self.assertEqual(self.m.check_food_safety(777,'рис',verified,
