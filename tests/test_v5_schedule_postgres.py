@@ -164,6 +164,22 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
                              [{'name':'овсянка','grams':80.0}])
 
+    def test_tz5_one_tap_save_retry_does_not_duplicate_food(self):
+        self.m.save_onboarding(self.chat,self.body())
+        request={'date':'2026-10-18','meal_type':'lunch',
+                 'text':'рис сухой 80 г; курица 150 г',
+                 'request_id':'food-save-retry-test-123'}
+        first=self.m.food_add_text(self.chat,request)
+        second=self.m.food_add_text(self.chat,request)
+        self.assertEqual(first['meals'],second['meals'])
+        self.assertEqual(len(second['meals'][0]['items']),2)
+        with self.connect() as conn:
+            row=conn.execute("""SELECT COUNT(*) FROM food_save_requests
+                WHERE chat_id=%s""",(self.chat,)).fetchone()
+        self.assertEqual(row[0],1)
+        with self.assertRaises(ValueError):
+            self.m.food_add_text(self.chat,{**request,'request_id':'invalid id'})
+
     def test_tz5_one_tap_food_keeps_raw_text_without_fake_macros(self):
         self.m.save_onboarding(self.chat,self.body())
         raw='Овсянка 80 г, творог 5% 200 г, банан 120 г, стакан воды'
