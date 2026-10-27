@@ -30,6 +30,7 @@ function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asi
 let onboardOpen=false,onboard=null,onboardErrors={};
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview',detailOrigin='';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
+let foodSaveRequestId='';
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
 let foodDaily=null,foodDailyBusy=false,foodDailyError='',foodDailySeq=0;
 let foodMonth='',foodMonthMarks=null,foodMonthBusy=false,foodMonthSeq=0;
@@ -1199,7 +1200,7 @@ app.addEventListener('input',e=>{
  if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  // Calendar month changes only through the arrow buttons; do not reset date drafts.
- if(e.target.id==='food-text')foodText=e.target.value;
+ if(e.target.id==='food-text'){foodText=e.target.value;foodSaveRequestId=''}
  const metric=String(e.target.id||'').replace(/^profile-/,'');
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
@@ -1447,10 +1448,12 @@ app.addEventListener('click',async e=>{
   foodText=String(document.getElementById('food-text')?.value??foodText).trim();
   foodMeal=document.getElementById('food-meal')?.value||foodMeal;
   if(!foodText){fail('Напиши продукты и количество');return}
+  if(!foodSaveRequestId)foodSaveRequestId=(typeof crypto!=='undefined'&&crypto.randomUUID?
+    crypto.randomUUID():'formiq-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));
   try{
-   const saved=await request('food_add_text',{date:foodDate,meal_type:foodMeal,text:foodText});
+   const saved=await request('food_add_text',{date:foodDate,meal_type:foodMeal,text:foodText,request_id:foodSaveRequestId});
    foodHistory=saved;foodUnparsed=saved.unparsed||[];
-   foodText='';foodDraft=[];foodNotice=saved.notice||'Запись сохранена.';
+   foodText='';foodSaveRequestId='';foodDraft=[];foodNotice=saved.notice||'Запись сохранена.';
    error='';void requestFoodDaily();void loadFoodMonth();
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты. Текст сохранён на экране.'}
   draw();return;
