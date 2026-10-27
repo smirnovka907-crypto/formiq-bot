@@ -4208,6 +4208,8 @@ def food_resolve_fragment(chat, body):
         if not meal or not isinstance(meal[1],list) or idx>=len(meal[1]):
             raise ValueError('Запись уже уточнена или не найдена')
         unresolved=list(meal[1])
+        if not isinstance(body.get('expected_text'),str) or unresolved[idx]!=body['expected_text']:
+            raise ValueError('Запись была изменена. Обнови дневник и проверь продукт')
         unresolved.pop(idx)
         conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
             VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
