@@ -4032,17 +4032,31 @@ def food_parse_ai(chat, text):
         response_text=reply['result']['alternatives'][0]['message']['text']
         obj=json.loads(response_text[response_text.index('{'):response_text.rindex('}')+1])
         rows=obj.get('items')
-        if not isinstance(rows,list) or len(rows)>30:
+        if not isinstance(rows,list) or len(rows)!=1:
             return None
-        # The deterministic parser is authoritative for every explicit amount.
-        # AI is currently advisory only: it cannot silently alter source grams.
-        baseline=food_parse({'text':text})
-        trusted={(row['name'].casefold(),row['grams']) for row in baseline['items']}
-        if any(not isinstance(row,dict) or set(row)!={'name','grams'} or
-               not isinstance(row['name'],str) or
-               (row['name'].casefold(),row['grams']) not in trusted for row in rows):
+        # Explicit weight is authoritative, never an inferred model serving.
+        amounts=re.findall(r'(?<!\d)(\d{1,4}(?:[.,]\d{1,2})?)\s*(?:граммов|грамма|грамм|гр|г|g)(?![а-яa-z])',
+                           text,flags=re.IGNORECASE)
+        if len(amounts)!=1:
             return None
-        return baseline
+        row=rows[0]
+        if not isinstance(row,dict) or set(row)!={'name','grams'} or type(row['grams']) not in (int,float):
+            return None
+        name,grams=food_item(row['name'],row['grams'])
+        if Decimal(amounts[0].replace(',','.'))!=grams:
+            return None
+        original=re.findall(r'[a-zа-яё]+',text.casefold())
+        proposed=re.findall(r'[a-zа-яё]+',name.casefold())
+        # Reject food substitutions, keeping only grounded word inflections.
+        if not proposed or any(not any(word.startswith(token[:min(4,len(token))])
+                               for word in original) for token in proposed):
+            return None
+        if food_preparation_state(name)!=food_preparation_state(text):
+            return None
+        if re.search(r'\b(?:плов|борщ|суп|омлет|пицца|шаурма|лазанья|рагу|запеканка)\b',
+                     text,re.IGNORECASE) or any(char in text for char in '()'):
+            return None
+        return {'items':[{'name':name,'grams':float(grams)}],'unparsed':[]}
     except (ValueError,TypeError,KeyError,IndexError,urllib.error.HTTPError,
             urllib.error.URLError,TimeoutError,json.JSONDecodeError):
         return None
@@ -4313,6 +4327,43 @@ def food_auto_link_recent(chat, item_ids):
 
 
 
+def food_ai_resolve_saved_fragments(chat, day):
+    """Optional AI normalisation strictly AFTER the meal has been persisted.
+
+    Scope to owner's one unresolved fragment. Lock and compare before adding
+    so retries and concurrent manual edits cannot duplicate or erase data.
+    """
+    if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
+        return 0
+    with db() as conn:
+        rows=conn.execute("""SELECT id,unresolved_fragments FROM manual_food_meals
+            WHERE chat_id=%s AND eaten_on=%s
+              AND jsonb_array_length(unresolved_fragments)>0
+            ORDER BY id DESC LIMIT 1""",(chat,day)).fetchall()
+    for meal_id,fragments in rows:
+        fragment=next((f for f in fragments if isinstance(f,str) and len(f)<=200),None)
+        if not fragment:
+            continue
+        parsed=food_parse_ai(chat,fragment)
+        if not parsed or len(parsed.get('items',[]))!=1:
+            continue
+        name,grams=food_item(parsed['items'][0]['name'],parsed['items'][0]['grams'])
+        with db() as conn:
+            conn.execute('SELECT pg_advisory_xact_lock(%s::bigint)',(chat,))
+            current=conn.execute("""SELECT unresolved_fragments FROM manual_food_meals
+                WHERE id=%s AND chat_id=%s FOR UPDATE""",(meal_id,chat)).fetchone()
+            if not current or fragment not in current[0]:
+                continue
+            left=list(current[0])
+            left.remove(fragment)
+            conn.execute("""INSERT INTO manual_food_items(meal_id,chat_id,name,grams)
+                VALUES(%s,%s,%s,%s)""",(meal_id,chat,name,grams))
+            conn.execute("""UPDATE manual_food_meals SET unresolved_fragments=%s::jsonb
+                WHERE id=%s AND chat_id=%s""",(json.dumps(left),meal_id,chat))
+            return 1
+    return 0
+
+
 def food_auto_enrich(chat, body):
     """Explicit owner-scoped optional lookup, independent of saving a meal.
 
@@ -4322,6 +4373,7 @@ def food_auto_enrich(chat, body):
     if not has_agreement(chat):
         raise ValueError('Сначала заполни анкету')
     day=food_day(body.get('date'))
+    recognized=food_ai_resolve_saved_fragments(chat,day)
     with db() as conn:
         rows=conn.execute("""SELECT i.id,i.name
             FROM manual_food_items i JOIN manual_food_meals m
@@ -4335,7 +4387,7 @@ def food_auto_enrich(chat, body):
                 AND i.manual_carbs_g_100g IS NULL
             ORDER BY i.id DESC LIMIT 6""",(chat,day)).fetchall()
     linked=food_auto_link_recent(chat,rows)
-    return {'date':day.isoformat(),'catalog_matches':linked}
+    return {'date':day.isoformat(),'catalog_matches':linked,'ai_recognized':recognized}
 
 
 def food_change(chat,body,delete=False):

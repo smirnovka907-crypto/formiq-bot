@@ -895,11 +895,10 @@ async function requestFoodDaily(){
  }
 }
 async function enrichFoodDayAfterSave(day){
- if(!state?.food_catalog_available)return;
  try{
   const result=await request('food_auto_enrich',{date:day});
   // A slow catalogue call must never overwrite edits or another day's view.
-  if(day===foodDate&&result.catalog_matches>0)void loadFoodHistory();
+  if(day===foodDate&&(result.catalog_matches>0||result.ai_recognized>0))void loadFoodHistory();
  }catch(_ex){
   // Original food was already saved. Missing catalogue is not a save failure.
  }
