@@ -126,10 +126,13 @@ function createClient(auth=true,shared={}){
    else if(p.action==='food_nutrition_day'){
     const entries=(shared.foodMeals||[]).flatMap(m=>m.items||[]);
     const registered=entries.filter(x=>x.nutrition_source==='fatsecret');
-    const full=!!entries.length&&registered.length===entries.length;
+    const unresolved=(shared.foodUnparsed||[]).reduce((count,row)=>
+      count+(row.unresolved_fragments||[]).length,0);
+    const full=!!entries.length&&registered.length===entries.length&&!unresolved;
     const kcal=registered.length*266;
     response={ok:true,source:'fatsecret',date:p.date,total_items:entries.length,
-      resolved_items:registered.length,complete:full,partial:!full,
+      resolved_items:registered.length,unresolved_items:unresolved,
+      complete:full,partial:!full,
       totals:full?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
       known_subtotal:registered.length?{kcal,protein_g:9.1*registered.length,fat_g:4.9*registered.length,carbs_g:46.9*registered.length}:null,
       meals:(shared.foodMeals||[]).map(m=>({type:m.type,total_items:m.items.length,
@@ -500,6 +503,16 @@ async function run(){
  assert.ok(fragmentClient.requests.some(x=>x.action==='food_resolve_fragment'
     &&x.meal_id===51&&x.grams==='200'));
  assert.doesNotMatch(fragmentClient.root.innerHTML,/Уточнить нераспознанные продукты/);
+
+ const rawOnly=createClient(true,{foodUnparsed:[{
+  meal_id:851,meal_type:'snack',text:'домашнее пюре',
+  unresolved_fragments:['домашнее пюре']}]});
+ await settle();await rawOnly.click({nav:'food'});await settle();
+ assert.ok(rawOnly.requests.some(x=>x.action==='food_nutrition_day'),
+  'Raw-only meals must request daily nutrition completeness');
+ assert.match(rawOnly.root.innerHTML,/Данные за день неполные/);
+ assert.match(rawOnly.root.innerHTML,/Требуют уточнения: 1/);
+ assert.doesNotMatch(rawOnly.root.innerHTML,/КБЖУ за день:/);
 
  const quick=createClient(true,{foodCatalogAvailable:true});
  await settle();await quick.click({nav:'food'});await settle();
