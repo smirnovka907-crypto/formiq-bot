@@ -167,6 +167,48 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(self.m.food_parse_ai(self.chat,'овсянка 80 г')['items'],
                              [{'name':'овсянка','grams':80.0}])
 
+    def test_tz5_one_tap_meal_immediate_save_then_source_backed_totals(self):
+        from unittest.mock import Mock
+        self.m.save_onboarding(self.chat,self.body())
+        rice={'food_id':'15','name':'рис сухой','brand':None,
+              'servings':[{'serving_id':'151','grams':100,
+                            'per_serving':{'kcal':350,'protein_g':7,
+                                           'fat_g':1,'carbs_g':78}}]}
+        chicken={'food_id':'16','name':'курица','brand':None,
+              'servings':[{'serving_id':'161','grams':100,
+                            'per_serving':{'kcal':165,'protein_g':31,
+                                           'fat_g':3.6,'carbs_g':0}}]}
+        catalog={'рис сухой':rice,'курица':chicken}
+        fake=Mock()
+        fake.get_token.return_value='OFFLINE_TOKEN'
+        fake.search.side_effect=lambda name,token: [catalog[name]]
+        fake.food_by_id.side_effect=lambda fid,token: {'15':rice,'16':chicken}[fid]
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','test'), \\
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','test'), \\
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake), \\
+             patch.object(self.m,'food_parse_ai') as ai:
+            saved=self.m.food_add_text(self.chat,{'date':'2026-10-18',
+                'meal_type':'lunch','text':'рис сухой 80 г и курица 150 г'})
+            ai.assert_not_called()
+            fake.search.assert_not_called()
+            self.assertEqual(len(saved['meals'][0]['items']),2)
+            self.assertTrue(all(x['nutrition_source'] is None
+                for x in saved['meals'][0]['items']))
+            self.assertEqual(self.m.food_auto_enrich(self.chat+1,
+                {'date':'2026-10-18'})['catalog_matches'],0)
+            linked=self.m.food_auto_enrich(self.chat,
+                {'date':'2026-10-18'})
+            self.assertEqual(linked['catalog_matches'],2)
+            complete=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+            self.assertTrue(complete['complete'])
+            self.assertEqual(complete['source'],'fatsecret')
+            self.assertEqual(complete['totals']['kcal'],527.5)
+            self.assertEqual(complete['totals']['protein_g'],52.1)
+            self.assertEqual(complete['totals']['fat_g'],6.2)
+            self.assertEqual(complete['totals']['carbs_g'],62.4)
+            self.assertEqual(self.m.food_auto_enrich(self.chat,
+                {'date':'2026-10-18'})['catalog_matches'],0)
+
     def test_tz5_one_tap_save_retry_does_not_duplicate_food(self):
         self.m.save_onboarding(self.chat,self.body())
         request={'date':'2026-10-18','meal_type':'lunch',
