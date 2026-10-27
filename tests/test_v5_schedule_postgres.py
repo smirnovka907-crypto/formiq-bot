@@ -973,6 +973,53 @@ class SchedulePostgresTests(unittest.TestCase):
                     for table in ('workouts', 'workout_items', 'workout_sets',
                                   'cardio_sessions', 'pending_inputs', 'rest_timers')}
 
+    def test_tz5_legacy_bot_finish_skip_never_delete_real_sets(self):
+        with self.connect() as conn:
+            empty=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'A') RETURNING id""",(self.chat,)).fetchone()[0]
+            cancelled=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'B') RETURNING id""",(self.chat,)).fetchone()[0]
+            partial=conn.execute("""INSERT INTO workouts(chat_id,plan_day)
+                VALUES(%s,'C') RETURNING id""",(self.chat,)).fetchone()[0]
+            for wid in (cancelled,partial):
+                conn.execute("""INSERT INTO workout_items(
+                    workout_id,position,exercise,target)
+                    VALUES(%s,1,'Приседания','2 по 8')""",(wid,))
+                for no in (1,2):
+                    state='done' if wid==partial and no==1 else 'pending'
+                    conn.execute("""INSERT INTO workout_sets(
+                        workout_id,position,set_no,target_min,target_max,unit,
+                        state,actual_value)
+                        VALUES(%s,1,%s,8,12,'reps',%s,%s)""",
+                        (wid,no,state,8 if state=='done' else None))
+        with patch.object(self.m,'send') as send:
+            self.m.finish_workout(self.chat,empty)
+            self.m.finish_workout(self.chat,empty)
+            self.m.cancel_workout(self.chat+1,cancelled)
+            self.m.cancel_workout(self.chat,cancelled)
+            self.m.finish_workout(self.chat,partial)
+        self.assertTrue(send.called)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT id,status,finished_at FROM workouts
+                WHERE id IN (%s,%s,%s) ORDER BY id""",
+                (empty,cancelled,partial)).fetchall()
+            self.assertEqual([row[1] for row in rows],
+                             ['finished_empty','skipped','finished'])
+            self.assertTrue(all(row[2] is not None for row in rows))
+            saved=conn.execute("""SELECT s.workout_id,s.set_no,s.state
+                FROM workout_sets s WHERE s.workout_id IN (%s,%s)
+                ORDER BY s.workout_id,s.set_no""",(cancelled,partial)).fetchall()
+            self.assertEqual(len(saved),4)
+            self.assertEqual([row[2] for row in saved],
+                             ['skipped','skipped','done','skipped'])
+            item=conn.execute("""SELECT done,skipped FROM workout_items
+                WHERE workout_id=%s AND position=1""",(partial,)).fetchone()
+            self.assertEqual(item,(False,False),
+                'One completed set must never be marked wholly skipped')
+            self.assertEqual(conn.execute("""SELECT COUNT(*) FROM workout_items
+                WHERE workout_id IN (%s,%s)""",
+                (cancelled,partial)).fetchone()[0],2)
+
     def test_tz5_zero_set_finish_skip_and_partial_progress_persist(self):
         self.m.save_onboarding(self.chat,self.body())
         for completed, action, expected in [
