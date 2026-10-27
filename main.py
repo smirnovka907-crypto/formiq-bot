@@ -4155,6 +4155,12 @@ def food_auto_match_candidates(name, options):
         return None
     if food_preparation_state(name)!=food_preparation_state(option['name']):
         return None
+    # Dry vs cooked nutrition is very different for these foods; an unspecified
+    # preparation cannot justify automatic nutritional attribution.
+    if food_preparation_state(name) is None and re.search(
+            r'овсян|греч|рис|макарон|круп|паст|перлов|манн',
+            name.casefold().replace('ё','е')):
+        return None
     fid,sid=option.get('food_id'),portions[0].get('serving_id')
     return (fid,sid) if isinstance(fid,str) and fid.isdecimal() and isinstance(sid,str) and sid.isdecimal() else None
 
