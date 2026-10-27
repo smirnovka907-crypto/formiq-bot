@@ -6,6 +6,7 @@ Telegram updates, changes branding, or sets any webhook. Current Render uses
 """
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 if os.getenv("FORMIQ_RUNTIME_ROLE") != "timeweb-web":
     raise RuntimeError("Timeweb WSGI role must be explicitly selected")
@@ -14,6 +15,11 @@ if not base.startswith("https://") or "onrender.com" in base.lower():
     raise RuntimeError("A non-Render HTTPS base URL must be explicitly configured")
 if not os.getenv("TELEGRAM_BOT_TOKEN") or not os.getenv("DATABASE_URL"):
     raise RuntimeError("Approved Timeweb runtime credentials are required")
+
+# Refuse cross-cloud access to the still-live Render production database.
+host = urlsplit(os.environ["DATABASE_URL"]).hostname or ""
+if host == "render.com" or host.endswith(".render.com"):
+    raise RuntimeError("Timeweb WSGI cannot connect to existing Render PostgreSQL")
 
 from main import APP as application  # noqa: E402  (no __main__ side effects)
 
