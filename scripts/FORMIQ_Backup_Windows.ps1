@@ -77,7 +77,8 @@ try {
     Write-Host '3 - Verify an existing encrypted backup'
     Write-Host '4 - Restore to a NEW empty local formiq_restore and compare with Render'
     Write-Host '5 - Install/upgrade the local cryptography dependency'
-    $choice = Read-Host 'Select 1-5'
+    Write-Host '6 - Print SHA256 of an encrypted .fiqenc (also supports downloaded copy)'
+    $choice = Read-Host 'Select 1-6'
     switch ($choice) {
         '1' { Write-Host 'TOOLS_OK: Python 3.12+, PostgreSQL client 18' }
         '2' {
@@ -101,6 +102,11 @@ try {
         '5' {
             Run-Python @('-m','pip','install','-r','requirements-backup.txt')
             Write-Host 'Local cryptography dependency installed.'
+        }
+        '6' {
+            $file = Select-EncryptedFile
+            $hash = Get-FileHash -LiteralPath $file -Algorithm SHA256
+            Write-Host ('Encrypted archive SHA256: ' + $hash.Hash.ToLowerInvariant())
         }
         default { throw 'Invalid option. No operation performed.' }
     }
