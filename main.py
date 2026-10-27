@@ -4014,11 +4014,19 @@ def food_parse_ai(chat, text):
     """
     if not (YANDEX_KEY and FOLDER_ID) or not personalization_consent(chat)['profile']:
         return None
-    system=('Extract only explicitly stated foods and their gram weights from the text. '
-            'Keep raw/cooked qualifiers. Never infer grams from pieces, cups, or portions. '
-            'Do not estimate calories or nutrients. Reply only JSON '
-            '{"items":[{"name":"original food phrase","grams":100}]}. '
-            'No more than 30 entries. Preserve names and gram weights exactly.')
+    # Food interpretation consent is not consent to transmit medical notes.
+    # Exclude diary fragments containing health statements before external AI.
+    if re.search(r'аллерг|непереносим|диабет|диагноз|болезн|лекарств|'
+                 r'инсулин|травм|беремен|менстру|хронич|болит|боль',
+                 text,re.IGNORECASE):
+        return None
+    system=('Extract one explicitly weighed food from this Russian diary fragment. '
+            'Normalise only grammatical case (for example курицу to курица). '
+            'Keep food identity and raw/cooked state unchanged. '
+            'Never infer grams from pieces, cups or portions; never invent '
+            'calories or nutrients. Reply only JSON '
+            '{"items":[{"name":"food name","grams":100}]}. '
+            'Return an empty items list when the mass or identity is ambiguous.')
     request_body={'modelUri':f'gpt://{FOLDER_ID}/{MODEL}',
         'completionOptions':{'stream':False,'temperature':0,'maxTokens':'900'},
         'messages':[{'role':'system','text':system},{'role':'user','text':text}]}

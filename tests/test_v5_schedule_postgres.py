@@ -232,6 +232,16 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(check('стакан молока',{'name':'молоко','grams':200}))
         self.assertIsNone(check('плов 150 г',{'name':'плов','grams':150}))
 
+    def test_tz5_food_health_note_never_sent_to_yandex(self):
+        self.m.save_onboarding(self.chat,self.body())
+        with patch.object(self.m,'personalization_consent',return_value={'profile':True}), \
+             patch.object(self.m,'YANDEX_KEY','local-test'), \
+             patch.object(self.m,'FOLDER_ID','local-test'), \
+             patch.object(self.m.urllib.request,'urlopen') as external:
+            self.assertIsNone(self.m.food_parse_ai(
+                self.chat,'аллергия на молоко, 150 г творога'))
+            external.assert_not_called()
+
     def test_tz5_resolve_unknown_food_preserves_raw_and_owner_isolation(self):
         self.m.save_onboarding(self.chat,self.body())
         self.m.save_onboarding(self.chat+1,self.body())
