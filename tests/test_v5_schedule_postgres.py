@@ -191,7 +191,7 @@ class SchedulePostgresTests(unittest.TestCase):
         from io import BytesIO
         import json
         self.m.save_onboarding(self.chat,self.body())
-        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг'
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг на ужин'
         chicken='курицу 150 граммов'
         rice='рисом сухим 0,2 кг'
         def response(rows):
@@ -231,7 +231,7 @@ class SchedulePostgresTests(unittest.TestCase):
         from io import BytesIO
         import json
         self.m.save_onboarding(self.chat,self.body())
-        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг'
+        raw='съел курицу 150 граммов вместе с рисом сухим 0,2 кг на ужин'
         with patch.object(self.m,'FATSECRET_CLIENT_ID',''), \
              patch.object(self.m,'YANDEX_KEY','offline-test'), \
              patch.object(self.m,'FOLDER_ID','offline-test'), \
