@@ -139,6 +139,8 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(match('Овсянка вареная',[valid]))
         self.assertIsNone(match('Овсянка сухая',[valid,valid]))
         self.assertIsNone(match('Овсянка',[valid]))
+        unspecified={**valid,'name':'Овсянка'}
+        self.assertIsNone(match('Овсянка',[unspecified]))
         self.assertIsNone(match('Овсянка сухая',[{**valid,'brand':'Марка'}]))
         self.assertIsNone(match('Овсянка сухая',[{**valid,'servings':[]}]))
         incomplete={**valid,'servings':[{'serving_id':'4','grams':100,'per_serving':{'kcal':370}}]}
