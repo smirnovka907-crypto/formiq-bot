@@ -187,6 +187,13 @@ class FoodAllergyPrivacyTests(unittest.TestCase):
                 source_verified=False)['status'],'blocked')
             self.assertEqual(self.m.check_food_safety(777,'блюдо',None,
                 source_verified=True)['status'],'needs_review')
+        with patch.object(self.m,'has_agreement',return_value=True), \
+             patch.object(self.m,'food_allergy_state',return_value={
+                 'choice':'none','items':[],'recommendations_allowed':True}):
+            self.assertEqual(self.m.check_food_safety(777,'рис',verified,
+                source_verified=True)['status'],'safe')
+            self.assertEqual(self.m.check_food_safety(777,'блюдо',None,
+                source_verified=True)['status'],'needs_review')
         with patch.object(self.m,'has_agreement',return_value=False):
             with self.assertRaises(ValueError):
                 self.m.check_food_safety(777,'рис',verified,source_verified=True)
