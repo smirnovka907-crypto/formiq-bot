@@ -145,6 +145,9 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(match('Овсянка сухая',[{**valid,'servings':[]}]))
         incomplete={**valid,'servings':[{'serving_id':'4','grams':100,'per_serving':{'kcal':370}}]}
         self.assertIsNone(match('Овсянка сухая',[incomplete]))
+        malformed={**valid,'servings':[{'serving_id':'4','grams':100,
+                          'per_serving':{'kcal':float('nan'),'protein_g':12,'fat_g':6,'carbs_g':62}}]}
+        self.assertIsNone(match('Овсянка сухая',[malformed]))
 
     def test_tz5_ai_food_requires_permission_and_never_invents_grams(self):
         self.m.save_onboarding(self.chat,self.body())
