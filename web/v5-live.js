@@ -967,7 +967,22 @@ function food(){
     nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
   meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
   '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
- const rawNotes=(foodHistory?.unparsed_texts||[]).filter(x=>x.text).map(x=>'<section class="surface soft"><h3>Исходная запись</h3><p>'+esc(x.text)+'</p><p class="input-note">Нераспознанные позиции сохранены без выдуманного веса и КБЖУ.</p></section>').join('');
+ const rawNotes=(foodHistory?.unparsed_texts||[]).filter(x=>x.text).map(x=>{
+  const pending=Array.isArray(x.unresolved_fragments)?x.unresolved_fragments:[];
+  const fields=pending.map((fragment,i)=>{
+   const key=String(x.meal_id)+'-'+i;
+   return '<div class="fq-food-draft"><strong>'+esc(fragment)+'</strong>'+
+    '<label class="field"><span>Уточни название продукта</span><input id="food-unknown-name-'+key+'" maxlength="120" placeholder="Название без меры посуды"></label>'+
+    '<label class="field"><span>Фактический вес, г</span><input id="food-unknown-grams-'+key+'" type="number" min="0.1" max="5000" step="0.1" placeholder="Например, 200"></label>'+
+    button('Подтвердить продукт','food-resolve-fragment',false,
+      'data-meal-id="'+esc(x.meal_id)+'" data-index="'+i+'"')+'</div>';
+  }).join('');
+  return '<section class="surface soft"><h3>Исходная запись</h3><p>'+esc(x.text)+'</p>'+
+   (pending.length?'<details><summary>Уточнить нераспознанные продукты ('+pending.length+')</summary>'+
+     '<p class="input-note">Укажи настоящий продукт и вес. Без подтверждения КБЖУ не рассчитываются.</p>'+
+     fields+'</details>':
+     '<p class="input-note">Все найденные нераспознанные позиции уточнены.</p>')+'</section>';
+ }).join('');
  const editRows=foodDraft.map((row,i)=>'<div class="fq-food-draft"><label class="field"><span>Продукт</span><input type="text" data-food-draft="'+i+'" data-field="name" value="'+esc(row.name||'')+'" maxlength="120"></label>'+
   '<label class="field"><span>Вес, г</span><input type="number" data-food-draft="'+i+'" data-field="grams" min="0.1" max="5000" step="0.1" value="'+esc(row.grams||'')+'"></label>'+
   '<details class="fq-food-manual"><summary>КБЖУ вручную на 100 г (необязательно)</summary>'+
@@ -1467,6 +1482,20 @@ app.addEventListener('click',async e=>{
    error='';void requestFoodDaily();void loadFoodMonth();
    void enrichFoodDayAfterSave(foodDate);
   }catch(ex){foodNotice=ex.message||'Не удалось сохранить продукты. Текст сохранён на экране.'}
+  draw();return;
+ }
+ if(cmd==='food-resolve-fragment'){
+  const mid=Number(element.dataset.mealId),idx=Number(element.dataset.index);
+  if(!Number.isSafeInteger(mid)||mid<=0||!Number.isInteger(idx)||idx<0)return;
+  const field=String(mid)+'-'+idx;
+  const name=String(document.getElementById('food-unknown-name-'+field)?.value||'').trim();
+  const grams=String(document.getElementById('food-unknown-grams-'+field)?.value||'').trim();
+  if(!name||!grams){foodNotice='Укажи название и вес продукта';draw();return}
+  try{
+   const result=await request('food_resolve_fragment',{meal_id:mid,fragment_index:idx,name,grams});
+   foodHistory=result;foodNotice='Продукт уточнён и сохранён.';
+   void requestFoodDaily();void loadFoodMonth();void enrichFoodDayAfterSave(foodDate);
+  }catch(ex){foodNotice=ex.message||'Не удалось уточнить запись'}
   draw();return;
  }
  if(cmd==='food-parse'){
