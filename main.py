@@ -2031,31 +2031,36 @@ def legacy_mark(chat, wid, pos, skip, mid=None):
 
 
 def finish_workout(chat, wid, mid=None):
+    """Close a Telegram-bot session without inventing any completed sets."""
     with db() as c:
-        done = c.execute('''SELECT COUNT(*) FROM workout_sets s JOIN workouts w ON w.id=s.workout_id
-                            WHERE s.workout_id=%s AND w.chat_id=%s
-                            AND w.status='active' AND s.state='done' ''', (wid, chat)).fetchone()[0]
-        legacy = c.execute('''SELECT COUNT(*) FROM workout_items i JOIN workouts w ON w.id=i.workout_id
-                              WHERE i.workout_id=%s AND w.chat_id=%s
-                              AND w.status='active' AND i.done''', (wid, chat)).fetchone()[0]
-        if done + legacy == 0:
-            return send(chat, 'Пока ничего не выполнено. Запиши подход или отмени занятие.',
-                        [('▶️ Тренировка', 'current'), ('❌ Отменить', f'cancel:{wid}')], mid)
-        row = c.execute('''UPDATE workouts SET status='finished',finished_at=NOW()
-                           WHERE id=%s AND chat_id=%s AND status='active' RETURNING id''',
-                        (wid, chat)).fetchone()
-        if row:
-            affected = c.execute('''UPDATE workout_sets SET state='skipped',completed_at=NOW()
-                                    WHERE workout_id=%s AND state='pending' RETURNING position''',
-                                 (wid,)).fetchall()
-            for pos in set(x[0] for x in affected):
-                recalc_item(c, wid, pos)
-            c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    if not row:
-        return send(chat, 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
-    send(chat, '🏁 Тренировка сохранена! Как ощущалась нагрузка?',
-         [('🙂 Легко', f'rate:{wid}:easy'), ('💪 Нормально', f'rate:{wid}:ok'),
-          ('😮‍💨 Тяжело', f'rate:{wid}:hard')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'finished_empty'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    if state=='finished_empty':
+        return send(chat,'Занятие закрыто без выполненных подходов. История сохранена.',
+                    [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
+    send(chat,'🏁 Тренировка сохранена! Как ощущалась нагрузка?',
+         [('🙂 Легко',f'rate:{wid}:easy'),('💪 Нормально',f'rate:{wid}:ok'),
+          ('😮‍💨 Тяжело',f'rate:{wid}:hard')],mid)
 
 
 def rate_workout(chat, wid, grade, mid=None):
@@ -2080,17 +2085,39 @@ def valid_signature(kind, chat, wid, until, sig):
 
 def confirm_cancel(chat, wid, mid=None):
     until = int(time.time()) + 600
-    send(chat, 'Отменить тренировку? Запись не попадёт в статистику.',
+    send(chat, 'Пропустить тренировку? Выполненные подходы сохранятся в истории.',
          [('❌ Подтвердить', f'cancel_yes:{wid}:{until}:{signed("cancel",chat,wid,until)}'),
           ('↩️ Продолжить', 'current')], mid)
 
 
 def cancel_workout(chat, wid, mid=None):
+    """Skip an active Telegram session; never delete its historical records."""
     with db() as c:
-        row = c.execute("DELETE FROM workouts WHERE id=%s AND chat_id=%s AND status='active' RETURNING id",
-                        (wid, chat)).fetchone()
-        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s', (chat,))
-    send(chat, 'Тренировка отменена.' if row else 'Тренировка уже закрыта.', [('🏠 Меню', 'menu')], mid)
+        owned=c.execute("""SELECT id FROM workouts WHERE id=%s AND chat_id=%s
+            AND status='active' FOR UPDATE""",(wid,chat)).fetchone()
+        if not owned:
+            return send(chat,'Тренировка уже закрыта.',[('🏠 Меню','menu')],mid)
+        done=c.execute("""SELECT COUNT(*) FROM workout_sets
+            WHERE workout_id=%s AND state='done'""",(wid,)).fetchone()[0]
+        legacy=c.execute("""SELECT COUNT(*) FROM workout_items
+            WHERE workout_id=%s AND done""",(wid,)).fetchone()[0]
+        state='finished' if done+legacy else 'skipped'
+        c.execute("""UPDATE workouts SET status=%s,finished_at=NOW()
+            WHERE id=%s AND chat_id=%s""",(state,wid,chat))
+        affected=c.execute("""UPDATE workout_sets
+            SET state='skipped',completed_at=NOW()
+            WHERE workout_id=%s AND state='pending' RETURNING position""",
+            (wid,)).fetchall()
+        for pos in set(x[0] for x in affected):
+            recalc_item(c,wid,pos)
+        c.execute("""UPDATE workout_items SET skipped=TRUE
+            WHERE workout_id=%s AND NOT done AND NOT skipped
+            AND NOT EXISTS (SELECT 1 FROM workout_sets
+                WHERE workout_id=%s)""",(wid,wid))
+        c.execute('DELETE FROM pending_inputs WHERE chat_id=%s',(chat,))
+    send(chat,'Подходы сохранены, остальные пропущены.' if state=='finished'
+         else 'Занятие пропущено без выполненных подходов.',
+         [('📅 Неделя','week'),('🏠 Меню','menu')],mid)
 
 
 def stats(chat, mid=None):
