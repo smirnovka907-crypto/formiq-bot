@@ -1,0 +1,2 @@
+# Isolated Timeweb VPS runtime, not installed by the existing Render build.
+gunicorn>=22,<24

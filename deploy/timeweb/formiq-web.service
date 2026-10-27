@@ -1,0 +1,26 @@
+# Design-only. NOT INSTALLED. A real setup requires separate owner approval.
+[Unit]
+Description=FORMIQ Timeweb web-only WSGI (no Telegram registration or DB migrations)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=formiq
+Group=formiq
+WorkingDirectory=/srv/formiq/current
+Environment=FORMIQ_RUNTIME_ROLE=timeweb-web
+EnvironmentFile=/etc/formiq/web.env
+ExecStart=/usr/bin/env /srv/formiq/current/.venv/bin/gunicorn --workers 1 --bind 127.0.0.1:8080 --timeout 45 formiq_wsgi:application
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,3 +1,70 @@
+# FORMIQ | Финальная сверка зашифрованной копии из Google Drive — PASS (27.10.2026)
+
+Владелец подтвердил через локальный Windows CMD двоичную сверку файла `formiq-production-20261027T160419Z-0c5338df.fiqenc` (оригинал на ПК против отдельно скачанного файла из закрытой папки Google Drive): `FC: no differences encountered`. Это доказательство побайтовой идентичности двух архивов; не выдавать за опубликованный SHA256-хеш.
+
+В совокупности подтверждены: шифрованный production backup, успешное восстановление в изолированную локальную PostgreSQL18, read-only `LOCAL_RESTORE_RECONCILED` (37 таблиц, 218 ограничений, 12 последовательностей, 4 проверки связей истории), наличие закрытой off-device копии и двоичная проверка после скачивания. Этап резервного копирования и тестового восстановления **PASS**.
+
+Для будущего без потерь cutover понадобится новый согласованный write-frozen backup; формальный RTO/RPO, регулярные резервные копии и регламент доступа ещё требуют решений. Нет merge/deploy, закупок или изменений Render Live/Telegram/production PostgreSQL. Предыдущие записи ниже отражают более ранние снимки проверки.
+
+---
+
+# FORMIQ | Внешняя зашифрованная копия Google Drive — подтверждение наличия (27.10.2026)
+
+**Подтверждено read-only через Google Drive:** в существующей закрытой папке FormIQ `05_Резервные копии БД` находится один файл `formiq-production-20261027T160419Z-0c5338df.fiqenc`, размер 75 803 байта, статус `not_shared` по метаданным Drive. Имя совпадает с файлом реального production restore, ранее подтверждённого владельцем; локальный restore-аудит сообщил `LOCAL_RESTORE_RECONCILED` (37 таблиц, 218 ограничений, 12 последовательностей, 4 связи). **SHA256 скачанного из Drive файла ещё не сравнивали с оригиналом; полная проверка off-device копии ожидается.** Ни файл, ни секреты не загружались в GitHub. Без merge/deploy, без изменений production.
+
+**Следующий шаг:** скачать именно эту зашифрованную копию из Google Drive на доверенный ПК отдельно от оригинала, сравнить SHA256 или двоичное содержимое с оригинальным `.fiqenc`, сохранить оба экземпляра. Перед миграцией потребуется свежий финальный write-frozen backup.
+
+---
+
+# FORMIQ | Реальная локальная резервная копия и test-restore — подтверждение владельца (27.10.2026)
+
+**Свидетельство:** владелец на своём Windows-компьютере выполнил реальный зашифрованный backup действующей Render PostgreSQL18 и восстановил его в отдельную локальную `formiq_restore`, после чего передал точный результат локальной read-only программы: `LOCAL_RESTORE_RECONCILED; counts, constraints and sequences match`. По переданному выводу: **37 таблиц, 218 ограничений, 12 последовательностей, 4 проверки связей истории**. Это подтверждение пользовательским логом; содержимое приватного архива и парольной фразы разработчику не передавались. Архив остаётся у владельца на компьютере, **загрузка в приватное внешнее хранилище и повторная SHA256-сверка скачанной копии пока не подтверждены**.
+
+**Границы:** сверка сделана относительно доступного Live-источника; после создания дампа новые production-записи возможны. Для миграции без потерь требуется отдельный финальный write-frozen backup, restore, допуск и план переключения. Настройка Timeweb, production deploy, покупка ресурсов, merge, Telegram cutover не производились. Наличие локального recoverable архива не снимает необходимость off-device копии, ротации, 152-ФЗ и управления раскрытыми ранее реквизитами. Не хранить DSN, пароли, сырые данные, приватный локальный путь в GitHub.
+
+**Следующий шаг:** владелец загружает только `.fiqenc` в существующую закрытую папку Google Drive `05_Резервные копии БД`, затем повторно скачивает файл и сверяет SHA256 с оригинальным архивом. Ничего не удалять до подтверждения успешной проверки. PR #36 остаётся Draft, без выпуска.
+
+---
+
+# FORMIQ | ТЗ после Issue #35 — Windows backup, synthetic PG18 restore и Timeweb cutover (27.10.2026)
+
+**Стадия:** развитие существующего **Draft PR #36**, без merge, deploy, затрат, реальных SSH/Telegram/Render/production PostgreSQL. Основание: основная инструкция Google Drive редакции 1.4, пункты 30.9–30.11 и 31.
+
+**Что добавлено в PR #36:**
+1. `scripts/FORMIQ_Backup_Windows.cmd` + `.ps1`: локальное меню, проверка Python>=3.12 и `pg_dump`/`pg_restore`/`psql`/`createdb` строго PostgreSQL 18; скрытые запросы URL Render и длинной парольной фразы; безопасное создание AES-256-GCM `.fiqenc`, GCM/TOC verify, SHA256; только новая пустая localhost `formiq_restore`, без удаления или перезаписи существующей БД. Скрипт backup из `main` сохранён без изменения формата архива. Секреты не записываются в репозиторий/файлы/лог, владелец вводит их только на доверенном ПК.
+2. `scripts/formiq_pg_restore_audit.py`: после успешного восстановления сравнивает PostgreSQL18 source и localhost только read-only SQL, полный список таблиц, количество строк в каждой, ограничения FK/PK/unique/check, значения sequence и явные связи истории тренировок/питания. При несовпадении — **NO-GO** без раскрытия пользовательских данных. При изменениях в источнике после дампа сопоставление может не пройти и не является транзакционной гарантией cutover.
+3. `tests/test_windows_pg18_restore.py`: настоящий end-to-end дамп **только синтетической** Docker PostgreSQL 18 через изолированные клиентские оболочки, поточное AES-шифрование, проверка, восстановление и сверка истории/PK/FK/sequences. Исправлена PostgreSQL 18 совместимость `contype::text`. [Integrations CI #40525472134](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40525472134) **SUCCESS** на предыдущем HEAD `5b17286a4b94f14e54dfd317ea87aa1bb0a16c2e`.
+4. `formiq_wsgi.py`: localhost-only DB readiness (PostgreSQL18 + обязательные таблицы) без изменения webhook или миграций. `scripts/timeweb_release.py`: будущий live healthcheck принимает релиз только если верны **и exact Git SHA, и PostgreSQL readiness**; при сбое синтетически восстанавливает предыдущий SHA, **не трогая БД**.
+5. `docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md` — подробная инструкция владельцу с пронумерованными шагами; `docs/FORMIQ_CUTOVER_PLAN.md` — отдельные bootstrap/DDL, replay_pending, freeze-write, single Telegram webhook, финальная зашифрованная копия и rollback без потери новых записей. Никаких реальных server/bootstrap действий не было.
+6. `.github/workflows/timeweb-pilot.yml`: offline-only плюс синтаксическая проверка Windows PowerShell и отказ при синтетических секретах; будущий deployment остаётся `if: false`. Exact-head CI после новых изменений проверяется отдельно.
+
+**NO-GO:** на настоящий production backup и успешный real-data restore подтверждений нет; Windows пользователя недоступен; Timeweb ресурсы, TLS/firewall, приватная managed PostgreSQL, protected GitHub Environment и SSH ещё не настроены/не проверены. 152-ФЗ для реального сегмента не согласован. Live Render PostgreSQL Free истекает **19.11.2026, 22:50 МСК**. Для корректного host-to-host rollback после новых записей нужна согласованная миграция/delta, не просто откат бинарника.
+
+**Следующий шаг владельца:** на своём Windows ПК пройти `docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md`: установить Python 3.12+, PostgreSQL 18, локально выполнить выбор 2, а затем выбор 4 в `scripts/FORMIQ_Backup_Windows.cmd`. Секреты вводятся только локально, сообщать разрешается только статус трёх проверок без URL/паролей.
+
+---
+
+# FORMIQ | Issue #35 — результаты offline dry-run CI (27.10.2026)
+
+**Верификация:** [Timeweb pilot Actions #40519894046](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519894046) **SUCCESS** на кодовом SHA `9b33785875618826426cb8a405e8dc9b767f754c` (WSGI импорт без внешних соединений, охрана реквизитов, systemd синтаксис, Python-тесты переключения и отката, allowlist SHA-архива). [Integrations offline #40519227208](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40519227208) **SUCCESS** на предыдущем кодовом SHA `cda18fa526c1fa273f1f68472fa1745a153b6da2` (API/Python, JavaScript, Chromium mobile, временная PostgreSQL 18). Полный тест на последнем кодовом SHA запускается отдельно, итог проверяется по точному HEAD после этого журнального коммита.
+
+**Граница:** реальный Timeweb VPS не создан. Никакого remote SSH, GitHub deployment, перемещения БД или webhook нет. Автоматический rollout проверен только в disposable симуляции. Future deployment job закреплён `if: false` и не исполняется. Формальная возможность required reviewers для публичного GitHub подтверждена официальными правилами, но реальная настройка Environment в аккаунте не проверена. Production encrypted backup/restore не подтверждены. **NO-GO на выпуск** до отдельного разрешения владельца и проверки данных/152-ФЗ.
+
+---
+
+# FORMIQ | Issue #35 — Timeweb VPS + GitHub Actions, offline pilot (27.10.2026)
+
+**Состояние:** подготовка только в отдельной ветке `pilot/issue-35-timeweb-vps-offline-20261027`, на базе опубликованного main `f0f46c2b2e598b2e3811fc8af66d5f161a3d8643`. Релиз, merge, Render, Telegram, production PostgreSQL и покупка ресурсов **не выполнялись**.
+
+- Отдельный WSGI `formiq_wsgi.py` не запускает `init_db`, `replay_pending`, изменение аватара/брендинга и `BOT.set_webhook`. Текущий Render `python main.py` сохраняет прежнее поведение.
+- Проект `deploy/timeweb/formiq-web.service` и `requirements-timeweb.txt` описывают будущий единственный web-процесс. Права, systemd, TLS и Pg18 в Timeweb ещё не настроены.
+- `.github/workflows/timeweb-pilot.yml` — только изолированный CI `pull_request` или ручной offline запуск, без SSH, секретов и любого deploy. `scripts/timeweb-pilot.sh` упаковывает allowlist отслеживаемых файлов и маркер SHA внутри временного CI runner без выгрузки артефакта. `scripts/timeweb_release.py simulate` проверяет атомарный указатель release, healthcheck, откат, фальшивые SHA и защиту от секретов; **производственная активация отключена без отдельного разрешения**.
+- Добавлены отрицательные тесты `tests/test_timeweb_pilot.py`. **Exact-head CI пока подлежит отдельной проверке**; успех не заявлять до готового workflow run.
+- Подробнее: `docs/TIMEWEB_PILOT_RUNBOOK.md`. Для реального автоматического обновления нужны закупка, защищённые окружения GitHub с required reviewer, ограниченный SSH, настройка ОС/TLS/managed PG18, контрольный backup+restore, cutover без двойного Telegram webhook и отдельное разрешение владельца.
+- **Критический NO-GO:** encrypted production PG backup + isolated restore отсутствуют. Render PostgreSQL Free истекает 19.11.2026 22:50 МСК. Юридическая оценка конкретной 152-ФЗ инфраструктуры не выполнена.
+
+---
+
 # FORMIQ | ТЗ №3 — Подключения и подтверждение FatSecret (26.10.2026)
 
 **Статус: написано в Draft PR #29, НЕ опубликовано.** Ветка `fix/tz3-p0-history-health-viewport-20261026`. Основная ветка и Render Live ранее подтверждены на `20c2efcadff6fe2f15844ee273604ad638414a68`. Разрешения на merge/deploy ТЗ №3 нет.

@@ -1,0 +1,90 @@
+name: Timeweb VPS - OFFLINE pilot (Issue 35)
+on:
+  pull_request:
+    paths:
+      - 'main.py'
+      - 'formiq_wsgi.py'
+      - 'requirements-timeweb.txt'
+      - 'scripts/timeweb*'
+      - 'scripts/formiq_pg_restore_audit.py'
+      - 'scripts/FORMIQ_Backup_Windows.*'
+      - 'tests/test_windows_pg18_restore.py'
+      - 'docs/FORMIQ_WINDOWS_BACKUP_RUNBOOK.md'
+      - 'docs/FORMIQ_CUTOVER_PLAN.md'
+      - 'deploy/timeweb/**'
+      - 'tests/test_timeweb_pilot.py'
+      - '.github/workflows/timeweb-pilot.yml'
+      - 'docs/TIMEWEB_PILOT_RUNBOOK.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: timeweb-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TELEGRAM_BOT_TOKEN: ''
+      DATABASE_URL: ''
+      YANDEX_API_KEY: ''
+      TIMEWEB_SSH_PRIVATE_KEY: ''
+      TIMEWEB_SSH_HOST: ''
+      FORMIQ_TIMEWEB_REAL_DEPLOY_ENABLED: ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline guards and syntax
+        run: |
+          python scripts/timeweb_pilot.py --check
+          bash -n scripts/timeweb-pilot.sh
+          node --check web/v5-live.js
+      - name: Install runtime for synthetic import
+        run: pip install -r requirements.txt -r requirements-timeweb.txt
+      - name: Verify service unit
+        run: systemd-analyze verify deploy/timeweb/formiq-web.service
+      - name: Security and rollback regressions
+        run: python -m unittest tests/test_timeweb_pilot.py -v
+      - name: Simulate atomic update and failed-release rollback
+        run: python scripts/timeweb_release.py simulate
+      - name: Package immutable tracked source (no artifact upload)
+        run: bash scripts/timeweb-pilot.sh
+
+  future-deployment-disabled:
+    if: ${{ false }}
+    needs: offline-pilot
+    runs-on: ubuntu-latest
+    environment: timeweb-production
+    steps:
+      - run: echo 'No real deployment in Issue 35 pilot'
+
+  windows-launcher-check:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      # Synthetic blocker only: no real credentials, database or backup access.
+      DATABASE_URL: 'synthetic-blocked-by-safety-guard'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Parse Windows PowerShell and verify fail-closed behavior
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            'scripts/FORMIQ_Backup_Windows.ps1',
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw 'Windows backup launcher PowerShell syntax failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/FORMIQ_Backup_Windows.ps1
+          if ($LASTEXITCODE -ne 2) { throw 'Windows launcher did not refuse inherited database credentials' }
+          Write-Host 'WINDOWS_LAUNCHER_FAIL_CLOSED; no production connections'
+          exit 0 # expected child error code 2 was the successful negative test

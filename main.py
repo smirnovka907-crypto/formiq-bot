@@ -6297,7 +6297,8 @@ def configure_formiq_bot_profile():
     _FORMIQ_PROFILE_CONFIGURED = all_ok
 
 
-if __name__ == '__main__':
+def run_legacy_render():
+    """Preserve the current Render entrypoint exactly; never use for VPS web."""
     init_db()
     replay_pending()
     configure_formiq_bot_profile()
@@ -6305,3 +6306,7 @@ if __name__ == '__main__':
                     secret_token=SECRET, drop_pending_updates=False)
     LOG.info('FORMIQ %s ready; Yandex configured=%s', VERSION, bool(YANDEX_KEY and FOLDER_ID))
     APP.run(host='0.0.0.0', port=int(os.getenv('PORT', '10000')), debug=False)
+
+
+if __name__ == '__main__':
+    run_legacy_render()
