@@ -1724,8 +1724,8 @@ app.addEventListener('click',async e=>{
  if(cmd==='finish-confirm'){modal='finish';draw();return}
  if(cmd==='skip-workout-confirm'){modal='skip-workout';draw();return}
  if(cmd==='skip-confirm'){modal='skip';draw();return}
- if(cmd==='finish'){modal='';const response=await send('finish');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
- if(cmd==='skip-workout'){modal='';const response=await send('skip_workout');if(response){view='progress';restUntil=0;restFor='';storeRestTimer();progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='finish'){modal='';const response=await send('finish',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();if(date){dayRows=null;await loadDay()}progressSeries=null;loadProgressSeries()}draw();return}
+ if(cmd==='skip-workout'){modal='';const response=await send('skip_workout',{expected_workout:state.workout.id});if(response){view='progress';restUntil=0;restFor='';storeRestTimer();progressSeries=null;loadProgressSeries()}draw();return}
  if(cmd==='skip'){modal='';await send('skip');return}
  if(cmd==='cardio-types'){typesOpen=!typesOpen;draw();return}
  if(cmd==='cardio-type'){cardioType=element.dataset.type||'';typesOpen=false;draw();return}
