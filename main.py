@@ -4497,8 +4497,8 @@ def food_day_totals(chat, body):
               ON i.meal_id=m.id AND i.chat_id=m.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s
             ORDER BY m.id,i.id""",(chat,day)).fetchall()
-    if len(records)>250:
-        raise ValueError('За день слишком много продуктов для одного расчёта')
+        if len(records)>250:
+            raise ValueError('За день слишком много продуктов для одного расчёта')
         unresolved_rows=conn.execute("""SELECT meal_type,
                 SUM(jsonb_array_length(unresolved_fragments))::integer
             FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
