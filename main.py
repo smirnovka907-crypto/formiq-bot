@@ -3953,12 +3953,20 @@ def food_parse(body):
     unit=r'(?:граммов|грамма|грамм|гр|г|g)'
     suffix=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+r'\.?',re.IGNORECASE)
     prefix=re.compile(mass+r'\s*'+unit+r'\.?\s+(.+)',re.IGNORECASE)
+    # Some natural phrases put preparation *after* the measured amount.
+    # Keep that modifier with the item; dry/cooked weights must not be merged.
+    prep_tail=re.compile(r'(.+?)\s+'+mass+r'\s*'+unit+
+        r'\s+(сух(?:ая|ой|ое|ие|их|ого)|варен(?:ая|ый|ое|ые|ой|ого)|варён(?:ая|ый|ое|ые|ой|ого)|'
+        r'отварн(?:ая|ый|ое|ые|ой|ого)|готов(?:ая|ый|ое|ые|ой|ого)|'
+        r'жарен(?:ая|ый|ое|ые|ой|ого)|жарён(?:ая|ый|ое|ые|ой|ого))',re.IGNORECASE)
     for part in parts:
-        ending=suffix.fullmatch(part)
-        leading=prefix.fullmatch(part) if ending is None else None
-        if ending or leading:
+        trailing=prep_tail.fullmatch(part)
+        ending=suffix.fullmatch(part) if trailing is None else None
+        leading=prefix.fullmatch(part) if ending is None and trailing is None else None
+        if trailing or ending or leading:
             try:
-                name,grams=(food_item(ending.group(1),ending.group(2)) if ending
+                name,grams=(food_item(trailing.group(1)+' '+trailing.group(3),trailing.group(2))
+                            if trailing else food_item(ending.group(1),ending.group(2)) if ending
                             else food_item(leading.group(2),leading.group(1)))
                 recognized.append({'name':name,'grams':float(grams)})
                 continue
