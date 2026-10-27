@@ -172,6 +172,25 @@ class FoodAllergyPrivacyTests(unittest.TestCase):
         return {'choice':'declared','items':[{'name':'Яйца','kind':'allergy'}],
                 'consent':True,'consent_version':self.m.FOOD_ALLERGY_CONSENT_VERSION}
 
+    def test_tz6_server_safety_gate_returns_requested_three_states(self):
+        prefs={'recommendations_allowed':True,'choice':'declared',
+               'items':normalise_restrictions([{'name':'Яйца','kind':'allergy'}])}
+        with patch.object(self.m,'has_agreement',return_value=True), \\
+             patch.object(self.m,'food_allergy_state',return_value=prefs):
+            verified=evidence(['рис','вода'])['composition']
+            egg=evidence(['яичный порошок'])['composition']
+            self.assertEqual(self.m.check_food_safety(777,'рис',verified,
+                source_verified=True)['status'],'safe')
+            self.assertEqual(self.m.check_food_safety(777,'рис',verified,
+                source_verified=False)['status'],'needs_review')
+            self.assertEqual(self.m.check_food_safety(777,'соус',egg,
+                source_verified=False)['status'],'blocked')
+            self.assertEqual(self.m.check_food_safety(777,'блюдо',None,
+                source_verified=True)['status'],'needs_review')
+        with patch.object(self.m,'has_agreement',return_value=False):
+            with self.assertRaises(ValueError):
+                self.m.check_food_safety(777,'рис',verified,source_verified=True)
+
     def test_without_key_or_reviewed_flag_sensitive_storage_fails_closed(self):
         with patch.object(self.m,'FOOD_ALLERGY_PROCESSING_ENABLED',False):
             self.assertFalse(self.m.food_allergy_ready())
