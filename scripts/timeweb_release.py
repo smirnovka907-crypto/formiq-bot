@@ -120,8 +120,12 @@ def live_health(expected):
         try:
             with urllib.request.urlopen("http://127.0.0.1:8080/__timeweb_release_health",
                                         timeout=2) as result:
-                if result.status==200 and result.read(100).decode().strip()==expected:
-                    return True
+                release_ok = result.status == 200 and result.read(100).decode().strip() == expected
+            if release_ok:
+                with urllib.request.urlopen("http://127.0.0.1:8080/__timeweb_db_health",
+                                            timeout=2) as result:
+                    if result.status == 200 and result.read(100).decode().strip() == "DATABASE_READY":
+                        return True
         except (OSError,ValueError,UnicodeError):
             pass
         time.sleep(1)
