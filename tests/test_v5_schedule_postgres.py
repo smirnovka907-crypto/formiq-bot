@@ -237,6 +237,14 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.m.food_add(self.chat,{'date':'2026-10-18',
             'meal_type':'breakfast','items':[{'name':'рис','grams':6000}]})
 
+    def test_tz5_multiple_measured_ingredients_with_conjunction(self):
+        parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г плюс огурец 100 г'})
+        self.assertEqual(parsed['items'],[
+            {'name':'рис сухой','grams':80.0},
+            {'name':'курица','grams':150.0},
+            {'name':'огурец','grams':100.0}])
+        self.assertEqual(parsed['unparsed'],[])
+
     def test_tz5_postweight_preparation_is_not_dropped(self):
         parsed=self.m.food_parse({'text':
             'гречка 200 г варёная, рис 80 г сухой; картофель 150 г жареный'})
