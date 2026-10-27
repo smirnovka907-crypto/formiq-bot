@@ -4488,6 +4488,8 @@ def food_day_totals(chat, body):
         raise ValueError('Сначала заполни анкету')
     day=food_day(body.get('date'))
     with db() as conn:
+        # Start with one consistent snapshot of weighed and unresolved foods.
+        conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
         records=conn.execute("""SELECT i.id,m.meal_type,i.grams,
                    i.source_food_id,i.source_serving_id,i.updated_at,
                    i.manual_kcal_100g,i.manual_protein_g_100g,i.manual_fat_g_100g,i.manual_carbs_g_100g
@@ -4497,9 +4499,12 @@ def food_day_totals(chat, body):
             ORDER BY m.id,i.id""",(chat,day)).fetchall()
     if len(records)>250:
         raise ValueError('За день слишком много продуктов для одного расчёта')
-    with db() as conn:
-        unknown_count=conn.execute("""SELECT COALESCE(SUM(jsonb_array_length(unresolved_fragments)),0)
-            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s""",(chat,day)).fetchone()[0]
+        unresolved_rows=conn.execute("""SELECT meal_type,
+                SUM(jsonb_array_length(unresolved_fragments))::integer
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+            GROUP BY meal_type ORDER BY meal_type""",(chat,day)).fetchall()
+    unknown_by_meal=dict(unresolved_rows)
+    unknown_count=sum(unknown_by_meal.values())
     linked={r[3] for r in records if r[3] and r[4]}
     # User-entered values are independently usable offline. Missing FatSecret
     # credentials never turn manual macros into "unavailable" or guessed zero.
@@ -4564,6 +4569,13 @@ def food_day_totals(chat, body):
         items.append({'id':item_id,'meal_type':meal_type,
             'source':('manual' if user_values else 'fatsecret') if values is not None else None,
             'nutrition':{key:float(v) for key,v in values.items()} if values is not None else None})
+    # Include meals made entirely of unresolved foods, too. Never call one
+    # meal complete merely because its weighed items have verified nutrients.
+    for meal_type,unresolved in unknown_by_meal.items():
+        meal=meal_values.setdefault(meal_type,{'type':meal_type,'total_items':0,
+                                               'resolved_items':0,
+                                               'subtotal':{key:Decimal('0') for key in keys}})
+        meal['unresolved_items']=unresolved
     # External provider reads are slow. Recheck BOTH weighed items and raw
     # unresolved fragments before calling the day complete; otherwise a
     # concurrent text save can silently produce a false "full" daily total.
@@ -4577,12 +4589,13 @@ def food_day_totals(chat, body):
               ON i.meal_id=m.id AND i.chat_id=m.chat_id
             WHERE m.chat_id=%s AND m.eaten_on=%s ORDER BY m.id,i.id""",
             (chat,day)).fetchall()
-        current_unknown=conn.execute("""SELECT COALESCE(
-                SUM(jsonb_array_length(unresolved_fragments)),0)
-            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s""",
-            (chat,day)).fetchone()[0]
+        current_unresolved=conn.execute("""SELECT meal_type,
+                SUM(jsonb_array_length(unresolved_fragments))::integer
+            FROM manual_food_meals WHERE chat_id=%s AND eaten_on=%s
+            GROUP BY meal_type ORDER BY meal_type""",
+            (chat,day)).fetchall()
     if ([(r[0],r[2],r[3],r[4],r[5]) for r in records] != current
-            or int(unknown_count)!=int(current_unknown)):
+            or unresolved_rows!=current_unresolved):
         raise ValueError('Дневник изменился во время расчёта. Обнови КБЖУ повторно')
     complete=bool(records) and not unknown_count and all(item['nutrition'] is not None for item in items)
     origins={item['source'] for item in items if item['source']}
@@ -4596,7 +4609,11 @@ def food_day_totals(chat, body):
         'known_subtotal':{k:float(v) for k,v in subtotal.items()}
             if any(item['nutrition'] is not None for item in items) else None,
         'meals':[{'type':m['type'],'resolved_items':m['resolved_items'],
-                  'total_items':m['total_items'],'complete':m['total_items']==m['resolved_items'],
+                  'total_items':m['total_items']+m.get('unresolved_items',0),
+                  'unresolved_items':m.get('unresolved_items',0),
+                  'complete':bool(m['total_items']) and
+                      m['total_items']==m['resolved_items'] and
+                      not m.get('unresolved_items',0),
                   'known_subtotal':({k:float(v) for k,v in m['subtotal'].items()}
                       if m['resolved_items'] else None)}
                  for m in meal_values.values()],
