@@ -172,6 +172,10 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(len(saved['meals'][0]['items']),3)
         self.assertEqual(saved['unparsed_texts'][0]['text'],raw)
         self.assertEqual(len(saved['unparsed']),1)
+        totals=self.m.food_day_totals(self.chat,{'date':'2026-10-18'})
+        self.assertFalse(totals['complete'])
+        self.assertEqual(totals['unresolved_items'],1)
+        self.assertIsNone(totals['totals'])
         self.assertTrue(all(item['nutrition_source'] is None
             for item in saved['meals'][0]['items']))
         self.assertEqual(self.m.food_history(self.chat+1,
@@ -180,6 +184,9 @@ class SchedulePostgresTests(unittest.TestCase):
             'meal_type':'snack','text':'стакан молока'})
         self.assertEqual(unknown['meals'][0]['items'],[])
         self.assertEqual(unknown['unparsed_texts'][0]['text'],'стакан молока')
+        unknown_totals=self.m.food_day_totals(self.chat,{'date':'2026-10-19'})
+        self.assertFalse(unknown_totals['complete'])
+        self.assertEqual(unknown_totals['unresolved_items'],1)
 
     def test_manual_food_parse_history_edits_and_owner_isolation(self):
         parsed=self.m.food_parse({'text':'овсянка 70 грамм, творог 5% 200 грамм, яблоко'})
