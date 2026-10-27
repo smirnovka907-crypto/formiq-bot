@@ -4114,7 +4114,10 @@ def food_add_text(chat,body):
     if meal_type not in ('breakfast','lunch','dinner','snack'):
         raise ValueError('Выбери приём пищи')
     raw_text=body.get('text')
-    parsed=food_parse_ai(chat,raw_text) or food_parse({'text':raw_text})
+    parsed=food_parse({'text':raw_text})
+    # Do not send already understood food to AI or delay a routine save.
+    if parsed['unparsed']:
+        parsed=food_parse_ai(chat,raw_text) or parsed
     unresolved=[str(row['text']) for row in parsed['unparsed']]
     request_id=body.get('request_id')
     if request_id is not None and (
@@ -4152,10 +4155,11 @@ def food_add_text(chat,body):
         if request_id:
             conn.execute("""INSERT INTO food_save_requests(chat_id,request_id,meal_id)
                 VALUES(%s,%s,%s)""",(chat,request_id,meal_id))
-    linked=food_auto_link_recent(chat,inserted)
+    # Durability must never wait for a third-party nutrition API.
+    # The Mini App requests enrichment separately after this response.
     result=food_history(chat,{'date':day.isoformat()})
     result['unparsed']=parsed['unparsed']
-    result['catalog_matches']=linked
+    result['catalog_matches']=0
     result['notice']=('Запись сохранена. Для некоторых продуктов не указан вес.'
                       if parsed['unparsed'] else
                       'Продукты сохранены. КБЖУ появятся при наличии проверенного источника.')
@@ -4212,7 +4216,7 @@ def food_auto_link_recent(chat, item_ids):
     except Exception:
         return 0
     updated=0
-    for item_id,name in item_ids[:30]:
+    for item_id,name in item_ids[:6]:
         try:
             match=food_auto_match_candidates(name,client.search(name,token))
             if not match:
@@ -4231,6 +4235,32 @@ def food_auto_link_recent(chat, item_ids):
         except Exception:
             continue
     return updated
+
+
+
+def food_auto_enrich(chat, body):
+    """Explicit owner-scoped optional lookup, independent of saving a meal.
+
+    Only existing, unlinked records without owner-supplied nutrients can be
+    linked. A failed provider request must never modify the diary.
+    """
+    if not has_agreement(chat):
+        raise ValueError('Сначала заполни анкету')
+    day=food_day(body.get('date'))
+    with db() as conn:
+        rows=conn.execute("""SELECT i.id,i.name
+            FROM manual_food_items i JOIN manual_food_meals m
+                ON m.id=i.meal_id AND m.chat_id=i.chat_id
+            WHERE m.chat_id=%s AND m.eaten_on=%s
+                AND i.source_food_id IS NULL
+                AND i.source_serving_id IS NULL
+                AND i.manual_kcal_100g IS NULL
+                AND i.manual_protein_g_100g IS NULL
+                AND i.manual_fat_g_100g IS NULL
+                AND i.manual_carbs_g_100g IS NULL
+            ORDER BY i.id DESC LIMIT 6""",(chat,day)).fetchall()
+    linked=food_auto_link_recent(chat,rows)
+    return {'date':day.isoformat(),'catalog_matches':linked}
 
 
 def food_change(chat,body,delete=False):
@@ -6269,6 +6299,8 @@ def mini_api():
             payload = {'ok': True, **food_catalog_attach(chat,data)}
         elif action == 'food_history':
             payload = {'ok': True, **food_history(chat,data)}
+        elif action == 'food_auto_enrich':
+            payload = {'ok': True, **food_auto_enrich(chat,data)}
         elif action == 'food_add_text':
             payload = {'ok': True, **food_add_text(chat,data)}
         elif action == 'food_add':
