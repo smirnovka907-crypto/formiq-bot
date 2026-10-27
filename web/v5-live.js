@@ -880,7 +880,8 @@ async function requestFoodDaily(){
  // Any edit or re-fetch invalidates guidance for the previous food snapshot.
  ++foodRevision;aiNutritionTip='';
  const expected=foodDate,seq=++foodDailySeq;
- const hasFood=(foodHistory?.meals||[]).some(m=>(m.items||[]).length);
+ const hasFood=(foodHistory?.meals||[]).some(m=>(m.items||[]).length)||
+  (foodHistory?.unparsed_texts||[]).some(m=>(m.unresolved_fragments||[]).length);
  foodDaily=null;foodDailyError='';
  foodDailyBusy=hasFood;
  if(!foodDailyBusy){draw();return}
