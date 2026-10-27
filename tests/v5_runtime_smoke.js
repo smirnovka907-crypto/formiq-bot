@@ -52,9 +52,10 @@ function createClient(auth=true,shared={}){
    }
    let response;
    const state=()=>({
-    agreed:true,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
+    agreed:shared.agreed!==false,profile_raw:{...profileRaw},needs_health_profile:false,error:null,
     profile:{goal:'Поддерживать форму'},metrics:{...metrics},tier_name:'Тестовый доступ',tier:shared.tier||'start',food_catalog_available:shared.foodCatalogAvailable===true,fatsecret_diary_configured:shared.fatsecretReady===true,
-    workout,history,birthday:shared.birthday||null,ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
+    workout,history,birthday:shared.birthday||null,
+    food_allergies:shared.foodAllergies||{available:false,choice:'unknown',items:[],recommendations_allowed:false},ai_personalization:shared.aiPermissions||{profile:false,health:false,cycle:false},
     plan_names:['Ноги и пресс'],next_day:'A',cycle_start:'2026-10-19',
     plan:[[{name:'Жим ногами',sets:3,low:10,high:12}]],
     calendar:[{id:2,week:1,day:'A',title:'Ноги и пресс',date:'2026-10-23',date_ru:'23.10.2026',status:'planned'}],
@@ -85,6 +86,19 @@ function createClient(auth=true,shared={}){
    }
    else if(p.action==='garmin_disconnect'){
     shared.garminConnected=false;response={ok:true,connected:false};
+   }
+   else if(p.action==='food_allergy_save'){
+    assert.equal(p.consent,true);assert.equal(p.consent_version,'test-allergy-consent-v1');
+    assert.ok(['declared','none'].includes(p.choice));
+    shared.foodAllergies={available:true,choice:p.choice,
+      items:p.choice==='declared'?p.items:[],recommendations_allowed:true,
+      consent_version:'test-allergy-consent-v1'};
+    response={ok:true,food_allergies:shared.foodAllergies};
+   }
+   else if(p.action==='food_allergy_revoke'){
+    shared.foodAllergies={available:true,choice:'unknown',items:[],
+       recommendations_allowed:false,consent_version:'test-allergy-consent-v1'};
+    response={ok:true,food_allergies:shared.foodAllergies};
    }
    else if(p.action==='integrations_status'){
     response={ok:true,fatsecret:{available:!!shared.fatsecretReady,
@@ -218,6 +232,55 @@ function createClient(auth=true,shared={}){
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
 
 async function run(){
+ // First-time user: answer is required, or explicitly select diary-only refusal.
+ const firstTime=createClient(true,{agreed:false,foodAllergies:{available:true,
+  choice:'unknown',items:[],recommendations_allowed:false,
+  consent_version:'test-allergy-consent-v1'}});
+ await settle();
+ assert.match(firstTime.root.innerHTML,/Не сообщать — только дневник/);
+ await firstTime.click({cmd:'food-allergy-skip'});
+ assert.match(firstTime.root.innerHTML,/Продолжу без сведений/);
+ // Existing user: questionnaire is never silently interpreted as "no allergy".
+ const allergy=createClient(true,{foodAllergies:{available:true,choice:'unknown',
+    items:[],recommendations_allowed:false,consent_version:'test-allergy-consent-v1'}});
+ await settle();await allergy.click({nav:'food'});await settle();
+ assert.match(allergy.root.innerHTML,/Ответить в профиле/);
+ await allergy.click({nav:'profile'});await settle();
+ assert.match(allergy.root.innerHTML,/Есть ли у вас аллергия/);
+ await allergy.click({onboardPick:'foodChoice',value:'declared'});
+ allergy.handlers.input({target:{dataset:{onboard:'foodInput'},type:'text',value:'Яйца, Арахис'}});
+ await allergy.click({cmd:'food-allergy-add'});
+ assert.match(allergy.root.innerHTML,/Яйца/);
+ assert.match(allergy.root.innerHTML,/Арахис/);
+ allergy.handlers.change({target:{dataset:{onboard:'foodConsent'},type:'checkbox',checked:true}});
+ await allergy.click({cmd:'food-allergy-save'});
+ const writes=allergy.requests.filter(x=>x.action==='food_allergy_save');
+ assert.equal(writes.length,1);
+ assert.deepEqual(writes[0].items.map(x=>x.name),['Яйца','Арахис']);
+ assert.ok(writes[0].items.every(x=>x.kind==='allergy'));
+ assert.match(allergy.root.innerHTML,/Пищевые ограничения сохранены/);
+ // Editable allergen type updates are sent only after explicit save.
+ allergy.handlers.change({target:{dataset:{foodAllergyKind:'0'},value:'intolerance'}});
+ await allergy.click({cmd:'food-allergy-save'});
+ const changed=allergy.requests.filter(x=>x.action==='food_allergy_save');
+ assert.equal(changed.length,2);
+ assert.equal(changed[1].items[0].kind,'intolerance');
+ // Revoke is a two-stage explicit confirmation, never immediate deletion.
+ await allergy.click({cmd:'food-allergy-revoke'});
+ assert.match(allergy.root.innerHTML,/Да, удалить/);
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,0);
+ await allergy.click({cmd:'food-allergy-revoke-cancel'});
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,0);
+ await allergy.click({cmd:'food-allergy-revoke'});
+ await allergy.click({cmd:'food-allergy-revoke-confirm'});
+ assert.equal(allergy.requests.filter(x=>x.action==='food_allergy_revoke').length,1);
+ assert.match(allergy.root.innerHTML,/Согласие отозвано/);
+ await allergy.click({nav:'food'});await settle();
+ assert.match(allergy.root.innerHTML,/Ответить в профиле/);
+ const legacy=createClient(true);
+ await settle();await legacy.click({nav:'food'});await settle();
+ assert.doesNotMatch(legacy.root.innerHTML,/Ответить в профиле/);
+
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);

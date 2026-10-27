@@ -27,7 +27,7 @@ function ageFromBirth(raw,today){
 function localClock(){const now=new Date();try{const p=new Intl.DateTimeFormat('en-GB',{timeZone:state?.metrics?.timezone||deviceZone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',hourCycle:'h23'}).formatToParts(now);const val=k=>p.find(x=>x.type===k)?.value||'';return {hour:Number(val('hour')),date:val('year')+'-'+val('month')+'-'+val('day')}}catch(_e){return {hour:now.getHours(),date:now.toISOString().slice(0,10)}}}
 function allTimezones(){return [...new Set(['Europe/Moscow','Europe/Samara','Asia/Yekaterinburg','Asia/Novosibirsk','Asia/Vladivostok',...(typeof Intl.supportedValuesOf==='function'?Intl.supportedValuesOf('timeZone'):[]),onboard?.timezone,deviceZone()].filter(Boolean))].sort()}
 
-let onboardOpen=false,onboard=null,onboardErrors={};
+let onboardOpen=false,onboard=null,onboardErrors={},foodAllergyConfirm=false;
 let trainingPreview=null,trainingPreviewBusy=false,exerciseDetails=null,exerciseOrigin='preview',detailOrigin='';
 let foodDate='',foodMeal='breakfast',foodText='',foodDraft=[],foodUnparsed=[],foodHistory=null,foodLoading=false,foodNotice='',foodEdit=null;
 let catalogCandidates=[],catalogBusy=false,catalogMessage='',catalogRecent=Object.create(null),catalogQuery='';
@@ -65,6 +65,10 @@ function initOnboard(){
   areas:Array.isArray(health.affected)?health.affected:[],
   pain:health.pain_score??0,course:health.symptom_course||'none',
   danger:health.danger_signs===true,cleared:health.activity_cleared===true,
+  foodChoice:state?.food_allergies?.choice||'unknown',
+  foodRows:(state?.food_allergies?.items||[]).map(x=>({name:x.name,kind:x.kind})),
+  foodInput:'',foodDirty:false,foodSkip:false,
+  foodConsent:state?.food_allergies?.recommendations_allowed===true,
   adult:true,terms:!!state?.agreed,privacy:!!state?.agreed,health:!!state?.agreed};
  onboardErrors={};
 }
@@ -160,6 +164,47 @@ async function loadConnections(){
   if(seq===connectionsSeq){connectionsBusy=false;if(view==='profile')draw()}
  }
 }
+function collectFoodRows(){
+ const incoming=String(onboard?.foodInput||'').split(',').map(x=>x.trim()).filter(Boolean);
+ const rows=[...(onboard?.foodRows||[])];
+ if(rows.length+incoming.length>30)throw Error('Не более 30 продуктов.');
+ for(const name of incoming){
+  if(name.length>70||/[<>\\r\\n]/.test(name))throw Error('Проверь название продукта.');
+  if(!rows.some(x=>x.name.toLowerCase()===name.toLowerCase()))rows.push({name,kind:'allergy'});
+ }
+ return rows;
+}
+function foodAllergyPanel(){
+ const a=state?.food_allergies||{};
+ if(!a.available)return block('<h2>Пищевые аллергии</h2><p class="input-note">Функция включится после юридической проверки согласия и настройки шифрования. Дневник работает.</p>');
+ const d=onboard,ch=d.foodChoice;
+ return block('<h2>Пищевые аллергии и непереносимость</h2>'+
+  '<p>Есть ли у вас аллергия или непереносимость продуктов?</p>'+
+  '<div class="option-grid">'+[['Нет','none'],['Есть','declared']].map(([label,value])=>
+   '<button type="button" class="choice'+(ch===value?' on':'')+
+   '" data-onboard-pick="foodChoice" data-value="'+value+'">'+label+'</button>').join('')+'</div>'+
+  (ch==='declared'?'<label class="field"><span>Укажите продукты через запятую</span>'+
+   '<input type="text" data-onboard="foodInput" maxlength="500" value="'+esc(d.foodInput)+
+   '" placeholder="Яйца, арахис, молоко"></label>'+button('Добавить в список','food-allergy-add')+
+   d.foodRows.map((x,i)=>'<div class="fq-food-allergy-row"><span>'+esc(x.name)+'</span>'+
+    '<select data-food-allergy-kind="'+i+'" aria-label="Тип '+esc(x.name)+'">'+
+    '<option value="allergy"'+(x.kind==='allergy'?' selected':'')+'>Аллергия</option>'+
+    '<option value="intolerance"'+(x.kind==='intolerance'?' selected':'')+'>Непереносимость</option></select>'+
+    '<button type="button" class="button-subtle" data-cmd="food-allergy-remove" data-index="'+i+'">×</button></div>').join(''):'')+
+  (!state?.agreed&&!d.foodConsent?
+   '<p class="input-note">При первом заполнении ответь на вопрос или явно выбери продолжение без медицинских сведений.</p>'+
+   button(d.foodSkip?'Продолжу без сведений ✓':'Не сообщать — только дневник','food-allergy-skip'):'')+
+  (ch!=='unknown'?onboardCheckbox('foodConsent',
+   'Отдельно разрешаю хранить пищевые ограничения для проверки состава. Без согласия дневник доступен, персональный подбор питания — нет.'):'')+
+  '<p class="input-note">Без отдельного согласия указанные продукты не сохраняются. Согласие можно отозвать, данные удалить. Без отдельного разрешения ничего не отправляется в Yandex AI. <a href="/mini/privacy" target="_blank" rel="noopener noreferrer">Политика конфиденциальности</a>.</p>'+
+  (view==='profile'&&a.choice!=='unknown'?
+   (foodAllergyConfirm?
+    '<p role="alert" class="input-note">Удалить сохранённые ограничения и отозвать согласие?</p>'+
+    button('Да, удалить','food-allergy-revoke-confirm')+button('Отмена','food-allergy-revoke-cancel'):
+    button('Отозвать согласие и удалить данные','food-allergy-revoke')):'')+
+  (view==='profile'&&ch!=='unknown'&&d.foodConsent?button('Сохранить ограничения','food-allergy-save'):'')+
+  onboardError('foodInput'));
+}
 function onboardForm(){
  initOnboard();
  const d=onboard;
@@ -203,7 +248,7 @@ function onboardForm(){
   '<p class="input-note">'+(state.tier_demo?'Тестовое переключение прав без списаний.':'Оплата пока не подключена.')+'</p>'+
   '</section>':'';
  return h()+'<h1 class="title">'+(view==='profile'?'Профиль:':'Твой профиль')+'</h1>'+
-  (view==='profile'?'':intro)+block(personal+training)+health+calendar+connections+legal+tiers;
+  (view==='profile'?'':intro)+block(personal+training)+health+foodAllergyPanel()+calendar+connections+legal+tiers;
 }
 function onboardingPayload(){
  const d=onboard,m=state?.metrics||{},errs={};
@@ -226,6 +271,11 @@ function onboardingPayload(){
  // An unreviewed Yandex AI analysis is optional; its structured fields are
  // applied only after confirmation. Saving can proceed with conservative limits.
  if(!onboardChoices.minutes.some(x=>x[1]===String(d.minutes)))errs.minutes='Выбери длительность 20–120 минут.';
+ if(state?.food_allergies?.available&&!state?.agreed&&d.foodChoice==='unknown'&&!d.foodSkip)
+  errs.foodInput='Выбери ответ или продолжи без сведений о здоровье.';
+ if(state?.food_allergies?.available&&d.foodChoice==='declared'&&d.foodConsent){
+  try{if(!collectFoodRows().length)errs.foodInput='Укажи продукты.'}catch(ex){errs.foodInput=ex.message}
+ }
  onboardErrors=errs;
  if(Object.keys(errs).length){const first=Object.values(errs)[0];throw Error(first)}
  const count=d.weekdays.length;
@@ -251,7 +301,11 @@ function onboardingPayload(){
  const course=reviewed?(affected.length?(d.course||'unspecified'):'none'):
   (affected.includes('other')?'unspecified':prior.symptom_course||'none');
  const timezone=d.timezone||deviceZone();
- return {answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
+ const revoke=!!(d.foodDirty&&!d.foodConsent&&state?.food_allergies?.recommendations_allowed);
+ const staged=state?.food_allergies?.available&&d.foodDirty&&d.foodConsent&&d.foodChoice!=='unknown'?
+  {food_allergies:{choice:d.foodChoice,items:d.foodChoice==='declared'?collectFoodRows():[],
+    consent:true,consent_version:state.food_allergies.consent_version}}:{};
+ return {...staged,...(revoke?{food_allergies_revoke:true}:{}),...(d.foodSkip?{food_allergies_declined:true}:{}),answers:{goal:d.goal,level:d.level,days:String(count),weekdays:[...d.weekdays].sort((a,b)=>a-b),
   equipment:d.equipment,age_group:'adult',minutes:d.minutes},
   metrics:{...mm,sex:d.sex},birthday_telegram_consent:!!d.birthday_telegram_consent,
   timezone,timezone_confirmed:true,
@@ -363,6 +417,13 @@ async function onboardChanged(e){
   draw();return;
  }
  if(!onboard||!target)return;
+ if(target.dataset?.foodAllergyKind!==undefined){
+  const index=Number(target.dataset.foodAllergyKind);
+  if(Number.isInteger(index)&&onboard.foodRows[index]&&['allergy','intolerance'].includes(target.value)){
+   onboard.foodRows[index].kind=target.value;onboard.foodDirty=true;
+  }
+  return;
+ }
  const field=target.dataset?.onboard;
  if(!field)return;
  onboard[field]=target.type==='checkbox'?target.checked:target.value;
@@ -374,6 +435,7 @@ async function onboardChanged(e){
  }
  if(field==='aiConsent'&&!target.checked){onboard.aiResult=null;onboard.aiReviewed=false}
  if(field==='equipment'||field==='profileAiConsent')draw();
+ if(['foodInput','foodConsent'].includes(field)){onboard.foodDirty=true;if(field==='foodConsent')draw()}
 }
 
 const active=()=>!!(state?.workout?.id&&!state.workout.finished);
@@ -931,6 +993,9 @@ async function loadFatSecretAccount(){
 }
 function food(){
  if(!foodDate)foodDate=localClock().date;
+ const allergyNotice=state?.food_allergies?.available&&state.food_allergies.choice==='unknown'?
+  '<section class="surface"><h2>Пищевые ограничения</h2><p class="input-note">Для персонального подбора питания укажи, есть ли аллергии. Пока ответ не получен, нельзя считать продукты подходящими.</p>'+
+  button('Ответить в профиле','food-allergy-open')+'</section>':'';
  const saved=(foodHistory?.meals||[]);
  const dateField='<label class="field"><span>Дата дневника</span><input type="date" id="food-date" value="'+esc(foodDate)+'"></label>';
  const totals=foodDaily?.date===foodDate?foodDaily:null;
@@ -1005,7 +1070,7 @@ function food(){
   '<p id="nutrition-error" role="alert" class="fq-live-error"></p>'+
   (nutritionAnswer?'<p role="status" class="fq-live-banner">'+esc(nutritionAnswer)+'</p>':'')+'</section>';
  return h()+'<span class="kicker">Рацион</span><h1 class="title">Питание</h1>'+
-  '<p class="intro">Записи по датам из твоего дневника.</p>'+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
+  '<p class="intro">Записи по датам из твоего дневника.</p>'+allergyNotice+foodCalendar()+summary+(cards||'<section class="surface soft"><p class="empty">За выбранную дату продуктов пока нет.</p></section>')+editor+fsSection+nutritionCoach+report;
 }
 function profile(){return onboardForm();}
 function exerciseThumb(x){
@@ -1350,8 +1415,8 @@ app.addEventListener('click',async e=>{
  if(element.dataset.onboardPick){
   if(!(onboardOpen||view==='profile')||!onboard)return;
   const key=element.dataset.onboardPick,value=element.dataset.value;
-  if(!['goal','equipment','sex'].includes(key))return;
-  onboard[key]=value;delete onboardErrors[key];
+  if(!['goal','equipment','sex','foodChoice'].includes(key))return;
+  onboard[key]=value;if(key==='foodChoice'){onboard.foodDirty=true;onboard.foodSkip=false;if(value==='none'){onboard.foodRows=[];onboard.foodInput=''}}delete onboardErrors[key];
   if(key==='sex'&&value==='female'&&state?.metrics?.sex==='female'&&periodEntries===null)loadFemalePeriods();
   draw();return;
  }
@@ -1374,6 +1439,50 @@ app.addEventListener('click',async e=>{
   if(!['start','max'].includes(tier))return;
   await send('set_demo_tier',{tier});
   draw();return;
+ }
+ if(cmd==='food-allergy-open'){
+  onboardOpen=false;view='profile';onboard=null;initOnboard();draw();
+  window.setTimeout(()=>app.querySelector('[data-onboard-pick="foodChoice"]')?.scrollIntoView?.({block:'center',behavior:'smooth'}),100);
+  return;
+ }
+ if(cmd==='food-allergy-skip'){
+  if(!onboard)return;
+  onboard.foodSkip=true;onboard.foodChoice='unknown';onboard.foodRows=[];
+  onboard.foodInput='';onboard.foodConsent=false;onboard.foodDirty=false;
+  delete onboardErrors.foodInput;draw();return;
+ }
+ if(cmd==='food-allergy-add'){
+  try{onboard.foodRows=collectFoodRows();onboard.foodInput='';onboard.foodDirty=true;delete onboardErrors.foodInput;error=''}
+  catch(ex){onboardErrors.foodInput=ex.message}draw();return;
+ }
+ if(cmd==='food-allergy-remove'){
+  const index=Number(element.dataset.index);
+  if(Number.isInteger(index)&&index>=0&&index<onboard.foodRows.length){
+   onboard.foodRows.splice(index,1);onboard.foodDirty=true;draw();
+  }return;
+ }
+ if(cmd==='food-allergy-save'){
+  if(!state?.food_allergies?.available||!onboard.foodConsent||onboard.foodChoice==='unknown')return;
+  try{
+   const result=await request('food_allergy_save',{choice:onboard.foodChoice,
+    items:onboard.foodChoice==='declared'?collectFoodRows():[],
+    consent:true,consent_version:state.food_allergies.consent_version});
+   state.food_allergies=result.food_allergies;
+   onboard.foodRows=result.food_allergies.items.map(x=>({name:x.name,kind:x.kind}));
+   onboard.foodInput='';onboard.foodDirty=false;profileNotice='Пищевые ограничения сохранены.';error='';draw();
+  }catch(ex){fail(ex.message)}return;
+ }
+ if(cmd==='food-allergy-revoke'){foodAllergyConfirm=true;draw();return}
+ if(cmd==='food-allergy-revoke-cancel'){foodAllergyConfirm=false;draw();return}
+ if(cmd==='food-allergy-revoke-confirm'){
+  if(!foodAllergyConfirm)return;
+  try{
+   const result=await request('food_allergy_revoke');
+   state.food_allergies=result.food_allergies;
+   onboard.foodChoice='unknown';onboard.foodRows=[];onboard.foodInput='';
+   onboard.foodConsent=false;onboard.foodDirty=false;foodAllergyConfirm=false;
+   profileNotice='Согласие отозвано, сведения удалены.';error='';draw();
+  }catch(ex){fail(ex.message)}return;
  }
  if(cmd==='onboard-save'){
   if(!onboard)return;let payload;
