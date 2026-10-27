@@ -123,6 +123,17 @@ print('WSGI import isolated')
                            capture_output=True,text=True,timeout=35)
         self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+    def test_wsgi_refuses_old_render_database(self):
+        env={k:v for k,v in os.environ.items() if k not in timeweb_pilot.DENIED}
+        env.update(TELEGRAM_BOT_TOKEN="000000:offline_dummy",
+                   DATABASE_URL="postgresql://fake:fake@legacy-db.render.com:5432/offline",
+                   FORMIQ_RUNTIME_ROLE="timeweb-web",
+                   RENDER_EXTERNAL_URL="https://formiq.test.invalid")
+        run=subprocess.run([sys.executable,"-c","import formiq_wsgi"],
+                           env=env,cwd=ROOT,capture_output=True,text=True)
+        self.assertNotEqual(run.returncode,0)
+        self.assertIn("cannot connect to existing Render",run.stderr)
+
     def test_workflow_is_readonly_and_offline(self):
         text=(ROOT/".github/workflows/timeweb-pilot.yml").read_text()
         for fragment in ("pull_request:","contents: read","concurrency:",
