@@ -504,6 +504,24 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertIsNone(totals['totals'])
         self.assertEqual(totals['unresolved_items'],1)
 
+    def test_tz5_explicit_kilograms_convert_without_inventing_servings(self):
+        parsed=self.m.food_parse({'text':
+            'курица 0,2 кг и 0.15 kg риса сухого; 250 г банана'})
+        self.assertEqual(parsed['items'],[
+            {'name':'курица','grams':200.0},
+            {'name':'риса сухого','grams':150.0},
+            {'name':'банана','grams':250.0}])
+        self.assertFalse(parsed['unparsed'])
+        # Cups and ambiguous decimal precision stay raw rather than guessed.
+        unknown=self.m.food_parse({'text':
+            'стакан кефира, молоко 0,005 кг, суп 0,2 кг'})
+        self.assertFalse(unknown['items'])
+        self.assertEqual(len(unknown['unparsed']),3)
+        # Mass beyond the app's validated bounds must not be silently clamped.
+        excessive=self.m.food_parse({'text':'курица 6 кг'})
+        self.assertFalse(excessive['items'])
+        self.assertEqual(len(excessive['unparsed']),1)
+
     def test_tz5_natural_meal_mixed_leading_grams(self):
         parsed=self.m.food_parse({'text':'я съел 150 г риса и 200 г курицы'})
         self.assertEqual(parsed['items'],[
