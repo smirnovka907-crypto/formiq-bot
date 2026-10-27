@@ -295,6 +295,18 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(total['totals']['fat_g'],6.2)
         self.assertEqual(total['totals']['carbs_g'],62.4)
 
+    def test_tz5_natural_food_sentence_and_unknown_composite_recipe(self):
+        parsed=self.m.food_parse({'text':'На обед я съел 150 г риса и 200 г курицы'})
+        self.assertEqual(parsed['items'],[
+            {'name':'риса','grams':150.0},
+            {'name':'курицы','grams':200.0}])
+        self.assertEqual(parsed['unparsed'],[])
+        composite=self.m.food_parse({'text':'салат (помидоры 100 г и огурцы 80 г)'})
+        self.assertEqual(composite['items'],[])
+        self.assertEqual(len(composite['unparsed']),2)
+        self.assertTrue(all('вес ингредиентов' in x['reason']
+            for x in composite['unparsed']))
+
     def test_tz5_multiple_measured_ingredients_with_conjunction(self):
         parsed=self.m.food_parse({'text':'рис сухой 80 г и курица 150 г плюс огурец 100 г'})
         self.assertEqual(parsed['items'],[
