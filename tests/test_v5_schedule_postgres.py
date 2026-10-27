@@ -178,9 +178,9 @@ class SchedulePostgresTests(unittest.TestCase):
         meal_id=first['unparsed_texts'][0]['meal_id']
         with self.assertRaises(ValueError):
             self.m.food_resolve_fragment(self.chat+1,{'meal_id':meal_id,
-                'fragment_index':0,'name':'молоко','grams':200})
+                'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
         result=self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
-            'fragment_index':0,'name':'молоко','grams':200})
+            'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
         self.assertEqual(result['unparsed_texts'][0]['text'],original)
         self.assertEqual(result['unparsed_texts'][0]['unresolved_fragments'],[])
         self.assertEqual(len(result['meals'][0]['items']),2)
@@ -188,7 +188,7 @@ class SchedulePostgresTests(unittest.TestCase):
             {'date':'2026-10-18'})['unresolved_items'],0)
         with self.assertRaises(ValueError):
             self.m.food_resolve_fragment(self.chat,{'meal_id':meal_id,
-                'fragment_index':0,'name':'молоко','grams':200})
+                'fragment_index':0,'expected_text':'стакан молока','name':'молоко','grams':200})
 
     def test_tz5_one_tap_meal_immediate_save_then_source_backed_totals(self):
         from unittest.mock import Mock
