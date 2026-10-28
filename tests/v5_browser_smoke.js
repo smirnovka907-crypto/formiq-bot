@@ -32,7 +32,7 @@ async function run(){
  ].find(p=>fs.existsSync(p));
  assert.ok(chrome,'Chromium/Chrome executable not installed on runner');
  fs.mkdirSync(OUT,{recursive:true});
- let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false,periodHistory=[];
+ let profileComplete=true,profileState=exampleState(true),posts=[],rejectCardioOnce=false,periodHistory=[],csvPreviews=0,csvImports=0;
  const server=http.createServer(async(req,res)=>{
   res.setHeader('Cache-Control','no-store');
   if(req.method==='GET'&&req.url==='/approved-reference'){
@@ -114,6 +114,26 @@ async function run(){
     response={ok:false,error:'Test fixture: unavailable action '+data.action};
    }
    res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify(response));return;
+  }
+  if(req.method==='POST'&&req.url==='/mini/activity/report'){
+   assert.equal(req.headers['x-formiq-init'],'signed-for-browser-test');
+   const pieces=[];for await(const chunk of req)pieces.push(chunk);
+   const raw=Buffer.concat(pieces).toString('utf8');
+   assert.match(raw,/formiq_csv_preview_only\.csv/);
+   assert.match(raw,/Эллипс/);
+   const isImport=/name="mode"\r\n\r\nimport/.test(raw);
+   if(isImport){
+    assert.match(raw,/name="confirmed"\r\n\r\nyes/);
+    csvImports++;
+    res.setHeader('Content-Type','application/json; charset=utf-8');
+    res.end(JSON.stringify({ok:true,imported:csvImports===1?1:0,duplicates:csvImports===1?0:1}));
+   }else{
+    csvPreviews++;
+    res.setHeader('Content-Type','application/json; charset=utf-8');
+    res.end(JSON.stringify({ok:true,count:1,file_hash:'browser-hash',timezone:'Europe/Moscow',
+     conflicts:[],rows:[{date:'2025-10-25',activity:'Эллипс',minutes:25,kcal:240}]}));
+   }
+   return;
   }
   res.writeHead(404);res.end('not found');
  });
@@ -233,6 +253,24 @@ async function run(){
    const nav=page.locator('.bottom-nav .nav-item');
    assert.equal(await nav.count(),3,'Exactly three bottom buttons');
    assert.deepEqual(await nav.allTextContents(),['Тренировки','Питание','Прогресс']);
+   // Real Chromium DOM: native picker state survives redraw; preview cannot write.
+   const csvInput=page.locator('#activity-csv-file');
+   const nativePicker=await csvInput.elementHandle();
+   await csvInput.setInputFiles({name:'formiq_csv_preview_only.csv',mimeType:'text/csv',
+    buffer:Buffer.from('date,activity,minutes,kcal\n2025-10-25,Эллипс,25,240\n')});
+   await page.getByText('Выбран файл: formiq_csv_preview_only.csv').waitFor();
+   assert.equal(await csvInput.evaluate(el=>el.files.length),1,'Native input retains file');
+   await page.locator('[data-cmd="activity-csv-preview"]').click();
+   await page.locator('.fq-csv-preview').waitFor();
+   assert.equal(await csvInput.evaluate(el=>el.files[0]?.name),'formiq_csv_preview_only.csv');
+   assert.equal(await page.evaluate(el=>document.getElementById('activity-csv-file')===el,nativePicker),
+    true,'Preserve same native DOM input across preview redraw');
+   assert.ok(csvPreviews>0);
+   assert.equal(csvImports,0,'Preview must be read-only');
+   await page.locator('[data-cmd="activity-csv-import"]').click();
+   await page.getByText(/Добавлено занятий: 1/).waitFor();
+   assert.equal(csvImports,1,'Explicit confirmation required');
+   assert.equal(await csvInput.evaluate(el=>el.files.length),0,'Selection clears after successful import');
    assert.equal(await page.evaluate(()=>window.__fqFullscreen),1,'Telegram fullscreen requested');
    const safeHeader=await page.evaluate(()=>{
     const header=document.querySelector('.header').getBoundingClientRect();
