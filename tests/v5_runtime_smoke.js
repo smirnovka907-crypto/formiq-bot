@@ -337,25 +337,30 @@ async function run(){
  await app.click({cmd:'cardio-add'});
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
- app.input('cardio-min','60');app.input('cardio-hr','120');
+ app.input('cardio-min','60');app.input('cardio-hr','120');app.input('cardio-device-kcal','240');
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Бег'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value="60"/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value="120"/);
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value="240"/,'Device value survives activity-type changes');
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.failOnce('cardio');
  await app.click({cmd:'cardio'});
  assert.equal(app.fields.get('cardio-min').value,'60','unsaved cardio duration retained');
  assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
+ assert.equal(app.fields.get('cardio-device-kcal').value,'240','unsaved device calories retained on network error');
  await app.click({cmd:'cardio'});
- assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
+ assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60&&x.device_kcal===240),
+  'User-reported device calories are sent explicitly, not treated as a MET estimate');
  assert.match(app.root.innerHTML,/class="surface cardio-inline"/,'Cardio stays embedded on workouts screen');
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/,'Successful save clears cardio duration');
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/,'Successful save clears heart rate');
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value=""/,'Successful save clears device calories');
  await app.click({cmd:'cardio-add'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value=""/);
  await app.click({cmd:'close'});
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
  assert.match(app.root.innerHTML,/Тренировочный план/,'Workouts contain the four-week plan');
@@ -770,6 +775,8 @@ async function run(){
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
    await diary.click({cmd:'cardio-type',type:'Велосипед'});diary.input('cardio-min','60');
    await diary.click({cmd:'cardio'});await diary.click({nav:'progress'});
+   assert.ok(diary.requests.some(x=>x.action==='cardio'&&x.device_kcal===null),
+     'Empty device field uses the existing estimated-MET path');
    assert.match(diary.root.innerHTML,/Кардио · Велосипед/,'Selected-date history refreshes after a successful cardio save');
    console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }
