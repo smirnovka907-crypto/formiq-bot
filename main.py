@@ -1500,6 +1500,12 @@ def additional_recovery_advice(chat, conn=None):
     cardio=c.execute("""SELECT minutes,intensity,equipment,activity_label,performed_at
       FROM cardio_sessions WHERE chat_id=%s
       AND performed_at>=NOW()-INTERVAL '36 hours'
+      -- The known 27.10 Android CSV preview fixture was accidentally
+      -- imported into production. Keep its historical row untouched, but
+      -- never let this exact synthetic sample lower a real strength plan.
+      AND NOT (import_file_hash IS NOT NULL AND import_row_no=0
+        AND equipment='other' AND activity_label='Test walk preview only'
+        AND minutes=15 AND reported_kcal=75)
       ORDER BY performed_at DESC LIMIT 12""",(chat,)).fetchall()
     # Only actually imported, consented Garmin activities may influence
     # future workload. Do not use steps, estimated calories or fake readiness.

@@ -1477,6 +1477,80 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.m.mini_training_preview(self.chat+1,{'id':slot['id']})
 
+    def test_strength_next_plan_ignores_only_known_synthetic_csv_preview(self):
+        """The accidental Android preview fixture must not count as workload.
+
+        Its record stays in the owner's history. Real manual cardio still
+        affects recovery. All writes happen only in disposable PG18 schema.
+        """
+        p, cycle, calendar = self.save((0, 2, 4))
+        baseline = self.m.make_session(p, 1, 'A', adapt='normal', cycle_id=cycle)
+        with self.connect() as conn:
+            manual_id = conn.execute("""INSERT INTO cardio_sessions
+                (chat_id,minutes,equipment,intensity,reported_kcal)
+                VALUES(%s,70,'walk','moderate',250) RETURNING id""",
+                (self.chat,)).fetchone()[0]
+            synthetic_id = conn.execute("""INSERT INTO cardio_sessions
+                (chat_id,minutes,equipment,activity_label,reported_kcal,
+                 import_file_hash,import_row_no)
+                VALUES(%s,15,'other','Test walk preview only',75,%s,0)
+                RETURNING id""",
+                (self.chat, 'synthetic-preview-file-hash')).fetchone()[0]
+        before = self.snapshot_history()
+        adapt, reason = self.m.adjustment(self.chat, 'A')
+        self.assertEqual(adapt, 'normal',
+                         '70 real minutes + 15 fake CSV minutes must NOT hit 80-minute limit')
+        preview = self.m.mini_training_preview(self.chat, {'id':calendar[0]['id']})['preview']
+        self.assertTrue(preview['can_start'])
+        self.assertEqual(sum(x['sets'] for x in preview['exercises']),
+                         sum(row[1] for row in baseline))
+        self.assertEqual(self.snapshot_history(), before,
+                         'Read-only preview must not mutate real or synthetic history')
+        # Full isolated strength flow: start -> real reps/weight -> rest -> finish
+        # -> exact history -> next scheduled workout. No production records.
+        self.assertFalse(self.m.mini_write(self.chat,'start',{'mood':'normal'}))
+        active=self.m.mini_workout_delta(self.chat)['workout']
+        self.assertIsNotNone(active)
+        self.assertEqual(active['total'],sum(x['sets'] for x in preview['exercises']))
+        current=active['current']
+        self.assertIsNotNone(current)
+        self.assertFalse(self.m.mini_write(self.chat,'record',{
+            'expected_workout':active['id'],
+            'expected_position':current['position'],
+            'expected_set':current['set_no'],
+            'reps':current['low'],'weight':42.5}))
+        after_set=self.m.mini_workout_delta(self.chat)['workout']
+        self.assertEqual(after_set['done'],1)
+        self.assertGreater(after_set['rest_remaining_seconds'],0,
+            'Rest timer must be based on real committed set completion')
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+            {'expected_workout':active['id']}))
+        stored=self.m.mini_history_detail(self.chat,active['id'])
+        self.assertEqual(stored['status'],'finished')
+        self.assertEqual(len(stored['items']),1,'Only confirmed set in history')
+        self.assertRegex(stored['items'][0]['result'],r'42[.]50? кг')
+        with self.connect() as conn:
+            next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
+        self.assertIsNotNone(next_slot,'Closing a session advances calendar')
+        self.assertNotEqual((next_slot[0],next_slot[1]),(active['day'],active['week']))
+        self.assertIsNone(self.m.mini_workout_delta(self.chat)['workout'],
+            'Finish closes active workout without changing completed sets')
+        # Only the next real activity increase is allowed to reduce the load.
+        with self.connect() as conn:
+            conn.execute('UPDATE cardio_sessions SET minutes=80 WHERE id=%s AND chat_id=%s',
+                         (manual_id,self.chat))
+        adapt, reason = self.m.adjustment(self.chat, 'A')
+        self.assertEqual(adapt, 'lighter')
+        self.assertIn('80 мин', reason)
+        lighter = self.m.make_session(p, 1, 'A', adapt=adapt, cycle_id=cycle)
+        self.assertLess(sum(row[1] for row in lighter), sum(row[1] for row in baseline))
+        with self.connect() as conn:
+            retained = conn.execute("""SELECT minutes,activity_label,reported_kcal
+                FROM cardio_sessions WHERE id=%s AND chat_id=%s""",
+                (synthetic_id,self.chat)).fetchone()
+        self.assertEqual(retained,(15,'Test walk preview only',75),
+                         'Synthetic row is preserved for separate owner-approved action')
+
     def test_recent_additional_cardio_reduces_future_volume_explainably(self):
         profile,cycle,calendar=self.save((0,2,4))
         baseline=self.m.make_session(profile,1,'A',adapt='normal',cycle_id=cycle)
