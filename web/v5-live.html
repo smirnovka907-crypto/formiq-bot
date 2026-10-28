@@ -553,11 +553,15 @@ body.theme-female .history-cal-inline .history-cal-grid button.is-today{border-c
 .fq-exercise-fallback{display:grid;place-items:center;flex:none;width:45px;height:45px;border-radius:14px;border:1px solid var(--line);background:var(--ivory);font-size:25px}
 .fq-exercise-illustration{display:flex;align-items:center;justify-content:center;text-align:center;background:var(--ivory);border:1px dashed var(--line);border-radius:16px;padding:22px;margin:15px 0;color:var(--secondary);min-height:110px}
 .fq-exercise-photo{margin:14px 0 18px}.fq-exercise-photo img{display:block;width:100%;max-height:310px;object-fit:contain;background:var(--ivory);border:1px solid var(--line);border-radius:16px}.fq-exercise-photo figcaption{font-size:12px;line-height:1.55;color:var(--secondary);margin-top:8px}.fq-exercise-photo a{color:var(--ink);text-underline-offset:2px}
-/* Saved history only: whole photo inside mobile viewport; old colours unchanged. */
-.fq-live-dialog.fq-history-exercise-card{overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.fq-history-exercise-card .fq-exercise-photo{max-width:100%;min-width:0}
-.fq-history-exercise-card .fq-exercise-photo img{box-sizing:border-box;max-width:100%;height:auto;max-height:220px;max-height:min(34dvh,220px);object-fit:contain}
-.fq-history-exercise-card .fq-exercise-photo figcaption{overflow-wrap:anywhere}
+/* Exercise cards share compact photo/scroll geometry inside Telegram safe areas.
+   Preserve approved Aluminium styling without cropping images or other modals. */
+.fq-live-dialog.fq-exercise-detail{box-sizing:border-box;min-width:0;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.fq-exercise-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.fq-exercise-detail-head h2{flex:1;min-width:0;margin:0}
+.fq-exercise-detail-head .button-subtle{flex:none;width:auto;min-width:95px;min-height:44px;padding:8px 10px;font-size:12px}
+.fq-exercise-detail .fq-exercise-photo{max-width:100%;min-width:0}
+.fq-exercise-detail .fq-exercise-photo img{box-sizing:border-box;width:100%;height:auto;max-width:100%;max-height:150px;max-height:min(24dvh,150px);object-fit:contain}
+.fq-exercise-detail .fq-exercise-photo figcaption{overflow-wrap:anywhere}
 .fq-live-dialog:has(.fq-preview-exercise){overflow-y:auto;max-height:85dvh}
 .fq-live-dialog ol{padding-left:21px;line-height:1.65}
 body.theme-female .fq-preview-exercise,body.theme-female .fq-exercise-illustration{background:#fff8fc}
@@ -637,4 +641,4 @@ input,textarea,select{scroll-margin-top:calc(15px + max(env(safe-area-inset-top)
 .fq-connection-actions button{min-height:43px;white-space:nowrap}
 @media(max-width:410px){.fq-connection-actions{flex:1 0 100%;padding-left:90px}}
 
-</style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js"></script></body></html>
+</style></head><body><div id="app" class="app" role="application" aria-label="FORMIQ · Telegram Mini App"></div><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="/mini/v5-live.js?v=exercise-cards-20261029"></script></body></html>
