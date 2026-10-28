@@ -6116,37 +6116,93 @@ def mini_activity_csv_report():
         digest=hashlib.sha256(content).hexdigest()
         mode=request.form.get('mode','preview')
         if mode=='preview':
+            with db() as conn:
+                matches=[]
+                # Read-only hint. The import path rechecks under an owner lock.
+                for index,row in enumerate(parsed):
+                    already=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND import_file_hash=%s
+                        AND import_row_no=%s LIMIT 1""",
+                        (chat,digest,index)).fetchone()
+                    conflict=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND (import_canonical=%s
+                        OR import_fingerprint=%s)
+                        AND import_file_hash IS DISTINCT FROM %s LIMIT 1""",
+                        (chat,row['canonical_fingerprint'],
+                         row['canonical_fingerprint'],digest)).fetchone()
+                    if conflict and not already:
+                        matches.append(index)
             response=jsonify(ok=True,count=len(parsed),
                 rows=[{k:item[k] for k in ('date','activity','minutes','kcal')}
                       for item in parsed],
-                file_hash=digest,timezone=zone,
-                notice='Это показания расхода одной активности, а не общий расход за день. Проверь значения.')
+                conflicts=matches,file_hash=digest,timezone=zone,
+                notice='Если такая тренировка есть в другом отчёте, выбери: пропустить или сохранить отдельно.')
         elif mode=='import':
             if (request.form.get('confirmed')!='yes' or
                     request.form.get('file_hash')!=digest):
                 raise ValueError('Проверь файл и подтверди его импорт')
             try:
                 changes=json.loads(request.form.get('edited_rows',''))
+                decisions=json.loads(request.form.get('resolutions',''))
             except (TypeError,ValueError,json.JSONDecodeError):
                 raise ValueError('Проверь и подтверди все строки') from None
             values=corrected_activity_rows(parsed,changes,zone)
-            imported=0
+            if (not isinstance(decisions,list) or len(decisions)!=len(values)
+                    or any(choice not in ('ask','skip','separate')
+                           for choice in decisions)):
+                raise ValueError('Нужен явный выбор при совпадении занятий')
+            imported,duplicate_count=0,0
             with db() as conn:
-                # Database uniqueness is the final guard against retries,
-                # concurrent duplicate imports and repeat files per user.
-                for row in values:
+                conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+                conflicts=[]
+                outcomes=[]
+                for index,row in enumerate(values):
+                    already=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND import_file_hash=%s
+                        AND import_row_no=%s LIMIT 1""",
+                        (chat,digest,index)).fetchone()
+                    matching=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND (import_canonical=%s
+                            OR import_fingerprint=%s)
+                            AND import_file_hash IS DISTINCT FROM %s LIMIT 1""",
+                        (chat,row['canonical_fingerprint'],
+                         row['canonical_fingerprint'],digest)).fetchone()
+                    if already:
+                        outcomes.append('duplicate')
+                    elif matching and decisions[index]=='ask':
+                        conflicts.append(index)
+                        outcomes.append('pending')
+                    elif matching and decisions[index]=='skip':
+                        outcomes.append('duplicate')
+                    else:
+                        outcomes.append('separate' if matching else 'ordinary')
+                if conflicts:
+                    # Important: no writes, including non-conflicting rows.
+                    return jsonify(ok=False,conflicts=conflicts,
+                        error='Есть совпадающие занятия из другого CSV. Для отмеченных строк выбери «Пропустить» или «Сохранить отдельно».'
+                        ),409
+                for index,(row,outcome) in enumerate(zip(values,outcomes)):
+                    if outcome=='duplicate':
+                        duplicate_count+=1
+                        continue
+                    fingerprint=(hashlib.sha256(
+                        f"formiq-csv-separate-v1:{digest}:{index}:{row['canonical_fingerprint']}".encode('ascii')
+                        ).hexdigest() if outcome=='separate'
+                        else row['fingerprint'])
                     inserted=conn.execute("""INSERT INTO cardio_sessions
                         (chat_id,performed_at,minutes,equipment,activity_label,
-                         estimated_met,estimated_kcal,reported_kcal,import_fingerprint)
-                        VALUES(%s,%s,%s,'other',%s,NULL,NULL,%s,%s)
-                        ON CONFLICT (chat_id,import_fingerprint)
-                        WHERE import_fingerprint IS NOT NULL DO NOTHING RETURNING id""",
+                         estimated_met,estimated_kcal,reported_kcal,import_fingerprint,
+                         import_file_hash,import_row_no,import_canonical)
+                        VALUES(%s,%s,%s,'other',%s,NULL,NULL,%s,%s,%s,%s,%s)
+                        ON CONFLICT DO NOTHING RETURNING id""",
                         (chat,row['performed_at'],row['minutes'],row['activity'],
-                         row['kcal'],row['fingerprint'])).fetchone()
+                         row['kcal'],fingerprint,digest,index,
+                         row['canonical_fingerprint'])).fetchone()
                     if inserted:
                         imported+=1
-            response=jsonify(ok=True,imported=imported,
-                duplicates=len(values)-imported)
+                    else:
+                        duplicate_count+=1
+            response=jsonify(ok=True,imported=imported,duplicates=duplicate_count)
         else:
             raise ValueError('Некорректный режим отчёта')
         response.headers['Cache-Control']='no-store'
