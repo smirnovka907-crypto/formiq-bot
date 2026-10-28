@@ -265,7 +265,7 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
 
 async function run(){
  const csv=createClient(true,{tier:'max'});
- await settle();await csv.click({nav:'training'});await settle();
+ await settle();await csv.click({nav:'home'});await settle();
  const report={name:'report.csv',size:120};
  csv.handlers.change({target:{id:'activity-csv-file',files:[report],dataset:{}}});
  await csv.click({cmd:'activity-csv-preview'});
@@ -277,7 +277,7 @@ async function run(){
   'Saved CSV must not be presented as failed after a separate refresh error');
  assert.equal(csv.requests.filter(x=>x.action==='activity_csv_import').length,1);
  const csvLate=createClient(true,{tier:'max'});
- await settle();await csvLate.click({nav:'training'});await settle();
+ await settle();await csvLate.click({nav:'home'});await settle();
  csvLate.handlers.change({target:{id:'activity-csv-file',
   files:[{name:'old.csv',size:70}],dataset:{}}});
  const release=csvLate.deferOnce('activity_csv_preview');
