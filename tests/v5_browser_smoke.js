@@ -271,6 +271,8 @@ async function run(){
    await page.getByText(/Добавлено занятий: 1/).waitFor();
    assert.equal(csvImports,1,'Explicit confirmation required');
    assert.equal(await csvInput.evaluate(el=>el.files.length),0,'Selection clears after successful import');
+   // CSV controls sit below the fold: reset scroll before safe-area header assertions.
+   await page.evaluate(()=>window.scrollTo(0,0));
    assert.equal(await page.evaluate(()=>window.__fqFullscreen),1,'Telegram fullscreen requested');
    const safeHeader=await page.evaluate(()=>{
     const header=document.querySelector('.header').getBoundingClientRect();
