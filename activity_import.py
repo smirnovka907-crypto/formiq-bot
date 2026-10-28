@@ -53,6 +53,34 @@ def _normalize(row, zone):
     return {**normalized, 'performed_at': utc_at, 'fingerprint': fingerprint}
 
 
+
+def _distinguish_same_value_sessions(rows):
+    """Preserve separate identical rows *within the same CSV*.
+
+    First occurrence keeps its previous fingerprint for compatibility with
+    previously imported rows. Further occurrences use deterministic occurrence
+    keys so a network retry is idempotent, but the second physical workout is
+    not silently discarded as the first. CSV without timestamps or provider
+    activity IDs cannot distinguish two identical sessions across different
+    files; do not claim cross-file identity has been proven.
+    """
+    seen = {}
+    result = []
+    for row in rows:
+        base = row['fingerprint']
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        if count == 1:
+            result.append(row)
+        else:
+            unique = hashlib.sha256(
+                f'formiq-csv-occurrence-v2:{base}:{count}'.encode('ascii')
+            ).hexdigest()
+            result.append({**row, 'fingerprint': unique})
+    return result
+
+
+
 def parse_activity_csv(data, filename, mimetype, zone):
     if (not isinstance(filename, str) or
             not filename.casefold().endswith('.csv') or
@@ -92,7 +120,7 @@ def parse_activity_csv(data, filename, mimetype, zone):
         raise ValueError('Некорректный CSV') from None
     if not records:
         raise ValueError('В CSV нет активностей')
-    return records
+    return _distinguish_same_value_sessions(records)
 
 
 def corrected_activity_rows(original, edited_rows, zone):
@@ -101,4 +129,5 @@ def corrected_activity_rows(original, edited_rows, zone):
         raise ValueError('Обнови предпросмотр отчёта')
     # Every row must still correspond to a row in the selected file; the
     # user can correct activity/date/duration/calories BEFORE confirmation.
-    return [_normalize(row, zone) for row in edited_rows]
+    return _distinguish_same_value_sessions(
+        [_normalize(row, zone) for row in edited_rows])
