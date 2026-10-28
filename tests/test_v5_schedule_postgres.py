@@ -1975,6 +1975,49 @@ class SchedulePostgresTests(unittest.TestCase):
             self.assertEqual(conn.execute(
                 'SELECT COUNT(*) FROM cardio_sessions').fetchone()[0],2)
 
+    def test_csv_identical_rows_are_separate_sessions_but_retry_is_idempotent(self):
+        # A duplicate row inside one CSV can represent another genuine workout.
+        self.save()
+        raw=('date,activity,minutes,kcal\\n'
+             '2025-10-25,Эллипс,25,240\\n'
+             '2025-10-25,Эллипс,25,240\\n').encode('utf-8')
+        digest=hashlib.sha256(raw).hexdigest()
+        def request_import(chat):
+            with patch.object(self.m,'mini_auth',return_value=chat):
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data={'mode':'import','report':(BytesIO(raw),'activity.csv'),
+                          'confirmed':'yes','file_hash':digest,'edited_rows':
+                          json.dumps([{'date':'2025-10-25','activity':'Эллипс',
+                             'minutes':25,'kcal':240}]*2,ensure_ascii=False)},
+                    headers={'X-Formiq-Init':'offline-test'},
+                    content_type='multipart/form-data')
+        first=request_import(self.chat)
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.get_json()['imported'],2)
+        retry=request_import(self.chat)
+        self.assertEqual(retry.status_code,200,retry.get_json())
+        self.assertEqual(retry.get_json()['imported'],0)
+        self.assertEqual(retry.get_json()['duplicates'],2)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT reported_kcal,estimated_met,estimated_kcal,
+                import_fingerprint FROM cardio_sessions WHERE chat_id=%s
+                ORDER BY id""",(self.chat,)).fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual(len({r[3] for r in rows}),2)
+        self.assertTrue(all(r[:3]==(240,None,None) for r in rows))
+        # Identical payload is still independent between owners.
+        self.save(chat=self.chat+1)
+        other=request_import(self.chat+1)
+        self.assertEqual(other.status_code,200,other.get_json())
+        self.assertEqual(other.get_json()['imported'],2)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],2)
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat+1,)).fetchone()[0],2)
+
     def test_device_calories_are_user_reported_without_met_double_counting(self):
         self.save()
         payload={'minutes':25,'avg_hr':125,'type':'Велосипед','device_kcal':240}
