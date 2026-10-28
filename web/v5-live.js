@@ -478,7 +478,7 @@ function workout(){
    esc(c.rest_seconds||0)+' сек</span><div id="rest-count" class="rest-number" role="timer" aria-live="off">'+
    String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')+
    '</div><p class="subtitle">Следующий подход: '+esc(c.name)+'</p>'+
-   button('Пропустить отдых','rest-skip')+'</section>';
+   button('Пропустить отдых','rest-skip')+button('Техника упражнения','exercise-live')+'</section>';
  }else{
   const target=c.low===c.high?String(c.low):String(c.low)+'–'+String(c.high);
   const unit=c.unit==='reps'?'повторений':c.unit==='sec'?'секунд':'минут';
@@ -1194,7 +1194,7 @@ function exerciseCardPanel(){
   '<div class="fq-exercise-illustration" role="note">Подтверждённого изображения для этого движения пока нет. Пользуйся текстовой инструкцией.</div>';
  const steps=Array.isArray(x.steps)?x.steps.filter(y=>typeof y==='string'&&y.trim()):[];
  const alternatives=Array.isArray(x.substitutions)?x.substitutions.filter(y=>y&&typeof y.name==='string'):[];
- return '<h2>'+esc(x.name)+'</h2>'+photo+
+ return '<div class="fq-exercise-detail-head"><h2>'+esc(x.name)+'</h2>'+button('Закрыть карточку','exercise-back')+'</div>'+photo+
    (x.muscles?'<p class="input-note"><strong>Основные мышцы:</strong> '+esc(x.muscles)+'</p>':'')+
    (x.start_position?'<h3>Исходное положение</h3><p>'+esc(x.start_position)+'</p>':'')+
    '<h3>Техника выполнения</h3>'+
@@ -1327,7 +1327,7 @@ function modalHTML(){
  if(modal==='detail')content=actualWorkoutPanel(detail)+button(detailOrigin==='history'?'К истории':'Закрыть',detailOrigin==='history'?'detail-back':'close',true);
  const historyExercisePhoto=modal==='exercise-card'&&
   (exerciseOrigin==='history'||exerciseOrigin==='finished-preview');
- return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':historyExercisePhoto?'fq-history-exercise-card':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
+ return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':modal==='exercise-card'?'fq-exercise-detail'+(historyExercisePhoto?' fq-history-exercise-card':''):''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
  document.body?.classList?.toggle('theme-female',((onboardOpen||view==='profile')&&onboard?onboard.sex:state?.metrics?.sex)==='female');
