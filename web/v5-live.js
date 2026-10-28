@@ -38,6 +38,8 @@ let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=
 let connectionsStatus=null,connectionsBusy=false,connectionsError='',connectionsSeq=0;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',periodDeleteTarget=null,pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
+let activityCsvFile=null,activityCsvPreview=null,activityCsvBusy=false,
+    activityCsvError='',activityCsvNotice='';
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,foodRevision=0,feedbackNotice='',feedbackError='';
 const onboardChoices={
@@ -501,6 +503,84 @@ function workout(){
   button('Пропустить упражнение','skip-confirm')+button('Завершить досрочно','finish-confirm')+(done===0?button('Пропустить тренировку','skip-workout-confirm'):'')+'</div>':'';
  return h()+summary+content+footer+overview;
 }
+function activityCsvPanel(){
+ const preview=activityCsvPreview;
+ const grid=preview?'<div class="fq-csv-preview"><p role="status" class="input-note">Найдено занятий: '+esc(preview.count)+
+  ' · Даты по часовому поясу '+esc(preview.timezone)+
+  '. Проверь и при необходимости исправь каждую строку.</p>'+
+  preview.rows.map((row,i)=>'<div class="fq-food-draft">'+
+   '<strong>Занятие '+(i+1)+'</strong>'+
+   '<label class="field"><span>Дата</span><input type="date" data-activity-row="'+i+'" data-activity-field="date" value="'+esc(row.date)+'"></label>'+
+   '<label class="field"><span>Активность</span><input type="text" maxlength="100" data-activity-row="'+i+'" data-activity-field="activity" value="'+esc(row.activity)+'"></label>'+
+   '<div class="cardio-input-grid"><label class="field"><span>Минуты</span><input type="number" min="1" max="300" data-activity-row="'+i+'" data-activity-field="minutes" value="'+esc(row.minutes)+'"></label>'+
+   '<label class="field"><span>Ккал по устройству</span><input type="number" min="0" max="5000" data-activity-row="'+i+'" data-activity-field="kcal" value="'+esc(row.kcal)+'"></label></div>'+
+   ((preview.conflicts||[]).includes(i)?'<label class="field"><span>Похоже на уже сохранённое занятие: что сделать?</span><select data-activity-resolution="'+i+'">'+
+    [['ask','Выбери действие'],['skip','Пропустить совпадение'],['separate','Сохранить отдельной тренировкой']].map(([choice,title])=>
+     '<option value="'+choice+'"'+((preview.resolutions||[])[i]===choice?' selected':'')+'>'+title+'</option>').join('')+
+    '</select></label><p class="input-note">У другого CSV совпали дата, название, минуты и калории. Проверь, это действительно новое занятие?</p>':'')+
+   '</div>').join('')+
+  button(activityCsvBusy?'Сохраняем…':'Подтвердить и сохранить','activity-csv-import',true,activityCsvBusy?'disabled':'')+
+  '</div>':'';
+ return '<section class="surface"><h2>Импортировать отчёт активности</h2>'+
+  '<p class="input-note">Пока поддерживается только CSV UTF-8 с колонками date,activity,minutes,kcal. Каждая строка — расход одной активности с устройства, не калории за сутки. До 30 занятий и 64 КБ.</p>'+
+  '<label class="field"><span>CSV-отчёт</span><input type="file" id="activity-csv-file" accept=".csv,text/csv"></label>'+
+  (activityCsvFile?'<p class="input-note">Выбран файл: '+esc(activityCsvFile.name)+'</p>':'')+
+  (activityCsvError?'<p role="alert" class="fq-form-error">'+esc(activityCsvError)+'</p>':'')+
+  (activityCsvNotice?'<p role="status" class="input-note">'+esc(activityCsvNotice)+'</p>':'')+
+  button(activityCsvBusy?'Читаем…':'Проверить CSV','activity-csv-preview',false,activityCsvBusy?'disabled':'')+
+  grid+ '</section>';
+}
+async function uploadActivityCsv(mode){
+ if(activityCsvBusy)return;
+ if(!activityCsvFile){activityCsvError='Выбери CSV-отчёт активности.';draw();return}
+ if(activityCsvFile.size>65536){activityCsvError='CSV не должен превышать 64 КБ.';draw();return}
+ const old=activityCsvPreview;
+ const selectedFile=activityCsvFile;
+ if(mode==='import'&&!old){activityCsvError='Сначала проверь CSV.';draw();return}
+ activityCsvBusy=true;activityCsvError='';draw();
+ const form=new FormData();form.append('report',selectedFile);form.append('mode',mode);
+ if(mode==='import'){
+  form.append('confirmed','yes');form.append('file_hash',old.file_hash);
+  form.append('edited_rows',JSON.stringify(old.rows.map(row=>({date:row.date,activity:row.activity,minutes:row.minutes,kcal:row.kcal}))));
+  form.append('resolutions',JSON.stringify(old.resolutions||old.rows.map(()=> 'ask')));
+ }
+ const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),30000);
+ try{
+  const response=await fetch('/mini/activity/report',{method:'POST',
+    headers:{'X-Formiq-Init':token},body:form,credentials:'same-origin',
+    cache:'no-store',signal:abort.signal});
+  const data=await response.json();
+  // Ignore late results for a report the owner has since replaced.
+  if(selectedFile!==activityCsvFile)return;
+  if(response.status===409&&mode==='import'&&Array.isArray(data.conflicts)){
+   old.conflicts=data.conflicts;
+   activityCsvError=data.error||'Выбери действие для совпадающих тренировок.';
+   return;
+  }
+  if(!response.ok||!data.ok)throw Error(data.error||'Не удалось обработать отчёт');
+  if(mode==='preview'){
+   activityCsvPreview={...data,resolutions:data.rows.map(()=> 'ask')};
+   activityCsvNotice='Проверь даты, активность, минуты и калории перед сохранением.';
+  }else{
+   activityCsvNotice='Добавлено занятий: '+data.imported+'. Уже сохранено: '+data.duplicates+'.';
+   activityCsvPreview=null;activityCsvFile=null;
+   // Import was already committed: a failed refresh must not imply failure
+   // of the save and must not prompt a misleading duplicate re-import.
+   try{
+    const snapshot=(await request('state')).data;state=snapshot;
+    dayRows=null;monthMarks=new Set();if(date)await loadDay();
+   }catch(_refreshError){
+    activityCsvNotice+=' История обновится после повторного открытия приложения.';
+   }
+  }
+ }catch(ex){
+  if(selectedFile===activityCsvFile){
+   activityCsvError=ex.name==='AbortError'?
+     'Ответ сервера не получен. Проверь историю перед повтором импорта.':
+     ex.message||'Ошибка CSV';
+  }
+ }finally{clearTimeout(timer);activityCsvBusy=false;draw()}
+}
 function training(){
  if(!ready()){onboardOpen=true;return onboardForm()}
  if(active())return workout();
@@ -540,8 +620,11 @@ function training(){
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric" placeholder="60"')+
     '<label class="field"><span>Средний пульс <small>необязательно</small></span>'+
     '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
-  '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
-  '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
+  '</div>'+
+  '<label class="field"><span>Калории по часам или браслету <small>необязательно</small></span>'+
+  '<input id="cardio-device-kcal" type="number" min="0" max="5000" step="1" inputmode="numeric" placeholder="Например, 240" value="'+esc(drafts['cardio-device-kcal']??'')+'"></label>'+
+  '<div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
+  '<p class="input-note" style="margin-top:11px">Если указаны калории с устройства, сохраним их как введённое показание, без дополнительного расчёта по MET. Без устройства расход будет примерным.</p></section>';
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&['planned','past'].includes(r.status));
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
@@ -551,7 +634,7 @@ function training(){
   '<p>🎁 Скидка 10% на один период «Тренера AI»: 900 ₽ вместо 1 000 ₽. Оплата пока не подключена.</p></section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p>'+birthday+'<section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+trainingCoach;
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+activityCsvPanel()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
@@ -1192,7 +1275,8 @@ function modalHTML(){
    '<div class="fq-live-grid" style="margin-top:15px">'+
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')+
     input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')+
-   '</div><p class="input-note">Пульс необязателен. Калории по MET — приблизительная оценка.</p>'+
+   '</div>'+input('Калории с устройства (необязательно)','cardio-device-kcal','number','min="0" max="5000" step="1" inputmode="numeric" placeholder="240"')+
+   '<p class="input-note">Если показание указано, не добавляем к нему оценку MET. Без устройства калории приблизительные.</p>'+
    button('Сохранить тренировку','cardio',true)+button('Отмена','close');
  }
  if(modal==='mood')content=state?.metrics?.sex==='female'?
@@ -1225,7 +1309,14 @@ function partialHistory(){const el=document.getElementById('history-root');if(el
 function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{
  onboardChanged(e);
- if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(['reps','weight','cardio-min','cardio-hr','cardio-device-kcal','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(e.target.dataset?.activityRow!==undefined&&activityCsvPreview){
+  const index=Number(e.target.dataset.activityRow),key=e.target.dataset.activityField;
+  if(Number.isInteger(index)&&index>=0&&index<activityCsvPreview.rows.length&&
+     ['date','activity','minutes','kcal'].includes(key)){
+    activityCsvPreview.rows[index][key]=e.target.value;
+  }
+ }
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  // Calendar month changes only through the arrow buttons; do not reset date drafts.
  if(e.target.id==='food-text'){foodText=e.target.value;foodSaveRequestId=''}
@@ -1233,9 +1324,22 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
+ if(e.target.dataset?.activityResolution!==undefined&&activityCsvPreview){
+  const i=Number(e.target.dataset.activityResolution),choice=e.target.value;
+  if(Number.isInteger(i)&&i>=0&&i<activityCsvPreview.rows.length&&
+      ['ask','skip','separate'].includes(choice)){
+   activityCsvPreview.resolutions[i]=choice;
+   activityCsvError='';
+  }
+  return;
+ }
  if(e.target.id==='food-date'){foodSaveRequestId='';fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;foodSaveRequestId='';return}
  if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
+ if(e.target.id==='activity-csv-file'){
+  activityCsvFile=e.target.files?.[0]||null;activityCsvPreview=null;
+  activityCsvError='';activityCsvNotice='';draw();return
+ }
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
 });
@@ -1243,7 +1347,7 @@ app.addEventListener('focusin',e=>{
  const field=e.target;
  if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
  document.body.classList.add('fq-typing');
- if(['cardio-min','cardio-hr'].includes(field.id))document.body.classList.add('cardio-typing');
+ if(['cardio-min','cardio-hr','cardio-device-kcal'].includes(field.id))document.body.classList.add('cardio-typing');
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
  shift();setTimeout(shift,180);setTimeout(shift,430);
 });
@@ -1393,6 +1497,9 @@ app.addEventListener('click',async e=>{
    weightHistory=response.measurements||[];weightImportNotice='Ручное измерение сохранено.';error='';
   }catch(ex){weightImportError=ex.message||'Не удалось сохранить измерение'}
   draw();return;
+ }
+ if(cmd==='activity-csv-preview'||cmd==='activity-csv-import'){
+  await uploadActivityCsv(cmd==='activity-csv-import'?'import':'preview');return
  }
  if(cmd==='weight-preview'||cmd==='weight-import'){await uploadBodyWeight(cmd==='weight-import'?'import':'preview');return}
  if(cmd==='progress-exercise'){if(progressSeries?.some(item=>item.key===element.dataset.key)){progressSelected=element.dataset.key;draw()}return}
@@ -1790,14 +1897,17 @@ app.addEventListener('click',async e=>{
  if(cmd==='cardio'){
   if(!cardioType){fail('Сначала выбери вид кардио.');return}
   const m=document.getElementById('cardio-min')?.value.trim()||'',p=document.getElementById('cardio-hr')?.value.trim()||'';
+  const k=document.getElementById('cardio-device-kcal')?.value.trim()||'';
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
+  if(k&&(!/^\d+$/.test(k)||Number(k)>5000)){fail('Калории по устройству: 0–5000 или пустое поле.');return}
   const activity=String(document.getElementById('cardio-activity')?.value||drafts['cardio-activity']||'').trim();
   if(cardioType==='Другое'&&(activity.length<3||activity.length>100)){fail('Название активности: 3–100 символов.');return}
   const intensity=document.getElementById('cardio-intensity')?.value||'moderate';
-  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType,...(cardioType==='Другое'?{activity,intensity}:{})});
-  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-activity']='';drafts['cardio-intensity']='';if(date){dayRows=null;await loadDay()}draw()}
-  else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
+  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,
+   device_kcal:k?Number(k):null,type:cardioType,...(cardioType==='Другое'?{activity,intensity}:{})});
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-device-kcal']='';drafts['cardio-activity']='';drafts['cardio-intensity']='';if(date){dayRows=null;await loadDay()}draw()}
+  else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr'),calories=document.getElementById('cardio-device-kcal');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p;if(calories)calories.value=k}
   return;
  }
  if(cmd==='week'){

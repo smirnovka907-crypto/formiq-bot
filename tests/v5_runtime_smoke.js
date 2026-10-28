@@ -39,6 +39,35 @@ function createClient(auth=true,shared={}){
     requests.push({action:'nutrition-report'});
     return {ok:true,status:200,async json(){return {ok:true,answer:'В отчёте указано 1900 ккал.'}}};
    }
+   if(url==='/mini/activity/report'){
+    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
+    const mode=opts.body.data.get('mode');
+    assert.ok(['preview','import'].includes(mode));
+    requests.push({action:'activity_csv_'+mode});
+    if(deferredActions.has('activity_csv_'+mode)){
+     const waiting=deferredActions.get('activity_csv_'+mode);
+     deferredActions.delete('activity_csv_'+mode);
+     await waiting;
+    }
+    if(mode==='preview'){
+     return {ok:true,status:200,async json(){return {
+      ok:true,count:1,rows:[{date:'2025-10-25',
+       activity:'Эллипс',minutes:25,kcal:240}],
+      file_hash:'offline_sha256_fixture',timezone:'Europe/Moscow',
+      conflicts:shared.csvHasConflict?[0]:[]}}};
+    }
+    assert.equal(opts.body.data.get('confirmed'),'yes');
+    assert.equal(opts.body.data.get('file_hash'),'offline_sha256_fixture');
+    const checked=JSON.parse(opts.body.data.get('edited_rows'));
+    assert.equal(checked[0].kcal,240);
+    const choices=JSON.parse(opts.body.data.get('resolutions'));
+    if(shared.csvHasConflict&&choices[0]==='ask')
+      return {ok:false,status:409,async json(){return {ok:false,conflicts:[0],
+        error:'Выбери, сохранить это занятие отдельно или пропустить.'}}};
+    if(shared.csvHasConflict)assert.equal(choices[0],'separate');
+    return {ok:true,status:200,async json(){
+     return {ok:true,imported:1,duplicates:0}}};
+   }
    assert.equal(url,'/mini/api');
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
@@ -241,6 +270,42 @@ function createClient(auth=true,shared={}){
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
 
 async function run(){
+ const csv=createClient(true,{tier:'max'});
+ await settle();await csv.click({nav:'home'});await settle();
+ const report={name:'report.csv',size:120};
+ csv.handlers.change({target:{id:'activity-csv-file',files:[report],dataset:{}}});
+ await csv.click({cmd:'activity-csv-preview'});
+ assert.match(csv.root.innerHTML,/Найдено занятий: 1/);
+ csv.failOnce('state');
+ await csv.click({cmd:'activity-csv-import'});
+ assert.match(csv.root.innerHTML,/Добавлено занятий: 1/);
+ assert.match(csv.root.innerHTML,/История обновится после повторного открытия/,
+  'Saved CSV must not be presented as failed after a separate refresh error');
+ assert.equal(csv.requests.filter(x=>x.action==='activity_csv_import').length,1);
+ const csvConflict=createClient(true,{tier:'max',csvHasConflict:true});
+ await settle();await csvConflict.click({nav:'home'});await settle();
+ csvConflict.handlers.change({target:{id:'activity-csv-file',
+   files:[{name:'conflicting.csv',size:110}],dataset:{}}});
+ await csvConflict.click({cmd:'activity-csv-preview'});
+ assert.match(csvConflict.root.innerHTML,/Похоже на уже сохранённое занятие/);
+ await csvConflict.click({cmd:'activity-csv-import'});
+ assert.match(csvConflict.root.innerHTML,/Выбери, сохранить это занятие отдельно/);
+ csvConflict.handlers.change({target:{dataset:{activityResolution:'0'},value:'separate'}});
+ await csvConflict.click({cmd:'activity-csv-import'});
+ assert.match(csvConflict.root.innerHTML,/Добавлено занятий: 1/);
+ assert.equal(csvConflict.requests.filter(x=>x.action==='activity_csv_import').length,2);
+ const csvLate=createClient(true,{tier:'max'});
+ await settle();await csvLate.click({nav:'home'});await settle();
+ csvLate.handlers.change({target:{id:'activity-csv-file',
+  files:[{name:'old.csv',size:70}],dataset:{}}});
+ const release=csvLate.deferOnce('activity_csv_preview');
+ const pending=csvLate.click({cmd:'activity-csv-preview'});
+ await settle();
+ csvLate.handlers.change({target:{id:'activity-csv-file',
+  files:[{name:'new.csv',size:80}],dataset:{}}});
+ release();await pending;
+ assert.doesNotMatch(csvLate.root.innerHTML,/Найдено занятий: 1/,
+  'Late preview for a replaced file must be discarded');
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
@@ -337,25 +402,30 @@ async function run(){
  await app.click({cmd:'cardio-add'});
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
- app.input('cardio-min','60');app.input('cardio-hr','120');
+ app.input('cardio-min','60');app.input('cardio-hr','120');app.input('cardio-device-kcal','240');
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Бег'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value="60"/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value="120"/);
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value="240"/,'Device value survives activity-type changes');
  await app.click({cmd:'cardio-types'});
  await app.click({cmd:'cardio-type',type:'Велосипед'});
  app.failOnce('cardio');
  await app.click({cmd:'cardio'});
  assert.equal(app.fields.get('cardio-min').value,'60','unsaved cardio duration retained');
  assert.equal(app.fields.get('cardio-hr').value,'120','unsaved average HR retained');
+ assert.equal(app.fields.get('cardio-device-kcal').value,'240','unsaved device calories retained on network error');
  await app.click({cmd:'cardio'});
- assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60));
+ assert.ok(app.requests.some(x=>x.action==='cardio'&&x.type==='Велосипед'&&x.minutes===60&&x.device_kcal===240),
+  'User-reported device calories are sent explicitly, not treated as a MET estimate');
  assert.match(app.root.innerHTML,/class="surface cardio-inline"/,'Cardio stays embedded on workouts screen');
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/,'Successful save clears cardio duration');
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/,'Successful save clears heart rate');
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value=""/,'Successful save clears device calories');
  await app.click({cmd:'cardio-add'});
  assert.match(app.root.innerHTML,/id="cardio-min"[^>]*value=""/);
  assert.match(app.root.innerHTML,/id="cardio-hr"[^>]*value=""/);
+ assert.match(app.root.innerHTML,/id="cardio-device-kcal"[^>]*value=""/);
  await app.click({cmd:'close'});
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Only three bottom nav buttons');
  assert.match(app.root.innerHTML,/Тренировочный план/,'Workouts contain the four-week plan');
@@ -770,6 +840,8 @@ async function run(){
    await diary.click({nav:'home'});await diary.click({cmd:'cardio-add'});
    await diary.click({cmd:'cardio-type',type:'Велосипед'});diary.input('cardio-min','60');
    await diary.click({cmd:'cardio'});await diary.click({nav:'progress'});
+   assert.ok(diary.requests.some(x=>x.action==='cardio'&&x.device_kcal===null),
+     'Empty device field uses the existing estimated-MET path');
    assert.match(diary.root.innerHTML,/Кардио · Велосипед/,'Selected-date history refreshes after a successful cardio save');
    console.log('PASS v5 signed API, three tabs, nested plan, native onboarding, fullscreen fallback, workout, history and consent');
 }

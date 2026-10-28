@@ -21,6 +21,8 @@ import re
 import difflib
 from collections import Counter
 from weight_import import parse_report, MAX_FILE_SIZE
+from activity_import import (parse_activity_csv, corrected_activity_rows,
+                             MAX_ACTIVITY_CSV_BYTES)
 from integrations.fatsecret import FatSecretCatalogClient, FatSecretClient, normalize_diary
 from integrations.garmin import normalize_garmin_webhook
 
@@ -577,7 +579,26 @@ def init_db():
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS activity_label TEXT")
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_met NUMERIC(4,1)")
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS estimated_kcal INTEGER")
+        # Values typed from an activity tracker are user-reported, not MET estimates.
+        # NULL for historical rows preserves all existing energy calculations.
+        c.execute("""ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS
+            reported_kcal INTEGER CHECK (reported_kcal BETWEEN 0 AND 5000)""")
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS intensity TEXT")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_fingerprint TEXT")
+        # CSV origin and canonical identity are kept separately to avoid
+        # silently collapsing genuine equal-valued sessions from two files.
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_file_hash TEXT")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_row_no INTEGER")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_canonical TEXT")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS cardio_csv_owner_file_row
+            ON cardio_sessions(chat_id,import_file_hash,import_row_no)
+            WHERE import_file_hash IS NOT NULL AND import_row_no IS NOT NULL""")
+        c.execute("""CREATE INDEX IF NOT EXISTS cardio_csv_owner_canonical
+            ON cardio_sessions(chat_id,import_canonical)
+            WHERE import_canonical IS NOT NULL""")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS cardio_csv_owner_fingerprint
+            ON cardio_sessions(chat_id,import_fingerprint)
+            WHERE import_fingerprint IS NOT NULL""")
         c.execute("""CREATE INDEX IF NOT EXISTS cardio_user_date
             ON cardio_sessions(chat_id,performed_at DESC)""")
         # №8: additive only; keeps existing metrics, training and calendar untouched.
@@ -5179,10 +5200,11 @@ def met_category_from_activity(text,chat):
         return None
 
 
-def cardio_history_title(equipment,minutes,activity=None,kcal=None):
+def cardio_history_title(equipment,minutes,activity=None,kcal=None,reported=False):
     title=activity or CARDIO_LABELS.get(equipment,'Активность')
-    return 'Дополнительная тренировка · '+title+' · '+str(minutes)+' мин'+(
-        ' · ≈ '+str(kcal)+' ккал' if kcal is not None else '')
+    label=(' · '+str(kcal)+' ккал (по устройству, введено вручную)' if reported
+           else ' · ≈ '+str(kcal)+' ккал (оценка MET)') if kcal is not None else ''
+    return 'Дополнительная тренировка · '+title+' · '+str(minutes)+' мин'+label
 
 
 
@@ -5257,21 +5279,28 @@ def mini_history_detail(chat,wid):
     zone = history_local_zone(chat)
     if wid < 0:
         with db() as conn:
-            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal FROM cardio_sessions
+            cardio=conn.execute('''SELECT performed_at,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,reported_kcal,import_fingerprint FROM cardio_sessions
                 WHERE id=%s AND chat_id=%s''',(-wid,chat)).fetchone()
         if not cardio:
             raise ValueError('Запись кардио не найдена')
-        dt,minutes,hr,equipment,activity_label,met,kcal=cardio
+        dt,minutes,hr,equipment,activity_label,met,kcal,reported_kcal,import_fingerprint=cardio
         display_type=activity_label or CARDIO_LABELS.get(equipment, 'Активность')
         items=[{'name':'Активность','key':None,'result':display_type},
                {'name':'Продолжительность','key':None,'result':f'{minutes} мин'}]
         if hr is not None:
             items.append({'name':'Средний пульс','key':None,'result':f'{hr} уд/мин'})
-        if kcal is not None:
+        if reported_kcal is not None:
+            items.append({'name':'Калории по устройству','key':None,
+                          'result':f'{reported_kcal} ккал (' +
+                          ('импортировано из CSV, подтверждено пользователем)' if import_fingerprint
+                           else 'введено пользователем') + ')' })
+        elif kcal is not None:
             items.append({'name':'Примерный расход энергии','key':None,
                           'result':f'≈ {kcal} ккал (MET {met}; не измерение датчика)'})
         return {'date':history_local_date(dt, zone),'title':'Дополнительная тренировка · '+display_type,
-                'type':'cardio','duration_minutes':minutes,'items':items}
+                'type':'cardio','duration_minutes':minutes,
+                'source':'csv_user' if import_fingerprint else ('device_manual' if reported_kcal is not None else 'met_estimate'),
+                'items':items}
     with db() as conn:
         w=conn.execute("SELECT plan_day,started_at,manual_title,finished_at,difficulty,status FROM workouts WHERE id=%s AND chat_id=%s AND status IN ('finished','finished_empty','skipped')",
             (wid,chat)).fetchone()
@@ -5319,16 +5348,16 @@ def mini_history_page(chat, body):
     filter_w = suffix.format(column='started_at') if suffix else ''
     filter_c = suffix.format(column='performed_at') if suffix else ''
     query = (
-        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal FROM ("
+        "SELECT entry_id, occurred_at, entry_type, plan_day, manual_title, minutes, equipment, activity_label, estimated_kcal, reported_kcal, import_fingerprint FROM ("
         "SELECT id AS entry_id, started_at AS occurred_at, "
         "CASE WHEN status='skipped' THEN 'workout_skipped' "
         "WHEN status='finished_empty' THEN 'workout_empty' ELSE 'workout' END AS entry_type,"
         "plan_day, manual_title, NULL::integer AS minutes, NULL::text AS equipment, "
-        "NULL::text AS activity_label, NULL::integer AS estimated_kcal FROM workouts "
+        "NULL::text AS activity_label, NULL::integer AS estimated_kcal, NULL::integer AS reported_kcal, NULL::text AS import_fingerprint FROM workouts "
         "WHERE chat_id=%s AND status IN ('finished','finished_empty','skipped') " + filter_w +
         " UNION ALL SELECT -id AS entry_id, performed_at AS occurred_at,"
         "'cardio'::text AS entry_type, NULL::text AS plan_day,"
-        "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal FROM cardio_sessions "
+        "NULL::text AS manual_title, minutes, equipment, activity_label, estimated_kcal, reported_kcal, import_fingerprint FROM cardio_sessions "
         "WHERE chat_id=%s " + filter_c +
         ") AS entries ORDER BY occurred_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -5336,7 +5365,7 @@ def mini_history_page(chat, body):
         rows = conn.execute(query, (*params_workout, *params_cardio, limit + 1, offset)).fetchall()
     p = profile(chat)
     page = []
-    for ident, timestamp, kind, day, custom, minutes, equipment, activity, kcal in rows[:limit]:
+    for ident, timestamp, kind, day, custom, minutes, equipment, activity, kcal, reported_kcal, import_fingerprint in rows[:limit]:
         page.append({
             'id': ident,
             'date': history_local_date(timestamp, zone),
@@ -5344,7 +5373,9 @@ def mini_history_page(chat, body):
             'title': ((('Пропущена · ' if kind=='workout_skipped' else
                        'Без подходов · ' if kind=='workout_empty' else '')+
                       (custom or day_title(p,day)))) if kind.startswith('workout')
-                     else cardio_history_title(equipment,minutes,activity,kcal),
+                     else cardio_history_title(equipment,minutes,activity,
+                            reported_kcal if reported_kcal is not None else kcal,
+                            reported_kcal is not None) + (' · CSV' if import_fingerprint else ''),
         })
     return {'history': page, 'next_offset': offset + limit if len(rows) > limit else None}
 
@@ -5726,6 +5757,7 @@ def mini_aux(chat,action,body):
     if action=='cardio':
         require_tier(chat,'comfort')
         mins=body.get('minutes');hr=body.get('avg_hr')
+        device_kcal=body.get('device_kcal')
         activity=body.get('type')
         if activity is not None and activity not in CARDIO_TYPES:
             raise ValueError('Неизвестный вид кардио')
@@ -5745,20 +5777,27 @@ def mini_aux(chat,action,body):
         if type(mins) is not int or not 1<=mins<=300:raise ValueError('Минуты: от 1 до 300')
         if hr not in (None,'') and (type(hr) is not int or not 40<=hr<=220):
             raise ValueError('Пульс: от 40 до 220')
-        category=(met_category_from_activity(activity_label,chat) if activity_label
-                  else stored_type if stored_type in CARDIO_MET else None)
-        base_met=CARDIO_MET.get(category)
-        met=(round(max(1.3,min(14.,base_met*
-                  {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
-             if base_met is not None else None)
-        current_weight=metrics(chat).get('weight_kg')
-        kcal=(round(met*3.5*float(current_weight)*mins/200)
-              if met is not None and current_weight and float(current_weight)>0 else None)
+        if device_kcal is not None and (type(device_kcal) is not int or not 0<=device_kcal<=5000):
+            raise ValueError('Показание устройства: 0–5000 ккал или пустое поле')
+        # A supplied tracker reading needs neither Yandex classification nor
+        # a separate MET estimate: skip external calls and avoid double counts.
+        met,kcal=None,None
+        if device_kcal is None:
+            category=(met_category_from_activity(activity_label,chat) if activity_label
+                      else stored_type if stored_type in CARDIO_MET else None)
+            base_met=CARDIO_MET.get(category)
+            met=(round(max(1.3,min(14.,base_met*
+                      {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
+                 if base_met is not None else None)
+            current_weight=metrics(chat).get('weight_kg')
+            kcal=(round(met*3.5*float(current_weight)*mins/200)
+                  if met is not None and current_weight
+                  and float(current_weight)>0 else None)
         with db() as conn:
             conn.execute('''INSERT INTO cardio_sessions
-              (chat_id,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,intensity)
-              VALUES(%s,%s,%s,%s,%s,%s,%s,%s)''',
-              (chat,mins,hr or None,stored_type,activity_label,met,kcal,intensity))
+              (chat_id,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,intensity,reported_kcal)
+              VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)''',
+              (chat,mins,hr or None,stored_type,activity_label,met,kcal,intensity,device_kcal))
         return True
     if action=='ai_consent':
         require_tier(chat,'comfort')
@@ -6049,6 +6088,130 @@ def analyze_nutrition_report(chat, data_bytes, filename, mime):
         conn.execute("INSERT INTO ai_messages(chat_id,role,content,provider) VALUES(%s,'user',%s,'yandex20')",(chat,'Анализ отчёта FatSecret'))
         conn.execute("INSERT INTO ai_messages(chat_id,role,content,provider) VALUES(%s,'assistant',%s,'yandex20')",(chat,result))
     return {'answer':result,'left':ai_quota(chat)}
+
+
+@APP.post('/mini/activity/report')
+def mini_activity_csv_report():
+    """Authenticated two-step CSV import: preview, explicit approval, idempotent save.
+
+    Strict v1 schema, no third-party account access, AI or persisted raw upload.
+    Only ACTIVITY calories are permitted; daily energy reports are rejected.
+    """
+    chat=mini_auth(request.headers.get('X-Formiq-Init',''))
+    if not chat:
+        return jsonify(ok=False,error='Открой FORMIQ из Telegram'),401
+    if request.content_length and request.content_length>MAX_ACTIVITY_CSV_BYTES+120_000:
+        return jsonify(ok=False,error='CSV слишком большой'),413
+    try:
+        if not has_agreement(chat):
+            raise ValueError('Сначала заполни анкету')
+        require_tier(chat,'comfort')
+        upload=request.files.get('report')
+        if upload is None:
+            raise ValueError('Выбери CSV-отчёт активности')
+        content=upload.read(MAX_ACTIVITY_CSV_BYTES+1)
+        zone=metrics(chat).get('timezone') or 'Europe/Moscow'
+        parsed=parse_activity_csv(content,upload.filename or '',
+                                  upload.mimetype or '',zone)
+        digest=hashlib.sha256(content).hexdigest()
+        mode=request.form.get('mode','preview')
+        if mode=='preview':
+            with db() as conn:
+                matches=[]
+                # Read-only hint. The import path rechecks under an owner lock.
+                for index,row in enumerate(parsed):
+                    already=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND import_file_hash=%s
+                        AND import_row_no=%s LIMIT 1""",
+                        (chat,digest,index)).fetchone()
+                    conflict=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND (import_canonical=%s
+                        OR import_fingerprint=%s)
+                        AND import_file_hash IS DISTINCT FROM %s LIMIT 1""",
+                        (chat,row['canonical_fingerprint'],
+                         row['canonical_fingerprint'],digest)).fetchone()
+                    if conflict and not already:
+                        matches.append(index)
+            response=jsonify(ok=True,count=len(parsed),
+                rows=[{k:item[k] for k in ('date','activity','minutes','kcal')}
+                      for item in parsed],
+                conflicts=matches,file_hash=digest,timezone=zone,
+                notice='Если такая тренировка есть в другом отчёте, выбери: пропустить или сохранить отдельно.')
+        elif mode=='import':
+            if (request.form.get('confirmed')!='yes' or
+                    request.form.get('file_hash')!=digest):
+                raise ValueError('Проверь файл и подтверди его импорт')
+            try:
+                changes=json.loads(request.form.get('edited_rows',''))
+                decisions=json.loads(request.form.get('resolutions',''))
+            except (TypeError,ValueError,json.JSONDecodeError):
+                raise ValueError('Проверь и подтверди все строки') from None
+            values=corrected_activity_rows(parsed,changes,zone)
+            if (not isinstance(decisions,list) or len(decisions)!=len(values)
+                    or any(choice not in ('ask','skip','separate')
+                           for choice in decisions)):
+                raise ValueError('Нужен явный выбор при совпадении занятий')
+            imported,duplicate_count=0,0
+            with db() as conn:
+                conn.execute('SELECT pg_advisory_xact_lock(%s)',(chat,))
+                conflicts=[]
+                outcomes=[]
+                for index,row in enumerate(values):
+                    already=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND import_file_hash=%s
+                        AND import_row_no=%s LIMIT 1""",
+                        (chat,digest,index)).fetchone()
+                    matching=conn.execute("""SELECT 1 FROM cardio_sessions
+                        WHERE chat_id=%s AND (import_canonical=%s
+                            OR import_fingerprint=%s)
+                            AND import_file_hash IS DISTINCT FROM %s LIMIT 1""",
+                        (chat,row['canonical_fingerprint'],
+                         row['canonical_fingerprint'],digest)).fetchone()
+                    if already:
+                        outcomes.append('duplicate')
+                    elif matching and decisions[index]=='ask':
+                        conflicts.append(index)
+                        outcomes.append('pending')
+                    elif matching and decisions[index]=='skip':
+                        outcomes.append('duplicate')
+                    else:
+                        outcomes.append('separate' if matching else 'ordinary')
+                if conflicts:
+                    # Important: no writes, including non-conflicting rows.
+                    return jsonify(ok=False,conflicts=conflicts,
+                        error='Есть совпадающие занятия из другого CSV. Для отмеченных строк выбери «Пропустить» или «Сохранить отдельно».'
+                        ),409
+                for index,(row,outcome) in enumerate(zip(values,outcomes)):
+                    if outcome=='duplicate':
+                        duplicate_count+=1
+                        continue
+                    fingerprint=(hashlib.sha256(
+                        f"formiq-csv-separate-v1:{digest}:{index}:{row['canonical_fingerprint']}".encode('ascii')
+                        ).hexdigest() if outcome=='separate'
+                        else row['fingerprint'])
+                    inserted=conn.execute("""INSERT INTO cardio_sessions
+                        (chat_id,performed_at,minutes,equipment,activity_label,
+                         estimated_met,estimated_kcal,reported_kcal,import_fingerprint,
+                         import_file_hash,import_row_no,import_canonical)
+                        VALUES(%s,%s,%s,'other',%s,NULL,NULL,%s,%s,%s,%s,%s)
+                        ON CONFLICT DO NOTHING RETURNING id""",
+                        (chat,row['performed_at'],row['minutes'],row['activity'],
+                         row['kcal'],fingerprint,digest,index,
+                         row['canonical_fingerprint'])).fetchone()
+                    if inserted:
+                        imported+=1
+                    else:
+                        duplicate_count+=1
+            response=jsonify(ok=True,imported=imported,duplicates=duplicate_count)
+        else:
+            raise ValueError('Некорректный режим отчёта')
+        response.headers['Cache-Control']='no-store'
+        return response
+    except ValueError as err:
+        return jsonify(ok=False,error=str(err)),400
+    except Exception:
+        LOG.exception('Activity CSV import failed')
+        return jsonify(ok=False,error='Не удалось обработать CSV'),500
 
 
 @APP.post('/mini/body-weight/report')

@@ -4,6 +4,9 @@ Each test owns an isolated schema in an explicitly named local test database.
 GitHub Actions supplies a disposable PostgreSQL service for these tests.
 """
 import importlib
+import hashlib
+import json
+from io import BytesIO
 import os
 import unittest
 import uuid
@@ -1920,6 +1923,211 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual([x['name'] for x in products['meals'][0]['items']],
                          ['Рис сухой','Творог'],
                          'Reject stale AI, not the real nutrition history')
+
+    def test_csv_preview_confirmation_dedup_and_owner_isolation(self):
+        self.save()
+        raw=('date,activity,minutes,kcal\\n2025-10-25,Эллипс,25,240\\n'
+             '2025-10-26,Ходьба,30,110\\n').replace('\\n','\n').encode('utf-8')
+        digest=hashlib.sha256(raw).hexdigest()
+        def post(mode,*,file_hash=None,edits=None,chat=None):
+            with patch.object(self.m,'mini_auth',return_value=chat or self.chat):
+                payload={'mode':mode,'report':(BytesIO(raw),'activity.csv')}
+                if mode=='import':
+                    payload.update(confirmed='yes',file_hash=file_hash or digest,
+                                   edited_rows=json.dumps(edits,ensure_ascii=False),
+                                   resolutions=json.dumps(['ask']*len(edits)))
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data=payload,headers={'X-Formiq-Init':'fake'},content_type='multipart/form-data')
+        preview=post('preview')
+        self.assertEqual(preview.status_code,200,preview.get_json())
+        result=preview.get_json()
+        self.assertEqual(result['count'],2)
+        self.assertEqual(result['rows'][0]['kcal'],240)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM cardio_sessions').fetchone()[0],0,
+                             'Preview is read-only')
+        self.assertEqual(post('import',file_hash='0'*64,
+            edits=result['rows']).status_code,400)
+        edited=[{**row} for row in result['rows']]
+        edited[1]['kcal']=115
+        imported=post('import',edits=edited)
+        self.assertEqual(imported.status_code,200,imported.get_json())
+        self.assertEqual(imported.get_json()['imported'],2)
+        same=post('import',edits=edited)
+        self.assertEqual(same.get_json()['imported'],0)
+        self.assertEqual(same.get_json()['duplicates'],2)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT chat_id,performed_at,activity_label,minutes,
+                   reported_kcal,estimated_kcal,import_fingerprint
+                   FROM cardio_sessions ORDER BY performed_at""").fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual([r[4] for r in rows],[240,115])
+        self.assertTrue(all(r[5] is None and len(r[6])==64 for r in rows))
+        self.assertEqual(rows[0][0],self.chat)
+        page=self.m.mini_history_page(self.chat,{'limit':30})
+        self.assertTrue(any('CSV' in item['title'] for item in page['history']))
+        with patch.object(self.m,'mini_auth',return_value=None):
+            denied=self.m.APP.test_client().post('/mini/activity/report',
+                data={'report':(BytesIO(raw),'activity.csv')},
+                headers={'X-Formiq-Init':'invalid'})
+        self.assertEqual(denied.status_code,401)
+        self.m.init_db()
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT COUNT(*) FROM cardio_sessions').fetchone()[0],2)
+
+    def test_csv_identical_rows_are_separate_sessions_but_retry_is_idempotent(self):
+        # A duplicate row inside one CSV can represent another genuine workout.
+        self.save()
+        raw=('date,activity,minutes,kcal\n'
+             '2025-10-25,Эллипс,25,240\n'
+             '2025-10-25,Эллипс,25,240\n').encode('utf-8')
+        digest=hashlib.sha256(raw).hexdigest()
+        def request_import(chat):
+            with patch.object(self.m,'mini_auth',return_value=chat):
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data={'mode':'import','report':(BytesIO(raw),'activity.csv'),
+                          'confirmed':'yes','file_hash':digest,'edited_rows':
+                          json.dumps([{'date':'2025-10-25','activity':'Эллипс',
+                             'minutes':25,'kcal':240}]*2,ensure_ascii=False),
+                          'resolutions':json.dumps(['ask','ask'])},
+                    headers={'X-Formiq-Init':'offline-test'},
+                    content_type='multipart/form-data')
+        first=request_import(self.chat)
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.get_json()['imported'],2)
+        retry=request_import(self.chat)
+        self.assertEqual(retry.status_code,200,retry.get_json())
+        self.assertEqual(retry.get_json()['imported'],0)
+        self.assertEqual(retry.get_json()['duplicates'],2)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT reported_kcal,estimated_met,estimated_kcal,
+                import_fingerprint FROM cardio_sessions WHERE chat_id=%s
+                ORDER BY id""",(self.chat,)).fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual(len({r[3] for r in rows}),2)
+        self.assertTrue(all(r[:3]==(240,None,None) for r in rows))
+        # Identical payload is still independent between owners.
+        self.m.save_onboarding(self.chat+1,self.body())
+        other=request_import(self.chat+1)
+        self.assertEqual(other.status_code,200,other.get_json())
+        self.assertEqual(other.get_json()['imported'],2)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],2)
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat+1,)).fetchone()[0],2)
+
+    def test_csv_crossfile_conflict_requires_explicit_resolution_and_is_idempotent(self):
+        """Same four fields in different files must never silently lose a session."""
+        self.save()
+        rows=[{'date':'2025-10-25','activity':'Эллипс','minutes':25,'kcal':240}]
+        raw1=b'date,activity,minutes,kcal\n2025-10-25,\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81,25,240\n'
+        raw2=b'date;activity;minutes;kcal\n2025-10-25;\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81;25;240\n'
+        def send(content,mode='import',choices=None,chat=None):
+            data={'mode':mode,'report':(BytesIO(content),'report.csv')}
+            if mode=='import':
+                data.update(confirmed='yes',file_hash=hashlib.sha256(content).hexdigest(),
+                            edited_rows=json.dumps(rows,ensure_ascii=False),
+                            resolutions=json.dumps(choices or ['ask']))
+            with patch.object(self.m,'mini_auth',return_value=self.chat if chat is None else chat):
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data=data,content_type='multipart/form-data',
+                    headers={'X-Formiq-Init':'offline-test'})
+        first=send(raw1)
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.get_json()['imported'],1)
+        preview=send(raw2,'preview')
+        self.assertEqual(preview.status_code,200,preview.get_json())
+        self.assertEqual(preview.get_json()['conflicts'],[0])
+        ambiguous=send(raw2)
+        self.assertEqual(ambiguous.status_code,409,ambiguous.get_json())
+        self.assertEqual(ambiguous.get_json()['conflicts'],[0])
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM cardio_sessions').fetchone()[0],1)
+        separate=send(raw2,choices=['separate'])
+        self.assertEqual(separate.status_code,200,separate.get_json())
+        self.assertEqual(separate.get_json()['imported'],1)
+        replay=send(raw2,choices=['separate'])
+        self.assertEqual(replay.get_json()['imported'],0)
+        self.assertEqual(replay.get_json()['duplicates'],1)
+        with self.connect() as conn:
+            res=conn.execute("""SELECT import_fingerprint,import_file_hash,import_row_no,
+                import_canonical,reported_kcal,estimated_kcal FROM cardio_sessions
+                WHERE chat_id=%s ORDER BY id""",(self.chat,)).fetchall()
+        self.assertEqual(len(res),2)
+        self.assertNotEqual(res[0][0],res[1][0])
+        self.assertNotEqual(res[0][1],res[1][1])
+        self.assertEqual(res[0][3],res[1][3])
+        self.assertTrue(all(x[4:]==(240,None) for x in res))
+        # Third file can be skipped explicitly, but no silent insert/discard.
+        raw3=b'date,activity,minutes,kcal\r\n2025-10-25,\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81,25,240\r\n'
+        skipped=send(raw3,choices=['skip'])
+        self.assertEqual(skipped.status_code,200,skipped.get_json())
+        self.assertEqual(skipped.get_json()['imported'],0)
+        self.assertEqual(skipped.get_json()['duplicates'],1)
+        self.m.save_onboarding(self.chat+1,self.body())
+        other=send(raw2,chat=self.chat+1)
+        self.assertEqual(other.get_json()['imported'],1)
+        self.assertEqual(self.m.mini_history_page(self.chat,{'limit':30})['history'][0]['type'],'cardio')
+
+    def test_device_calories_are_user_reported_without_met_double_counting(self):
+        self.save()
+        payload={'minutes':25,'avg_hr':125,'type':'Велосипед','device_kcal':240}
+        for invalid in ('240',True,-1,5001,12.5):
+            with self.assertRaises(ValueError):
+                self.m.mini_aux(self.chat,'cardio',{**payload,'device_kcal':invalid})
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0)
+        self.assertTrue(self.m.mini_aux(self.chat,'cardio',payload))
+        with self.connect() as conn:
+            row=conn.execute("""SELECT id,minutes,avg_hr,reported_kcal,estimated_met,
+                estimated_kcal FROM cardio_sessions WHERE chat_id=%s""",
+                (self.chat,)).fetchone()
+        self.assertEqual(row[1:4],(25,125,240))
+        self.assertIsNone(row[4], 'Device calories must not be duplicated as MET')
+        self.assertIsNone(row[5], 'Device calories must not be duplicated as MET')
+        detail=self.m.mini_history_detail(self.chat,-row[0])
+        self.assertTrue(any('240 ккал (введено пользователем)' in item['result']
+            for item in detail['items']))
+        page=self.m.mini_history_page(self.chat,{'limit':10})
+        self.assertIn('240 ккал (по устройству',page['history'][0]['title'])
+        with self.assertRaises(ValueError):
+            self.m.mini_history_detail(self.chat+1,-row[0])
+        # Running additive migrations again must not overwrite recorded rows.
+        self.m.init_db()
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT reported_kcal FROM cardio_sessions WHERE id=%s',
+                (row[0],)).fetchone()[0],240)
+        with patch.object(self.m,'met_category_from_activity',
+                          side_effect=AssertionError('Yandex not needed for a tracker reading')):
+            self.assertTrue(self.m.mini_aux(self.chat,'cardio', {
+                'minutes':30,'avg_hr':None,'type':'Другое',
+                'activity':'Игра в теннис','device_kcal':175}))
+        with self.connect() as conn:
+            skipped=conn.execute("""SELECT estimated_met,estimated_kcal,reported_kcal
+                FROM cardio_sessions WHERE chat_id=%s ORDER BY id DESC LIMIT 1""",
+                (self.chat,)).fetchone()
+        self.assertEqual(skipped,(None,None,175),
+            'User-supplied tracker calories must bypass AI and MET')
+
+    def test_existing_met_activity_is_still_estimated_without_device(self):
+        self.save()
+        self.assertTrue(self.m.mini_aux(self.chat,'cardio',
+            {'minutes':25,'avg_hr':120,'type':'Велосипед'}))
+        with self.connect() as conn:
+            row=conn.execute("""SELECT id,reported_kcal,estimated_met,estimated_kcal
+                FROM cardio_sessions WHERE chat_id=%s""",(self.chat,)).fetchone()
+        self.assertIsNone(row[1])
+        self.assertIsNotNone(row[2])
+        self.assertGreater(row[3],0)
+        detail=self.m.mini_history_detail(self.chat,-row[0])
+        self.assertTrue(any('Примерный расход энергии'==item['name']
+            for item in detail['items']))
 
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
