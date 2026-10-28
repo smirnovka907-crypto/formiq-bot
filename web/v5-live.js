@@ -613,7 +613,7 @@ function training(){
   '<p>🎁 Скидка 10% на один период «Тренера AI»: 900 ₽ вместо 1 000 ₽. Оплата пока не подключена.</p></section>':'';
  return h()+'<span class="kicker fq-home-date">'+esc(dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1))+'</span><h1 class="title">'+esc(greeting)+'</h1>'+
   '<p class="intro">'+esc(message)+'</p>'+birthday+'<section class="surface soft">'+button('Отзывы и предложения','feedback-open')+
-  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+activityCsvPanel()+trainingPlanCard()+trainingCoach;
+  (feedbackNotice?'<p role="status" class="input-note">'+esc(feedbackNotice)+'</p>':'')+'</section>'+trainingCard+cardioCard+trainingPlanCard()+activityCsvPanel()+trainingCoach;
 }
 const isoDate=ru=>{const p=String(ru||'').split('.');return p.length===3?`${p[2]}-${p[1]}-${p[0]}`:''};
 const prettyDate=iso=>{const p=String(iso||'').split('-');return p.length===3?`${p[2]}.${p[1]}.${p[0]}`:iso};
