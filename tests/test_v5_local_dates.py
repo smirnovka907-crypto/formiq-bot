@@ -60,7 +60,7 @@ class HistoryLocalDayTests(unittest.TestCase):
                     datetime(2026,10,23,15,tzinfo=timezone.utc),
                     11,0))
                 cursor.fetchall.return_value = [
-                    (20,timestamp,'workout','A','Тренировка',None,None,None,None)]
+                    (20,timestamp,'workout','A','Тренировка',None,None,None,None,None)]
             return cursor
 
         conn.execute.side_effect = select
