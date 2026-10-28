@@ -1934,7 +1934,8 @@ class SchedulePostgresTests(unittest.TestCase):
                 payload={'mode':mode,'report':(BytesIO(raw),'activity.csv')}
                 if mode=='import':
                     payload.update(confirmed='yes',file_hash=file_hash or digest,
-                                   edited_rows=json.dumps(edits,ensure_ascii=False))
+                                   edited_rows=json.dumps(edits,ensure_ascii=False),
+                                   resolutions=json.dumps(['ask']*len(edits)))
                 return self.m.APP.test_client().post('/mini/activity/report',
                     data=payload,headers={'X-Formiq-Init':'fake'},content_type='multipart/form-data')
         preview=post('preview')
@@ -1988,7 +1989,8 @@ class SchedulePostgresTests(unittest.TestCase):
                     data={'mode':'import','report':(BytesIO(raw),'activity.csv'),
                           'confirmed':'yes','file_hash':digest,'edited_rows':
                           json.dumps([{'date':'2025-10-25','activity':'Эллипс',
-                             'minutes':25,'kcal':240}]*2,ensure_ascii=False)},
+                             'minutes':25,'kcal':240}]*2,ensure_ascii=False),
+                          'resolutions':json.dumps(['ask','ask'])},
                     headers={'X-Formiq-Init':'offline-test'},
                     content_type='multipart/form-data')
         first=request_import(self.chat)
