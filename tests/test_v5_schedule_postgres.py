@@ -1921,6 +1921,51 @@ class SchedulePostgresTests(unittest.TestCase):
                          ['Рис сухой','Творог'],
                          'Reject stale AI, not the real nutrition history')
 
+    def test_device_calories_are_user_reported_without_met_double_counting(self):
+        self.save()
+        payload={'minutes':25,'avg_hr':125,'type':'Велосипед','device_kcal':240}
+        for invalid in ('240',True,-1,5001,12.5):
+            with self.assertRaises(ValueError):
+                self.m.mini_aux(self.chat,'cardio',{**payload,'device_kcal':invalid})
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
+                (self.chat,)).fetchone()[0],0)
+        self.assertTrue(self.m.mini_aux(self.chat,'cardio',payload))
+        with self.connect() as conn:
+            row=conn.execute("""SELECT id,minutes,avg_hr,reported_kcal,estimated_met,
+                estimated_kcal FROM cardio_sessions WHERE chat_id=%s""",
+                (self.chat,)).fetchone()
+        self.assertEqual(row[1:4],(25,125,240))
+        self.assertIsNone(row[4], 'Device calories must not be duplicated as MET')
+        self.assertIsNone(row[5], 'Device calories must not be duplicated as MET')
+        detail=self.m.mini_history_detail(self.chat,-row[0])
+        self.assertTrue(any('240 ккал (введено пользователем)' in item['result']
+            for item in detail['items']))
+        page=self.m.mini_history_page(self.chat,{'limit':10})
+        self.assertIn('240 ккал (по устройству',page['history'][0]['title'])
+        with self.assertRaises(ValueError):
+            self.m.mini_history_detail(self.chat+1,-row[0])
+        # Running additive migrations again must not overwrite recorded rows.
+        self.m.init_db()
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT reported_kcal FROM cardio_sessions WHERE id=%s',
+                (row[0],)).fetchone()[0],240)
+
+    def test_existing_met_activity_is_still_estimated_without_device(self):
+        self.save()
+        self.assertTrue(self.m.mini_aux(self.chat,'cardio',
+            {'minutes':25,'avg_hr':120,'type':'Велосипед'}))
+        with self.connect() as conn:
+            row=conn.execute("""SELECT id,reported_kcal,estimated_met,estimated_kcal
+                FROM cardio_sessions WHERE chat_id=%s""",(self.chat,)).fetchone()
+        self.assertIsNone(row[1])
+        self.assertIsNotNone(row[2])
+        self.assertGreater(row[3],0)
+        detail=self.m.mini_history_detail(self.chat,-row[0])
+        self.assertTrue(any('Примерный расход энергии'==item['name']
+            for item in detail['items']))
+
     def test_change_preserves_history_active_workout_manual_move_and_cycle(self):
         profile, cycle, _ = self.save()
         by_key = {(r[1], r[2]): r for r in self.rows(cycle)}
