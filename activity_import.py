@@ -50,7 +50,8 @@ def _normalize(row, zone):
     # Same normalized session in different CSV files must not re-import.
     fingerprint = hashlib.sha256(json.dumps(normalized,
         ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
-    return {**normalized, 'performed_at': utc_at, 'fingerprint': fingerprint}
+    return {**normalized, 'performed_at': utc_at, 'fingerprint': fingerprint,
+            'canonical_fingerprint': fingerprint}
 
 
 
