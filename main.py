@@ -585,6 +585,17 @@ def init_db():
             reported_kcal INTEGER CHECK (reported_kcal BETWEEN 0 AND 5000)""")
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS intensity TEXT")
         c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_fingerprint TEXT")
+        # CSV origin and canonical identity are kept separately to avoid
+        # silently collapsing genuine equal-valued sessions from two files.
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_file_hash TEXT")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_row_no INTEGER")
+        c.execute("ALTER TABLE cardio_sessions ADD COLUMN IF NOT EXISTS import_canonical TEXT")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS cardio_csv_owner_file_row
+            ON cardio_sessions(chat_id,import_file_hash,import_row_no)
+            WHERE import_file_hash IS NOT NULL AND import_row_no IS NOT NULL""")
+        c.execute("""CREATE INDEX IF NOT EXISTS cardio_csv_owner_canonical
+            ON cardio_sessions(chat_id,import_canonical)
+            WHERE import_canonical IS NOT NULL""")
         c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS cardio_csv_owner_fingerprint
             ON cardio_sessions(chat_id,import_fingerprint)
             WHERE import_fingerprint IS NOT NULL""")
