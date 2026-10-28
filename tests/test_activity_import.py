@@ -35,6 +35,36 @@ class ActivityImportTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 corrected_activity_rows(original,bad,ZONE)
 
+    def test_distinct_identical_csv_rows_have_distinct_stable_identities(self):
+        # Two identical activities in one report are two recorded sessions;
+        # retrying the same report must not invent any further activities.
+        raw=('date,activity,minutes,kcal\\n'
+             '2025-10-25,Эллипс,25,240\\n'
+             '2025-10-25,Эллипс,25,240\\n'
+             '2025-10-25,Эллипс,25,240\\n')
+        first=read(raw)
+        repeat=read(raw)
+        self.assertEqual(len(first),3)
+        self.assertEqual(len(set(x['fingerprint'] for x in first)),3)
+        self.assertEqual([x['fingerprint'] for x in first],
+                         [x['fingerprint'] for x in repeat])
+        # Each edited row must also receive a stable separate identity.
+        edited=[{key:item[key] for key in ('date','activity','minutes','kcal')}
+                for item in first]
+        confirmed=corrected_activity_rows(first,edited,ZONE)
+        self.assertEqual([x['fingerprint'] for x in confirmed],
+                         [x['fingerprint'] for x in first])
+        edited[1]['kcal']=250
+        distinct=corrected_activity_rows(first,edited,ZONE)
+        self.assertEqual(len(set(x['fingerprint'] for x in distinct)),3)
+        self.assertNotEqual(distinct[1]['fingerprint'],first[1]['fingerprint'])
+        self.assertEqual(distinct[2]['fingerprint'],first[1]['fingerprint'])
+        # Across different reports with the same four fields there is no
+        # trusted session ID/time: a single matching row still deduplicates.
+        single=read('date,activity,minutes,kcal\\n'
+                    '2025-10-25,Эллипс,25,240\\n')
+        self.assertEqual(first[0]['fingerprint'],single[0]['fingerprint'])
+
     def test_reject_unsafe_or_ambiguous_files(self):
         good='date,activity,minutes,kcal\n2025-10-25,Ходьба,20,80\n'
         for text in (
