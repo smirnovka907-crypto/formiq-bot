@@ -1,3 +1,72 @@
+# FORMIQ | Windows: свежий зашифрованный production backup и локальный restore (28.10.2026)
+
+**Состояние на проверке:** PR #37 SHA \`8af32b1af87dd9385ffcbaf233f7399682c9493c\` Draft, CI #40723630428 SUCCESS, Render Live \`d53b6106a26d61e32526d78dfb3af5688a03ad8f\`. В существующей закрытой папке Drive \`FormIQ/05_Резервные копии БД\` находится только проверенная копия от 27.10.2026. **Свежий архив, SHA256, restore и off-site copy = NOT RUN / NOT VERIFIED. NO-GO.** Не переписывать это на PASS до подтверждения живого процесса.
+
+**Совместимость скрипта:** \`scripts/formiq_pg_backup.py\` идентичен в \`main\` и текущем Draft PR (blob \`de1cf6ddee64eb3c18a005e48d95539fe9c394c9\`), проверяется unit-тестами \`tests/test_production_backup_local.py\` в CI. Только PostgreSQL 18 \`pg_dump\`, \`pg_restore\`, \`psql\`; \`cryptography>=46,<47\`; SSL \`require\` для Render; \`PGOPTIONS\` read-only; AES-256-GCM + scrypt, аутентификация GCM и TOC, вывод SHA-256 шифртекста. Ни результат unit-тестов, ни старый архив не доказывают свежую резервную копию.
+
+### Windows 11 — точные действия на прежнем доверенном ПК
+
+1. В **Проводнике** проверь \`C:\Users\smirn\FormIQ\scripts\formiq_pg_backup.py\`. Старый \`C:\Users\smirn\FORMIQ-private-backups\formiq-production-20261027T160419Z-0c5338df.fiqenc\` не удалять/не заменять.
+2. Открой **Пуск → Terminal / PowerShell** обычным пользователем (не администратором). В том же окне выполни:
+   \`\`\`powershell
+   Set-Location "$env:USERPROFILE\FormIQ"
+   $env:Path = "C:\Program Files\PostgreSQL\18\bin;$env:Path"
+   py -3 --version
+   pg_dump --version
+   pg_restore --version
+   psql --version
+   py -3 -c "import cryptography; print('cryptography installed')"
+   \`\`\`
+   Версии клиентских утилит должны начинаться с \`18.\`; если Python-модуль не найден, выполни \`py -3 -m pip install -r .\requirements-backup.txt\`. При отсутствии PostgreSQL 18 остановиться, не использовать другую версию.
+3. В [Render Dashboard](https://dashboard.render.com/) открой **существующую** БД \`formiq_db\`, меню **Connect → External Database URL**; **не** брать internal/pool URL, не менять настройки и не публиковать URL. Скопируй значение только в скрытый интерактивный запрос программы на личном ПК.
+4. В том же PowerShell:
+   \`\`\`powershell
+   $backupStart = Get-Date
+   py -3 .\scripts\formiq_pg_backup.py backup --directory "$env:USERPROFILE\FORMIQ-private-backups"
+   \`\`\`
+   На \`Render PostgreSQL EXTERNAL URL (hidden):\` вставь приватный URL, Enter; затем введи отдельную приватную фразу длиной **не менее 20 символов**, Enter, повтори её. Символы паролей не отображаются. Фразу безопасно сохрани отдельно от файла. Успех: \`ENCRYPTED_BACKUP_CREATED_AND_FORMAT_CHECKED\`, свежий путь \`.fiqenc\` и \`SHA256 encrypted archive:\` с 64 шестнадцатеричными символами. Если \`BLOCKED\`, **остановиться и не считать backup состоявшимся**.
+5. В том же PowerShell выдели единственный новый файл, появившийся после запуска:
+   \`\`\`powershell
+   $backup = Get-ChildItem "$env:USERPROFILE\FORMIQ-private-backups" -Filter 'formiq-production-*.fiqenc' |
+     Where-Object { $_.LastWriteTime -ge $backupStart } |
+     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+   if (-not $backup) { throw "Новый архив не найден; STOP" }
+   $backup.FullName
+   (Get-FileHash -LiteralPath $backup.FullName -Algorithm SHA256).Hash
+   py -3 .\scripts\formiq_pg_backup.py verify "$($backup.FullName)"
+   \`\`\`
+   На скрытый запрос введи ту же фразу. Успех \`ENCRYPTED_ARCHIVE_AUTHENTICATED_AND_TOC_OK\`, SHA256 **совпадает** с командой \`Get-FileHash\` и первой командой backup. Сравни хеши локально (не передавай архив/пароль в переписку).
+6. Открой **Пуск → pgAdmin 4**, подключи локальный сервер **PostgreSQL 18**. **Не трогай ранее восстановленную \`formiq_restore\`.** Если \`formiq_20261028_restore\` ещё не существует: \`Servers → PostgreSQL 18 → Databases → правая кнопка → Create → Database\`, имя \`formiq_20261028_restore\`, Owner \`postgres\`, Save. Если она уже существует и не пуста, не очищать её: подобрать другое новое уникальное имя \`*_restore\` на том же локальном сервере. Проверить в **Query Tool** именно новой пустой базы:
+   \`\`\`sql
+   SELECT count(*) FROM pg_class
+    WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p','v','m','S');
+   \`\`\`
+   Должен быть **0**. Это новая **локальная** изолированная база, не облачный ресурс.
+7. В PowerShell, не закрывая окно:
+   \`\`\`powershell
+   py -3 .\scripts\formiq_pg_backup.py restore "$($backup.FullName)"
+   \`\`\`
+   На скрытый запрос укажи ту же фразу. На \`LOCAL empty *_restore PostgreSQL URL (hidden):\` используй **локальный** адрес вида \`postgresql://postgres:<LOCAL_PASSWORD>@127.0.0.1:5432/formiq_20261028_restore\` (замени пароль локально; при специальных символах URL-encode). Это НЕ Render URL; окно не записывать и не отправлять. Успех: \`LOCAL_ISOLATED_PG18_RESTORE_COMPLETED; run data checks\`. Любая ошибка → STOP, не подключаться к production для восстановления.
+8. В **pgAdmin Query Tool**, подключенном только к восстановленной LOCAL \`*_restore\` базе:
+   \`\`\`sql
+   SELECT
+    (SELECT count(*) FROM information_schema.tables
+      WHERE table_schema='public' AND table_type='BASE TABLE') AS tables,
+    (SELECT count(*) FROM pg_constraint c JOIN pg_namespace n
+      ON n.oid=c.connamespace WHERE n.nspname='public') AS constraints,
+    (SELECT count(*) FROM pg_sequences WHERE schemaname='public') AS sequences,
+    (SELECT count(*) FROM workouts) AS workouts,
+    (SELECT count(*) FROM workout_sets) AS workout_sets,
+    (SELECT count(*) FROM cardio_sessions) AS cardio;
+   \`\`\`
+   Read-only production контроль 28.10.2026: 38 таблиц, 224 constraints, 12 sequences, 1 workout, 6 sets, 0 cardio. Сравни с *актуальным снимком на момент pg_dump*; возможны последующие реальные пользовательские изменения. Не проверять путём UPDATE/DELETE на production.
+9. Открой в браузере **существующую закрытую папку** [FormIQ → 05_Резервные копии БД](https://drive.google.com/drive/folders/1hvH3brrd7MnPqCv0JbvylKRzSaN4r3D3); **+ Создать → Загрузить файл** и выбери ТОЛЬКО свежий \`.fiqenc\`. Старый архив оставить на месте; не делать второй дубль. После загрузки сверить имя, размер, папку и целостность: при наличии Drive MD5 metadata сравнить с локальным MD5, либо однократно скачать зашифрованную копию и сравнить SHA256 с исходным; скачанную копию хранить отдельно от приватной фразы.
+10. Разрешено сообщить в чат **только**: дату UTC, безопасное имя \`.fiqenc\`, SHA256 encrypted archive, \`ENCRYPTED_ARCHIVE_AUTHENTICATED_AND_TOC_OK\`, \`LOCAL_ISOLATED_PG18_RESTORE_COMPLETED\`, шесть **агрегатных** счётчиков и факт загрузки в уже существующую закрытую папку. **Не** пересылать URL с логином/паролем, пароль, ключи, сам архив, строки пользователей, дамп или приватные логи. После подтверждения загрузки и сравнения байтов обновить технический журнал и передать полный управленческий отчёт; только после проверки можно изменить release gate с NO-GO на кандидат к отдельному одобрению конкретного merge.
+
+**Не делать merge PR #37, Render deploy, webhook change, удаление данных или создание новых облачных услуг/БД.**
+
+---
+
 # FORMIQ | PR #37 — межфайловые CSV и реальная резервная готовность, 28.10.2026
 
 **Регламент:** основная Google-инструкция редакция 2.6, решение Управления `NO-GO` до закрытия CSV-коллизий, свежего шифрованного backup и отдельного допуска на точный SHA. История ниже сохранена, приоритетный выпуск PR #37 — этот раздел.
