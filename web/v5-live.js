@@ -38,7 +38,8 @@ let fatsecretAccount=null,fatsecretAuthUrl='',fatsecretDaily=null,fatsecretBusy=
 let connectionsStatus=null,connectionsBusy=false,connectionsError='',connectionsSeq=0;
 let periodEntries=null,periodPrediction=null,periodError='',periodDraft={start:'',end:''},periodEditing=null,periodBusy=false,periodMonth='',periodDeleteTarget=null,pendingPeriods=[],pendingPeriodId=-1;
 let weightPreview=null,weightImportError='',weightImportBusy=false,weightImportNotice='',weightFile=null,weightHistory=[];
-let activityCsvFile=null,activityCsvPreview=null,activityCsvBusy=false,
+let activityCsvFile=null,activityCsvUpload=null,activityCsvSelection=0,
+    activityCsvReadBusy=false,activityCsvPreview=null,activityCsvBusy=false,
     activityCsvError='',activityCsvNotice='';
 let garminSnapshot=null,garminDate='',garminLoading=false,garminError='',garminSeq=0;
 let aiTrainingTip='',aiNutritionTip='',aiTipBusy=false,foodRevision=0,feedbackNotice='',feedbackError='';
@@ -524,21 +525,43 @@ function activityCsvPanel(){
  return '<section class="surface"><h2>Импортировать отчёт активности</h2>'+
   '<p class="input-note">Пока поддерживается только CSV UTF-8 с колонками date,activity,minutes,kcal. Каждая строка — расход одной активности с устройства, не калории за сутки. До 30 занятий и 64 КБ.</p>'+
   '<label class="field"><span>CSV-отчёт</span><input type="file" id="activity-csv-file" accept=".csv,text/csv"></label>'+
-  (activityCsvFile?'<p class="input-note">Выбран файл: '+esc(activityCsvFile.name)+'</p>':'')+
+  (activityCsvFile?'<p class="input-note">Выбран файл: '+esc(activityCsvFile.name)+(activityCsvReadBusy?' · читаем…':'')+'</p>':'')+
   (activityCsvError?'<p role="alert" class="fq-form-error">'+esc(activityCsvError)+'</p>':'')+
   (activityCsvNotice?'<p role="status" class="input-note">'+esc(activityCsvNotice)+'</p>':'')+
   button(activityCsvBusy?'Читаем…':'Проверить CSV','activity-csv-preview',false,activityCsvBusy?'disabled':'')+
   grid+ '</section>';
 }
+async function captureActivityCsvFile(input){
+ // Copy file bytes before the Android picker input is ever removed from the DOM.
+ // File content-URI permissions may not survive an input replacement in WebView.
+ const picked=input.files?.[0]||null,selection=++activityCsvSelection;
+ activityCsvFile=picked;activityCsvUpload=null;activityCsvPreview=null;
+ activityCsvError='';activityCsvNotice='';
+ if(!picked){draw();return}
+ if(picked.size>65536){activityCsvError='CSV не должен превышать 64 КБ.';draw();return}
+ activityCsvReadBusy=true;
+ try{
+  const bytes=await picked.arrayBuffer();
+  if(selection!==activityCsvSelection)return;
+  activityCsvUpload=new Blob([bytes],{type:picked.type||'text/csv'});
+ }catch(_readError){
+  if(selection===activityCsvSelection)
+   activityCsvError='Не удалось прочитать выбранный CSV. Выбери файл повторно в Telegram.';
+ }finally{
+  if(selection===activityCsvSelection){activityCsvReadBusy=false;draw()}
+ }
+}
 async function uploadActivityCsv(mode){
  if(activityCsvBusy)return;
  if(!activityCsvFile){activityCsvError='Выбери CSV-отчёт активности.';draw();return}
+ if(activityCsvReadBusy){activityCsvError='Файл ещё читается. Повтори проверку после выбора.';draw();return}
+ if(!activityCsvUpload){activityCsvError='Не удалось прочитать CSV. Выбери файл повторно.';draw();return}
  if(activityCsvFile.size>65536){activityCsvError='CSV не должен превышать 64 КБ.';draw();return}
  const old=activityCsvPreview;
- const selectedFile=activityCsvFile;
+ const selectedFile=activityCsvFile,selectedUpload=activityCsvUpload,selection=activityCsvSelection;
  if(mode==='import'&&!old){activityCsvError='Сначала проверь CSV.';draw();return}
  activityCsvBusy=true;activityCsvError='';draw();
- const form=new FormData();form.append('report',selectedFile);form.append('mode',mode);
+ const form=new FormData();form.append('report',selectedUpload,selectedFile.name);form.append('mode',mode);
  if(mode==='import'){
   form.append('confirmed','yes');form.append('file_hash',old.file_hash);
   form.append('edited_rows',JSON.stringify(old.rows.map(row=>({date:row.date,activity:row.activity,minutes:row.minutes,kcal:row.kcal}))));
@@ -546,12 +569,12 @@ async function uploadActivityCsv(mode){
  }
  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),30000);
  try{
+  // Same-origin multipart request. Browser sets the boundary; never set Content-Type manually.
   const response=await fetch('/mini/activity/report',{method:'POST',
     headers:{'X-Formiq-Init':token},body:form,credentials:'same-origin',
     cache:'no-store',signal:abort.signal});
   const data=await response.json();
-  // Ignore late results for a report the owner has since replaced.
-  if(selectedFile!==activityCsvFile)return;
+  if(selection!==activityCsvSelection||selectedFile!==activityCsvFile)return;
   if(response.status===409&&mode==='import'&&Array.isArray(data.conflicts)){
    old.conflicts=data.conflicts;
    activityCsvError=data.error||'Выбери действие для совпадающих тренировок.';
@@ -563,9 +586,7 @@ async function uploadActivityCsv(mode){
    activityCsvNotice='Проверь даты, активность, минуты и калории перед сохранением.';
   }else{
    activityCsvNotice='Добавлено занятий: '+data.imported+'. Уже сохранено: '+data.duplicates+'.';
-   activityCsvPreview=null;activityCsvFile=null;
-   // Import was already committed: a failed refresh must not imply failure
-   // of the save and must not prompt a misleading duplicate re-import.
+   activityCsvPreview=null;activityCsvFile=null;activityCsvUpload=null;++activityCsvSelection;
    try{
     const snapshot=(await request('state')).data;state=snapshot;
     dayRows=null;monthMarks=new Set();if(date)await loadDay();
@@ -574,10 +595,18 @@ async function uploadActivityCsv(mode){
    }
   }
  }catch(ex){
-  if(selectedFile===activityCsvFile){
+  if(selection===activityCsvSelection&&selectedFile===activityCsvFile){
    activityCsvError=ex.name==='AbortError'?
-     'Ответ сервера не получен. Проверь историю перед повтором импорта.':
-     ex.message||'Ошибка CSV';
+    (mode==='preview'?'Сервер долго не отвечает. Предпросмотр не получен, запись не выполнялась.':
+     'Сервер долго не отвечает. Проверь историю перед повтором импорта.'):
+    ex.name==='TypeError'?
+    (mode==='preview'?'Не удалось отправить CSV. Проверь интернет и открой FORMIQ заново в Telegram. Предпросмотр не сохраняет занятия.':
+     'Соединение прервалось. Проверь историю перед повторной отправкой CSV.'):
+    ex.name==='SyntaxError'?'Не удалось прочитать ответ сервера. Попробуй снова.':
+    ex.message||'Не удалось обработать CSV.';
+   // Diagnostics deliberately omit filename, content and Telegram initData.
+   if(ex.name==='TypeError'&&typeof console!=='undefined')
+    console.warn('FORMIQ CSV transport failed',mode,'network-or-WebView');
   }
  }finally{clearTimeout(timer);activityCsvBusy=false;draw()}
 }
@@ -1303,7 +1332,14 @@ function draw(){
  document.body?.classList?.remove('cardio-typing','workout-typing');
  if(!token){app.innerHTML=`<main class="view">${page('FORMIQ',block('<h2>Открой из Telegram</h2><p>Для входа необходима авторизация Telegram.</p>'))}</main>`;return}
  if(!state){app.innerHTML=`<main class="view">${h()}${block(`<h2>${error?'Не удалось загрузить дневник':'Загружаем дневник...'}</h2>${error?`<p class="fq-live-error" role="alert">${esc(error)}</p><p>Перезапусти приложение через Telegram.</p>`:''}`)}</main>`;return}
+ const originalCsvInput=view==='home'&&activityCsvFile?
+  document.getElementById('activity-csv-file'):null;
  app.innerHTML=`<main class="view">${error?`<p class="fq-live-error" role="alert">${esc(error)}</p>`:''}${onboardOpen?onboardForm():view==='home'?training():view==='progress'?progress():view==='food'?food():profile()}</main>${ready()&&!onboardOpen?nav():''}${modalHTML()}`;
+ // Keep the native input selected across unrelated redraws and preview results.
+ if(originalCsvInput){
+  const replacement=document.getElementById('activity-csv-file');
+  if(replacement?.replaceWith)replacement.replaceWith(originalCsvInput);
+ }
 }
 function partialHistory(){const el=document.getElementById('history-root');if(el)el.outerHTML=history();else draw()}
 function fail(s){error=s;draw()}
@@ -1337,8 +1373,7 @@ app.addEventListener('change',e=>{
  if(e.target.id==='food-meal'){foodMeal=e.target.value;foodSaveRequestId='';return}
  if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
  if(e.target.id==='activity-csv-file'){
-  activityCsvFile=e.target.files?.[0]||null;activityCsvPreview=null;
-  activityCsvError='';activityCsvNotice='';draw();return
+  void captureActivityCsvFile(e.target);return
  }
  if(e.target.id==='weight-report-file'){weightFile=e.target.files?.[0]||null;weightPreview=null;weightImportError='';weightImportNotice='';draw();return}
  onboardChanged(e);
