@@ -6,7 +6,7 @@
 
 ### Windows 11 — точные действия на прежнем доверенном ПК
 
-1. В **Проводнике** проверь \`C:\Users\smirn\FormIQ\scripts\formiq_pg_backup.py\`. Старый \`C:\Users\smirn\FORMIQ-private-backups\formiq-production-20261027T160419Z-0c5338df.fiqenc\` не удалять/не заменять.
+1. В **Проводнике** проверь \`%USERPROFILE%\FormIQ\scripts\formiq_pg_backup.py\`. Старый \`%USERPROFILE%\FORMIQ-private-backups\formiq-production-20261027T160419Z-0c5338df.fiqenc\` не удалять/не заменять.
 2. Открой **Пуск → Terminal / PowerShell** обычным пользователем (не администратором). В том же окне выполни:
    \`\`\`powershell
    Set-Location "$env:USERPROFILE\FormIQ"
