@@ -601,12 +601,12 @@ async function run(){
    assert.equal(await page.locator('.fq-history-exercise-card .fq-exercise-detail-head [data-cmd="exercise-back"]').count(),1,
     'History card has a readily accessible close control before its long instructions');
    await page.locator('.fq-history-exercise-card').evaluate(el=>{el.scrollTop=el.scrollHeight});
-   const back=await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').boundingBox();
+   const back=await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').last().boundingBox();
    const dialog=await page.locator('.fq-history-exercise-card').boundingBox();
    assert.ok(back&&dialog&&back.y>=dialog.y-1&&back.y+back.height<=dialog.y+dialog.height+1&&back.height>=44,
     'Back button is reachable by scrolling: '+JSON.stringify({back,dialog}));
    await page.screenshot({path:path.join(OUT,'history-exercise-photo-360x640.png')});
-   await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').click();
+   await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').last().click();
    await page.locator('.fq-live-dialog [data-cmd="close"]').last().click();
    await page.setViewportSize(size);
    const monthReply=page.waitForResponse(resp=>{
