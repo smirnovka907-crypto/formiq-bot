@@ -255,9 +255,9 @@ class V5StagingContract(unittest.TestCase):
         conn = MagicMock()
         conn.__enter__.return_value = conn
         conn.execute.return_value.fetchall.return_value = [
-            (35, dt, 'workout', 'A', 'Зал', None, None, None, None, None),
-            (-12, dt, 'cardio', None, None, 60, 'cycling', None, 571, None),
-            (34, dt, 'workout', 'B', 'Другая тренировка', None, None, None, None, None),
+            (35, dt, 'workout', 'A', 'Зал', None, None, None, None, None, None),
+            (-12, dt, 'cardio', None, None, 60, 'cycling', None, 571, None, None),
+            (34, dt, 'workout', 'B', 'Другая тренировка', None, None, None, None, None, None),
         ]
         with patch.object(self.mod, 'db', return_value=conn), \
              patch.object(self.mod, 'profile', return_value={'goal':'general'}):
