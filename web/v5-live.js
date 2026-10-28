@@ -514,6 +514,10 @@ function activityCsvPanel(){
    '<label class="field"><span>Активность</span><input type="text" maxlength="100" data-activity-row="'+i+'" data-activity-field="activity" value="'+esc(row.activity)+'"></label>'+
    '<div class="cardio-input-grid"><label class="field"><span>Минуты</span><input type="number" min="1" max="300" data-activity-row="'+i+'" data-activity-field="minutes" value="'+esc(row.minutes)+'"></label>'+
    '<label class="field"><span>Ккал по устройству</span><input type="number" min="0" max="5000" data-activity-row="'+i+'" data-activity-field="kcal" value="'+esc(row.kcal)+'"></label></div>'+
+   ((preview.conflicts||[]).includes(i)?'<label class="field"><span>Похоже на уже сохранённое занятие: что сделать?</span><select data-activity-resolution="'+i+'">'+
+    [['ask','Выбери действие'],['skip','Пропустить совпадение'],['separate','Сохранить отдельной тренировкой']].map(([choice,title])=>
+     '<option value="'+choice+'"'+((preview.resolutions||[])[i]===choice?' selected':'')+'>'+title+'</option>').join('')+
+    '</select></label><p class="input-note">У другого CSV совпали дата, название, минуты и калории. Проверь, это действительно новое занятие?</p>':'')+
    '</div>').join('')+
   button(activityCsvBusy?'Сохраняем…':'Подтвердить и сохранить','activity-csv-import',true,activityCsvBusy?'disabled':'')+
   '</div>':'';
@@ -537,7 +541,8 @@ async function uploadActivityCsv(mode){
  const form=new FormData();form.append('report',selectedFile);form.append('mode',mode);
  if(mode==='import'){
   form.append('confirmed','yes');form.append('file_hash',old.file_hash);
-  form.append('edited_rows',JSON.stringify(old.rows));
+  form.append('edited_rows',JSON.stringify(old.rows.map(row=>({date:row.date,activity:row.activity,minutes:row.minutes,kcal:row.kcal}))));
+  form.append('resolutions',JSON.stringify(old.resolutions||old.rows.map(()=> 'ask')));
  }
  const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),30000);
  try{
@@ -547,9 +552,14 @@ async function uploadActivityCsv(mode){
   const data=await response.json();
   // Ignore late results for a report the owner has since replaced.
   if(selectedFile!==activityCsvFile)return;
+  if(response.status===409&&mode==='import'&&Array.isArray(data.conflicts)){
+   old.conflicts=data.conflicts;
+   activityCsvError=data.error||'Выбери действие для совпадающих тренировок.';
+   return;
+  }
   if(!response.ok||!data.ok)throw Error(data.error||'Не удалось обработать отчёт');
   if(mode==='preview'){
-   activityCsvPreview=data;
+   activityCsvPreview={...data,resolutions:data.rows.map(()=> 'ask')};
    activityCsvNotice='Проверь даты, активность, минуты и калории перед сохранением.';
   }else{
    activityCsvNotice='Добавлено занятий: '+data.imported+'. Уже сохранено: '+data.duplicates+'.';
@@ -1314,6 +1324,15 @@ app.addEventListener('input',e=>{
  if(metricEdit&&profileDraft&&Object.prototype.hasOwnProperty.call(profileDraft,metric))profileDraft[metric]=e.target.value;
 });
 app.addEventListener('change',e=>{
+ if(e.target.dataset?.activityResolution!==undefined&&activityCsvPreview){
+  const i=Number(e.target.dataset.activityResolution),choice=e.target.value;
+  if(Number.isInteger(i)&&i>=0&&i<activityCsvPreview.rows.length&&
+      ['ask','skip','separate'].includes(choice)){
+   activityCsvPreview.resolutions[i]=choice;
+   activityCsvError='';
+  }
+  return;
+ }
  if(e.target.id==='food-date'){foodSaveRequestId='';fatsecretDaily=null;fatsecretError='';++foodDailySeq;foodDate=e.target.value;foodHistory=null;foodDaily=null;foodDailyBusy=false;foodDailyError='';foodDraft=[];foodUnparsed=[];loadFoodHistory();return}
  if(e.target.id==='food-meal'){foodMeal=e.target.value;foodSaveRequestId='';return}
  if(e.target.id==='garmin-date'){garminDate=e.target.value;void loadGarminDay();return}
