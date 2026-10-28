@@ -38,10 +38,10 @@ class ActivityImportTests(unittest.TestCase):
     def test_distinct_identical_csv_rows_have_distinct_stable_identities(self):
         # Two identical activities in one report are two recorded sessions;
         # retrying the same report must not invent any further activities.
-        raw=('date,activity,minutes,kcal\\n'
-             '2025-10-25,Эллипс,25,240\\n'
-             '2025-10-25,Эллипс,25,240\\n'
-             '2025-10-25,Эллипс,25,240\\n')
+        raw=('date,activity,minutes,kcal\n'
+             '2025-10-25,Эллипс,25,240\n'
+             '2025-10-25,Эллипс,25,240\n'
+             '2025-10-25,Эллипс,25,240\n')
         first=read(raw)
         repeat=read(raw)
         self.assertEqual(len(first),3)
@@ -61,8 +61,8 @@ class ActivityImportTests(unittest.TestCase):
         self.assertEqual(distinct[2]['fingerprint'],first[1]['fingerprint'])
         # Across different reports with the same four fields there is no
         # trusted session ID/time: a single matching row still deduplicates.
-        single=read('date,activity,minutes,kcal\\n'
-                    '2025-10-25,Эллипс,25,240\\n')
+        single=read('date,activity,minutes,kcal\n'
+                    '2025-10-25,Эллипс,25,240\n')
         self.assertEqual(first[0]['fingerprint'],single[0]['fingerprint'])
 
     def test_reject_unsafe_or_ambiguous_files(self):
