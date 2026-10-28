@@ -2020,6 +2020,59 @@ class SchedulePostgresTests(unittest.TestCase):
                 'SELECT count(*) FROM cardio_sessions WHERE chat_id=%s',
                 (self.chat+1,)).fetchone()[0],2)
 
+    def test_csv_crossfile_conflict_requires_explicit_resolution_and_is_idempotent(self):
+        """Same four fields in different files must never silently lose a session."""
+        self.save()
+        rows=[{'date':'2025-10-25','activity':'Эллипс','minutes':25,'kcal':240}]
+        raw1=b'date,activity,minutes,kcal\n2025-10-25,\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81,25,240\n'
+        raw2=b'date;activity;minutes;kcal\n2025-10-25;\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81;25;240\n'
+        def send(content,mode='import',choices=None,chat=None):
+            data={'mode':mode,'report':(BytesIO(content),'report.csv')}
+            if mode=='import':
+                data.update(confirmed='yes',file_hash=hashlib.sha256(content).hexdigest(),
+                            edited_rows=json.dumps(rows,ensure_ascii=False),
+                            resolutions=json.dumps(choices or ['ask']))
+            with patch.object(self.m,'mini_auth',return_value=self.chat if chat is None else chat):
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data=data,content_type='multipart/form-data',
+                    headers={'X-Formiq-Init':'offline-test'})
+        first=send(raw1)
+        self.assertEqual(first.status_code,200,first.get_json())
+        self.assertEqual(first.get_json()['imported'],1)
+        preview=send(raw2,'preview')
+        self.assertEqual(preview.status_code,200,preview.get_json())
+        self.assertEqual(preview.get_json()['conflicts'],[0])
+        ambiguous=send(raw2)
+        self.assertEqual(ambiguous.status_code,409,ambiguous.get_json())
+        self.assertEqual(ambiguous.get_json()['conflicts'],[0])
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM cardio_sessions').fetchone()[0],1)
+        separate=send(raw2,choices=['separate'])
+        self.assertEqual(separate.status_code,200,separate.get_json())
+        self.assertEqual(separate.get_json()['imported'],1)
+        replay=send(raw2,choices=['separate'])
+        self.assertEqual(replay.get_json()['imported'],0)
+        self.assertEqual(replay.get_json()['duplicates'],1)
+        with self.connect() as conn:
+            res=conn.execute("""SELECT import_fingerprint,import_file_hash,import_row_no,
+                import_canonical,reported_kcal,estimated_kcal FROM cardio_sessions
+                WHERE chat_id=%s ORDER BY id""",(self.chat,)).fetchall()
+        self.assertEqual(len(res),2)
+        self.assertNotEqual(res[0][0],res[1][0])
+        self.assertNotEqual(res[0][1],res[1][1])
+        self.assertEqual(res[0][3],res[1][3])
+        self.assertTrue(all(x[4:]==(240,None) for x in res))
+        # Third file can be skipped explicitly, but no silent insert/discard.
+        raw3=b'date,activity,minutes,kcal\r\n2025-10-25,\xd0\xad\xd0\xbb\xd0\xbb\xd0\xb8\xd0\xbf\xd1\x81,25,240\r\n'
+        skipped=send(raw3,choices=['skip'])
+        self.assertEqual(skipped.status_code,200,skipped.get_json())
+        self.assertEqual(skipped.get_json()['imported'],0)
+        self.assertEqual(skipped.get_json()['duplicates'],1)
+        self.m.save_onboarding(self.chat+1,self.body())
+        other=send(raw2,chat=self.chat+1)
+        self.assertEqual(other.get_json()['imported'],1)
+        self.assertEqual(self.m.mini_history_page(self.chat,{'limit':30})['history'][0]['type'],'cardio')
+
     def test_device_calories_are_user_reported_without_met_double_counting(self):
         self.save()
         payload={'minutes':25,'avg_hr':125,'type':'Велосипед','device_kcal':240}
