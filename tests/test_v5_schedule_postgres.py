@@ -1506,6 +1506,35 @@ class SchedulePostgresTests(unittest.TestCase):
                          sum(row[1] for row in baseline))
         self.assertEqual(self.snapshot_history(), before,
                          'Read-only preview must not mutate real or synthetic history')
+        # Full isolated strength flow: start -> real reps/weight -> rest -> finish
+        # -> exact history -> next scheduled workout. No production records.
+        self.assertFalse(self.m.mini_write(self.chat,'start',{'mood':'normal'}))
+        active=self.m.mini_workout_delta(self.chat)['workout']
+        self.assertIsNotNone(active)
+        self.assertEqual(active['total'],sum(x['sets'] for x in preview['exercises']))
+        current=active['current']
+        self.assertIsNotNone(current)
+        self.assertFalse(self.m.mini_write(self.chat,'record',{
+            'expected_workout':active['id'],
+            'expected_position':current['position'],
+            'expected_set':current['set_no'],
+            'reps':current['low'],'weight':42.5}))
+        after_set=self.m.mini_workout_delta(self.chat)['workout']
+        self.assertEqual(after_set['done'],1)
+        self.assertGreater(after_set['rest_remaining_seconds'],0,
+            'Rest timer must be based on real committed set completion')
+        self.assertTrue(self.m.mini_write(self.chat,'finish',
+            {'expected_workout':active['id']}))
+        stored=self.m.mini_history_detail(self.chat,active['id'])
+        self.assertEqual(stored['status'],'finished')
+        self.assertEqual(len(stored['items']),1,'Only confirmed set in history')
+        self.assertIn('42.5 кг',stored['items'][0]['result'])
+        with self.connect() as conn:
+            next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
+        self.assertIsNotNone(next_slot,'Closing a session advances calendar')
+        self.assertNotEqual((next_slot[0],next_slot[1]),(active['day'],active['week']))
+        self.assertIsNone(self.m.mini_workout_delta(self.chat)['workout'],
+            'Finish closes active workout without changing completed sets')
         # Only the next real activity increase is allowed to reduce the load.
         with self.connect() as conn:
             conn.execute('UPDATE cardio_sessions SET minutes=80 WHERE id=%s AND chat_id=%s',
