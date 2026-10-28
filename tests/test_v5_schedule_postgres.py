@@ -1610,6 +1610,34 @@ class SchedulePostgresTests(unittest.TestCase):
                 WHERE workout_id IN (%s,%s)""",
                 (cancelled,partial)).fetchone()[0],2)
 
+    def test_android_reopened_active_workout_restores_vetted_exercise_card(self):
+        """Reload from PostgreSQL must return the same image and cues as a set delta."""
+        self.m.save_onboarding(self.chat, self.body())
+        with self.connect() as conn:
+            wid=conn.execute("""INSERT INTO workouts(chat_id,plan_day,status)
+                VALUES(%s,'A','active') RETURNING id""",(self.chat,)).fetchone()[0]
+            conn.execute("""INSERT INTO workout_items
+                (workout_id,position,exercise,exercise_key,target)
+                VALUES(%s,0,'Жим ногами','leg_press','12')""",(wid,))
+            conn.execute("""INSERT INTO workout_sets
+                (workout_id,position,set_no,target_min,target_max,unit)
+                VALUES(%s,0,1,10,12,'reps')""",(wid,))
+        initial=self.m.mini_state(self.chat)['workout']['current']
+        delta=self.m.mini_workout_delta(self.chat)['workout']['current']
+        self.assertEqual(initial['key'],'leg_press')
+        self.assertTrue(initial['steps'])
+        self.assertIn('/Leg_Press/0.jpg',initial['image_url'])
+        self.assertEqual(initial['image_license_url'],
+                         'https://creativecommons.org/licenses/by-sa/4.0/')
+        for key in ('steps','muscles','start_position','mistakes','image_url',
+                    'image_credit','image_license_url'):
+            self.assertEqual(initial[key],delta[key],
+                'Android resume must not lose exercise instructions or photo: '+key)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM workout_sets WHERE workout_id=%s AND state='done'",
+                (wid,)).fetchone()[0],0,'Read-only state/delta never records a set')
+
     def test_tz5_zero_set_finish_skip_and_partial_progress_persist(self):
         self.m.save_onboarding(self.chat,self.body())
         for completed, action, expected in [
