@@ -39,6 +39,29 @@ function createClient(auth=true,shared={}){
     requests.push({action:'nutrition-report'});
     return {ok:true,status:200,async json(){return {ok:true,answer:'В отчёте указано 1900 ккал.'}}};
    }
+   if(url==='/mini/activity/report'){
+    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
+    const mode=opts.body.data.get('mode');
+    assert.ok(['preview','import'].includes(mode));
+    requests.push({action:'activity_csv_'+mode});
+    if(deferredActions.has('activity_csv_'+mode)){
+     const waiting=deferredActions.get('activity_csv_'+mode);
+     deferredActions.delete('activity_csv_'+mode);
+     await waiting;
+    }
+    if(mode==='preview'){
+     return {ok:true,status:200,async json(){return {
+      ok:true,count:1,rows:[{date:'2025-10-25',
+       activity:'Эллипс',minutes:25,kcal:240}],
+      file_hash:'offline_sha256_fixture',timezone:'Europe/Moscow'}}};
+    }
+    assert.equal(opts.body.data.get('confirmed'),'yes');
+    assert.equal(opts.body.data.get('file_hash'),'offline_sha256_fixture');
+    const checked=JSON.parse(opts.body.data.get('edited_rows'));
+    assert.equal(checked[0].kcal,240);
+    return {ok:true,status:200,async json(){
+     return {ok:true,imported:1,duplicates:0}}};
+   }
    assert.equal(url,'/mini/api');
    assert.equal(opts.method,'POST');
    assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
@@ -241,6 +264,30 @@ function createClient(auth=true,shared={}){
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve))};
 
 async function run(){
+ const csv=createClient(true,{tier:'max'});
+ await settle();await csv.click({nav:'training'});await settle();
+ const report={name:'report.csv',size:120};
+ csv.handlers.change({target:{id:'activity-csv-file',files:[report],dataset:{}}});
+ await csv.click({cmd:'activity-csv-preview'});
+ assert.match(csv.root.innerHTML,/Найдено занятий: 1/);
+ csv.failOnce('state');
+ await csv.click({cmd:'activity-csv-import'});
+ assert.match(csv.root.innerHTML,/Добавлено занятий: 1/);
+ assert.match(csv.root.innerHTML,/История обновится после повторного открытия/,
+  'Saved CSV must not be presented as failed after a separate refresh error');
+ assert.equal(csv.requests.filter(x=>x.action==='activity_csv_import').length,1);
+ const csvLate=createClient(true,{tier:'max'});
+ await settle();await csvLate.click({nav:'training'});await settle();
+ csvLate.handlers.change({target:{id:'activity-csv-file',
+  files:[{name:'old.csv',size:70}],dataset:{}}});
+ const release=csvLate.deferOnce('activity_csv_preview');
+ const pending=csvLate.click({cmd:'activity-csv-preview'});
+ await settle();
+ csvLate.handlers.change({target:{id:'activity-csv-file',
+  files:[{name:'new.csv',size:80}],dataset:{}}});
+ release();await pending;
+ assert.doesNotMatch(csvLate.root.innerHTML,/Найдено занятий: 1/,
+  'Late preview for a replaced file must be discarded');
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
