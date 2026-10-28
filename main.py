@@ -5758,19 +5758,20 @@ def mini_aux(chat,action,body):
             raise ValueError('Пульс: от 40 до 220')
         if device_kcal is not None and (type(device_kcal) is not int or not 0<=device_kcal<=5000):
             raise ValueError('Показание устройства: 0–5000 ккал или пустое поле')
-        category=(met_category_from_activity(activity_label,chat) if activity_label
-                  else stored_type if stored_type in CARDIO_MET else None)
-        base_met=CARDIO_MET.get(category)
-        met=(round(max(1.3,min(14.,base_met*
-                  {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
-             if base_met is not None else None)
-        current_weight=metrics(chat).get('weight_kg')
-        kcal=(round(met*3.5*float(current_weight)*mins/200)
-              if device_kcal is None and met is not None and current_weight
-              and float(current_weight)>0 else None)
-        # Tracker calories are user-reported. Never add the parallel MET estimate.
-        if device_kcal is not None:
-            met=None
+        # A supplied tracker reading needs neither Yandex classification nor
+        # a separate MET estimate: skip external calls and avoid double counts.
+        met,kcal=None,None
+        if device_kcal is None:
+            category=(met_category_from_activity(activity_label,chat) if activity_label
+                      else stored_type if stored_type in CARDIO_MET else None)
+            base_met=CARDIO_MET.get(category)
+            met=(round(max(1.3,min(14.,base_met*
+                      {'light':0.75,'moderate':1.,'vigorous':1.25}[intensity])),1)
+                 if base_met is not None else None)
+            current_weight=metrics(chat).get('weight_kg')
+            kcal=(round(met*3.5*float(current_weight)*mins/200)
+                  if met is not None and current_weight
+                  and float(current_weight)>0 else None)
         with db() as conn:
             conn.execute('''INSERT INTO cardio_sessions
               (chat_id,minutes,avg_hr,equipment,activity_label,estimated_met,estimated_kcal,intensity,reported_kcal)
