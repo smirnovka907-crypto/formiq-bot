@@ -5,10 +5,15 @@ const assert=require('node:assert/strict');
 const js=fs.readFileSync('web/v5-live.js','utf8');
 class FakeFormData{
  constructor(){this.data=new Map()}
- append(name,value){this.data.set(name,value)}
+ append(name,value,filename){this.data.set(name,filename?{name:filename,size:value.size,blob:value}:value)}
 }
 
 
+function csvReport(name,body='date,activity,minutes,kcal\n2025-10-25,Эллипс,25,240\n'){
+ const bytes=Buffer.from(body,'utf8');let reads=0;
+ return {name,type:'text/csv',size:bytes.length,get reads(){return reads},
+  async arrayBuffer(){reads++;return Uint8Array.from(bytes).buffer}};
+}
 function createClient(auth=true,shared={}){
  const requests=[],handlers={},fields=new Map(),failActions=new Set(),staleActions=new Set(),deferredActions=new Map();
  let html='';
@@ -41,9 +46,16 @@ function createClient(auth=true,shared={}){
    }
    if(url==='/mini/activity/report'){
     assert.equal(opts.headers['X-Formiq-Init'],'signed-for-test');
+    assert.equal(opts.method,'POST');
+    assert.equal(opts.headers['Content-Type'],undefined);
+    assert.match(opts.body.data.get('report')?.name||'',/\.csv$/);
+    assert.ok(opts.body.data.get('report')?.blob,'Must upload copied Blob');
     const mode=opts.body.data.get('mode');
     assert.ok(['preview','import'].includes(mode));
     requests.push({action:'activity_csv_'+mode});
+    if(shared.csvNetworkFailMode===mode){
+     shared.csvNetworkFailMode=null;throw new TypeError('Failed to fetch');
+    }
     if(deferredActions.has('activity_csv_'+mode)){
      const waiting=deferredActions.get('activity_csv_'+mode);
      deferredActions.delete('activity_csv_'+mode);
@@ -257,7 +269,7 @@ function createClient(auth=true,shared={}){
   window:{Telegram:{WebApp:{initData:auth?'signed-for-test':'',ready(){},expand(){shared.expandCalls=(shared.expandCalls||0)+1},...(shared.fullscreen?{isVersionAtLeast(){return !shared.oldTelegram},requestFullscreen(){shared.fullscreenCalls=(shared.fullscreenCalls||0)+1;if(shared.fullscreenThrows)throw Error('Fullscreen unavailable')},onEvent(){}}:{})}},scrollTo(){},scrollBy(data){scrollMoves.push(data.top)},visualViewport:{offsetTop:0,addEventListener(n,fn){viewportHandlers[n]=fn}},sessionStorage:{getItem(k){return temporary.get(k)||null},setItem(k,v){temporary.set(k,v)},removeItem(k){temporary.delete(k)}}},
   fetch:client.fetch,
   setTimeout(fn){return 1},clearTimeout(){},setInterval(fn){return 1},
-  AbortController,Date:ClientDate,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
+  AbortController,Blob,Date:ClientDate,Set,Number,String,Array,Map,Object,RegExp,Math,FormData:FakeFormData,
  };
  vm.runInNewContext(js,context,{filename:'web/v5-live.js',timeout:2000});
  client.click=async(dataset)=>{
@@ -272,9 +284,12 @@ const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmedia
 async function run(){
  const csv=createClient(true,{tier:'max'});
  await settle();await csv.click({nav:'home'});await settle();
- const report={name:'report.csv',size:120};
+ const report=csvReport('report.csv');
  csv.handlers.change({target:{id:'activity-csv-file',files:[report],dataset:{}}});
+ assert.equal(report.reads,1,'Read chosen bytes before redraw');
+ await settle();
  await csv.click({cmd:'activity-csv-preview'});
+ assert.equal(report.reads,1,'Upload must not re-read picker object');
  assert.match(csv.root.innerHTML,/Найдено занятий: 1/);
  csv.failOnce('state');
  await csv.click({cmd:'activity-csv-import'});
@@ -285,8 +300,8 @@ async function run(){
  const csvConflict=createClient(true,{tier:'max',csvHasConflict:true});
  await settle();await csvConflict.click({nav:'home'});await settle();
  csvConflict.handlers.change({target:{id:'activity-csv-file',
-   files:[{name:'conflicting.csv',size:110}],dataset:{}}});
- await csvConflict.click({cmd:'activity-csv-preview'});
+   files:[csvReport('conflicting.csv')],dataset:{}}});
+ await settle();await csvConflict.click({cmd:'activity-csv-preview'});
  assert.match(csvConflict.root.innerHTML,/Похоже на уже сохранённое занятие/);
  await csvConflict.click({cmd:'activity-csv-import'});
  assert.match(csvConflict.root.innerHTML,/Выбери, сохранить это занятие отдельно/);
@@ -297,15 +312,27 @@ async function run(){
  const csvLate=createClient(true,{tier:'max'});
  await settle();await csvLate.click({nav:'home'});await settle();
  csvLate.handlers.change({target:{id:'activity-csv-file',
-  files:[{name:'old.csv',size:70}],dataset:{}}});
+  files:[csvReport('old.csv')],dataset:{}}});
+ await settle();
  const release=csvLate.deferOnce('activity_csv_preview');
  const pending=csvLate.click({cmd:'activity-csv-preview'});
  await settle();
  csvLate.handlers.change({target:{id:'activity-csv-file',
-  files:[{name:'new.csv',size:80}],dataset:{}}});
- release();await pending;
+  files:[csvReport('new.csv')],dataset:{}}});
+ await settle();release();await pending;
  assert.doesNotMatch(csvLate.root.innerHTML,/Найдено занятий: 1/,
   'Late preview for a replaced file must be discarded');
+ const csvOffline=createClient(true,{tier:'max',csvNetworkFailMode:'preview'});
+ await settle();await csvOffline.click({nav:'home'});await settle();
+ const offlineFile=csvReport('offline.csv');
+ csvOffline.handlers.change({target:{id:'activity-csv-file',files:[offlineFile],dataset:{}}});
+ await settle();
+ await csvOffline.click({cmd:'activity-csv-preview'});
+ assert.match(csvOffline.root.innerHTML,/Не удалось отправить CSV/,'No raw Failed to fetch in UI');
+ assert.doesNotMatch(csvOffline.root.innerHTML,/Найдено занятий:/);
+ assert.equal(csvOffline.requests.filter(x=>x.action==='activity_csv_import').length,0);
+ await csvOffline.click({cmd:'activity-csv-preview'});
+ assert.match(csvOffline.root.innerHTML,/Найдено занятий: 1/,'Retry retains the selected upload snapshot');
  const blocked=createClient(false);
  assert.match(blocked.root.innerHTML,/Открой из Telegram/);
  assert.equal(blocked.requests.length,0);
