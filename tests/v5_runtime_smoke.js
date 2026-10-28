@@ -53,12 +53,18 @@ function createClient(auth=true,shared={}){
      return {ok:true,status:200,async json(){return {
       ok:true,count:1,rows:[{date:'2025-10-25',
        activity:'Эллипс',minutes:25,kcal:240}],
-      file_hash:'offline_sha256_fixture',timezone:'Europe/Moscow'}}};
+      file_hash:'offline_sha256_fixture',timezone:'Europe/Moscow',
+      conflicts:shared.csvHasConflict?[0]:[]}}};
     }
     assert.equal(opts.body.data.get('confirmed'),'yes');
     assert.equal(opts.body.data.get('file_hash'),'offline_sha256_fixture');
     const checked=JSON.parse(opts.body.data.get('edited_rows'));
     assert.equal(checked[0].kcal,240);
+    const choices=JSON.parse(opts.body.data.get('resolutions'));
+    if(shared.csvHasConflict&&choices[0]==='ask')
+      return {ok:false,status:409,async json(){return {ok:false,conflicts:[0],
+        error:'Выбери, сохранить это занятие отдельно или пропустить.'}}};
+    if(shared.csvHasConflict)assert.equal(choices[0],'separate');
     return {ok:true,status:200,async json(){
      return {ok:true,imported:1,duplicates:0}}};
    }
@@ -276,6 +282,18 @@ async function run(){
  assert.match(csv.root.innerHTML,/История обновится после повторного открытия/,
   'Saved CSV must not be presented as failed after a separate refresh error');
  assert.equal(csv.requests.filter(x=>x.action==='activity_csv_import').length,1);
+ const csvConflict=createClient(true,{tier:'max',csvHasConflict:true});
+ await settle();await csvConflict.click({nav:'home'});await settle();
+ csvConflict.handlers.change({target:{id:'activity-csv-file',
+   files:[{name:'conflicting.csv',size:110}],dataset:{}}});
+ await csvConflict.click({cmd:'activity-csv-preview'});
+ assert.match(csvConflict.root.innerHTML,/Похоже на уже сохранённое занятие/);
+ await csvConflict.click({cmd:'activity-csv-import'});
+ assert.match(csvConflict.root.innerHTML,/Выбери, сохранить это занятие отдельно/);
+ csvConflict.handlers.change({target:{dataset:{activityResolution:'0'},value:'separate'}});
+ await csvConflict.click({cmd:'activity-csv-import'});
+ assert.match(csvConflict.root.innerHTML,/Добавлено занятий: 1/);
+ assert.equal(csvConflict.requests.filter(x=>x.action==='activity_csv_import').length,2);
  const csvLate=createClient(true,{tier:'max'});
  await settle();await csvLate.click({nav:'home'});await settle();
  csvLate.handlers.change({target:{id:'activity-csv-file',
