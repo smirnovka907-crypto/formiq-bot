@@ -524,7 +524,7 @@ function activityCsvPanel(){
   (activityCsvError?'<p role="alert" class="fq-form-error">'+esc(activityCsvError)+'</p>':'')+
   (activityCsvNotice?'<p role="status" class="input-note">'+esc(activityCsvNotice)+'</p>':'')+
   button(activityCsvBusy?'Читаем…':'Проверить CSV','activity-csv-preview',false,activityCsvBusy?'disabled':'')+
-  preview+ '</section>';
+  grid+ '</section>';
 }
 async function uploadActivityCsv(mode){
  if(activityCsvBusy)return;
