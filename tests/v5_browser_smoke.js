@@ -470,7 +470,7 @@ async function run(){
    await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
     route=>route.fulfill({status:200,contentType:'image/svg+xml',
      body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200"><rect width="600" height="1200" fill="#ddd"/></svg>'}));
-   assert.match(APP_HTML,/v5-live\\.js\\?v=exercise-cards-20261029/,
+   assert.ok(APP_HTML.includes('/mini/v5-live.js?v=exercise-cards-20261029'),
     'Telegram must fetch a revisioned JS URL instead of reusing the previous release');
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
