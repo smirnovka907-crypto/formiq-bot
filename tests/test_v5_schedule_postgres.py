@@ -1951,6 +1951,17 @@ class SchedulePostgresTests(unittest.TestCase):
         with self.connect() as conn:
             self.assertEqual(conn.execute('SELECT reported_kcal FROM cardio_sessions WHERE id=%s',
                 (row[0],)).fetchone()[0],240)
+        with patch.object(self.m,'met_category_from_activity',
+                          side_effect=AssertionError('Yandex not needed for a tracker reading')):
+            self.assertTrue(self.m.mini_aux(self.chat,'cardio', {
+                'minutes':30,'avg_hr':None,'type':'Другое',
+                'activity':'Игра в теннис','device_kcal':175}))
+        with self.connect() as conn:
+            skipped=conn.execute("""SELECT estimated_met,estimated_kcal,reported_kcal
+                FROM cardio_sessions WHERE chat_id=%s ORDER BY id DESC LIMIT 1""",
+                (self.chat,)).fetchone()
+        self.assertEqual(skipped,(None,None,175),
+            'User-supplied tracker calories must bypass AI and MET')
 
     def test_existing_met_activity_is_still_estimated_without_device(self):
         self.save()
