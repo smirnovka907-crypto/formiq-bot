@@ -1,3 +1,21 @@
+## FORMIQ | PR #37 — Управление: межфайловые дубликаты и резервная готовность (28.10.2026)
+
+**Статус:** тот же Draft PR #37; `main` и Render Live SHA `d53b6106a26d61e32526d78dfb3af5688a03ad8f` не менялись, merge/deploy не разрешены. Google инструкция — редакция 2.6, задача Управления: решить межфайловые дубли и свежий зашифрованный backup.
+
+**Код:**
+- Серверный `/mini/activity/report`: read-only preview показывает конфликты по **каноническому fingerprint** тренировок из других файлов. После редактирования пользователь должен явно решить по каждой спорной строке: `skip` или `separate`; `ask` приводит к HTTP 409 с номерами конфликтующих строк и **нулём записей всего батча**, без молчаливого пропуска.
+- На import сервер повторно проверяет исходный хеш файла, все скорректированные поля и решения, затем повторно проверяет конфликты внутри транзакции с `pg_advisory_xact_lock(chat)`; owner isolation, `ON CONFLICT DO NOTHING`. Для отличающихся файлов с равной датой/активностью/минутами/ккал решение `separate` сохраняет обе реальные записи, без параллельного MET; `skip` допускается лишь явно. Для повтора файла `import_file_hash+import_row_no` исключает вторую копию даже при `separate`.
+- `activity_import.py`: canon fingerprint сохраняется наряду с ordinal fingerprint для одинаковых строк одного файла. `cardio_sessions` только **аддитивно** пополняется nullable `import_file_hash`, `import_row_no`, `import_canonical` + owner-scoped indexes (file-row unique и canonical lookup). Существующие записи, тренировки и анкеты не изменяются.
+- UI оставляет утверждённые три вкладки, добавляет в **существующий** CSV предпросмотр явный выбор для совпавшей строки; на 409 предупреждение с точным номером, без потери правок. Новых модальных потоков, страниц и визуальных тем нет.
+- Добавлены реальные PostgreSQL18/API регрессии cross-file 409 no-write / отдельная активность / повтор того же файла / другой владелец, и JavaScript smoke выбора.
+- **Последний проверенный кодовый CI до журнальной записи:** SHA `9580a17e3a754a7e6f4b2b991544dd0821b855c8`, Actions [#40723006787](https://github.com/smirnovka907-crypto/formiq-bot/actions/runs/40723006787) SUCCESS, включая PostgreSQL18, Python (238 тестов), API, JS и mobile Chromium. После обновления документов final exact-HEAD CI проверить заново.
+
+**Backup/restore:** repo содержит локальный безопасный инструмент `scripts/formiq_pg_backup.py` (pg_dump 18 read-only, AES-GCM, scrypt, validate encrypted GCM+pg_restore TOC, SHA256). Доступный Render connector позволяет только SQL read-only, но не streaming `pg_dump` и не извлечение закрытых production ключей. Проверка существующей private папки Google Drive `05_Резервные копии БД` выявила **только** шифрованный `formiq-production-20261027T160419Z-0c5338df.fiqenc`; он ранее был проверен и локально восстановлен, но **не является свежим backup**. Новая копия `28.10`, её checksum и изолированный restore **NOT RUN**. Отдельного разрешения для создания временной локальной пустой базы или безопасного запуска с доступом к внешнему Render DSN нет. Без этого **NO-GO**; не писать в логах/чатах/PR секреты, пользовательские строки или архив. В `docs/RELEASE_ROLLBACK.md` есть команды для доверенного локального оператора, порядок подтверждения и code-only rollback без потери новых записей.
+
+**Read-only production факт:** PostgreSQL 18.6, 38 таблиц, 1 workout, 6 workout_sets, 0 cardio_sessions, одна из ещё не опубликованных CSV колонок уже имеется; это агрегаты на момент проверки, а НЕ сохранённая копия и не доказательство успешного restore. Пользовательская приёмка Telegram Android/iOS **NOT RUN**; OCR скриншотов — вне этапа. Не создавать новые PR/сервисы/облачные БД и не выполнять merge/deploy.
+
+---
+
 ## FORMIQ | PR #37 — P0 audit CSV and device calories (28.10.2026)
 
 **Единый действующий Draft PR:** https://github.com/smirnovka907-crypto/formiq-bot/pull/37; основная инструкция Google Drive редакция 2.6; владелец потребовал подготовку к выпуску, **не разрешал merge/Render deploy**. Отдельных PR/ботов/БД/новых сервисов нет. Render Live остаётся `d53b6106a26d61e32526d78dfb3af5688a03ad8f` (проверен через Render). Работаем только в ветке `feat/health-data-manual-device-kcal-20261028` и CI на точном HEAD.
