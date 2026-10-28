@@ -500,6 +500,11 @@ async function run(){
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    await matchedShot('workout-entry',async ref=>{await ref.locator('[data-act="home-start"]').click();await ref.locator('#workout-entry').waitFor();});
+   // A real Telegram WebView reload must not lose the current set or exercise cues.
+   await page.reload({waitUntil:'load'});
+   await page.locator('#reps').waitFor({state:'visible'});
+   assert.equal(posts.filter(p=>p.action==='record').length,0,
+    'Refreshing the active screen must never submit a set');
    // An active workout card must open on a real small viewport, render vetted
    // instructions and the entire photo, and preserve unsubmitted working values.
    await page.setViewportSize({width:360,height:640});
