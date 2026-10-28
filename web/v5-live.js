@@ -540,8 +540,11 @@ function training(){
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric" placeholder="60"')+
     '<label class="field"><span>Средний пульс <small>необязательно</small></span>'+
     '<input id="cardio-hr" type="number" min="40" max="220" inputmode="numeric" autocomplete="off" placeholder="—" value="'+esc(drafts['cardio-hr']??'')+'"></label>'+
-  '</div><div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
-  '<p class="input-note" style="margin-top:11px">Сохранено в дневнике. Оценка ккал по MET приблизительная, не измеренная датчиком.</p></section>';
+  '</div>'+
+  '<label class="field"><span>Калории по часам или браслету <small>необязательно</small></span>'+
+  '<input id="cardio-device-kcal" type="number" min="0" max="5000" step="1" inputmode="numeric" placeholder="Например, 240" value="'+esc(drafts['cardio-device-kcal']??'')+'"></label>'+
+  '<div style="margin-top:15px">'+button('Сохранить тренировку','cardio',true)+'</div>'+
+  '<p class="input-note" style="margin-top:11px">Если указаны калории с устройства, сохраним их как введённое показание, без дополнительного расчёта по MET. Без устройства расход будет примерным.</p></section>';
  const clock=localClock(),greeting=clock.hour<5?'Доброй ночи!':clock.hour<11?'Доброе утро!':clock.hour<17?'Добрый день!':clock.hour<23?'Добрый вечер!':'Доброй ночи!';
  const dayWorkout=(state.calendar||[]).some(r=>r.date===clock.date&&['planned','past'].includes(r.status));
  const message=dayWorkout?'Сегодня всё по твоему плану.':'Сегодня день восстановления.';
@@ -1192,7 +1195,8 @@ function modalHTML(){
    '<div class="fq-live-grid" style="margin-top:15px">'+
     input('Время, мин','cardio-min','number','min="1" max="300" inputmode="numeric"')+
     input('Средний пульс','cardio-hr','number','min="40" max="220" inputmode="numeric"')+
-   '</div><p class="input-note">Пульс необязателен. Калории по MET — приблизительная оценка.</p>'+
+   '</div>'+input('Калории с устройства (необязательно)','cardio-device-kcal','number','min="0" max="5000" step="1" inputmode="numeric" placeholder="240"')+
+   '<p class="input-note">Если показание указано, не добавляем к нему оценку MET. Без устройства калории приблизительные.</p>'+
    button('Сохранить тренировку','cardio',true)+button('Отмена','close');
  }
  if(modal==='mood')content=state?.metrics?.sex==='female'?
@@ -1225,7 +1229,7 @@ function partialHistory(){const el=document.getElementById('history-root');if(el
 function fail(s){error=s;draw()}
 app.addEventListener('input',e=>{
  onboardChanged(e);
- if(['reps','weight','cardio-min','cardio-hr','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
+ if(['reps','weight','cardio-min','cardio-hr','cardio-device-kcal','cardio-activity','cardio-intensity','feedback-text'].includes(e.target.id))drafts[e.target.id]=e.target.value;
  if(e.target.id==='period-start'||e.target.id==='period-end')periodDraft[e.target.id==='period-start'?'start':'end']=e.target.value;
  // Calendar month changes only through the arrow buttons; do not reset date drafts.
  if(e.target.id==='food-text'){foodText=e.target.value;foodSaveRequestId=''}
@@ -1243,7 +1247,7 @@ app.addEventListener('focusin',e=>{
  const field=e.target;
  if(!field?.matches?.('input,textarea,select,[contenteditable="true"]'))return;
  document.body.classList.add('fq-typing');
- if(['cardio-min','cardio-hr'].includes(field.id))document.body.classList.add('cardio-typing');
+ if(['cardio-min','cardio-hr','cardio-device-kcal'].includes(field.id))document.body.classList.add('cardio-typing');
  const shift=()=>{if(document.activeElement===field)updateViewportPosition()};
  shift();setTimeout(shift,180);setTimeout(shift,430);
 });
@@ -1790,14 +1794,17 @@ app.addEventListener('click',async e=>{
  if(cmd==='cardio'){
   if(!cardioType){fail('Сначала выбери вид кардио.');return}
   const m=document.getElementById('cardio-min')?.value.trim()||'',p=document.getElementById('cardio-hr')?.value.trim()||'';
+  const k=document.getElementById('cardio-device-kcal')?.value.trim()||'';
   if(!/^\d+$/.test(m)||Number(m)<1||Number(m)>300){fail('Время кардио от 1 до 300 минут.');return}
   if(p&&(!/^\d+$/.test(p)||Number(p)<40||Number(p)>220)){fail('Средний пульс 40–220 или пустое поле.');return}
+  if(k&&(!/^\d+$/.test(k)||Number(k)>5000)){fail('Калории по устройству: 0–5000 или пустое поле.');return}
   const activity=String(document.getElementById('cardio-activity')?.value||drafts['cardio-activity']||'').trim();
   if(cardioType==='Другое'&&(activity.length<3||activity.length>100)){fail('Название активности: 3–100 символов.');return}
   const intensity=document.getElementById('cardio-intensity')?.value||'moderate';
-  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,type:cardioType,...(cardioType==='Другое'?{activity,intensity}:{})});
-  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-activity']='';drafts['cardio-intensity']='';if(date){dayRows=null;await loadDay()}draw()}
-  else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p}
+  const saved=await send('cardio',{minutes:Number(m),avg_hr:p?Number(p):null,
+   device_kcal:k?Number(k):null,type:cardioType,...(cardioType==='Другое'?{activity,intensity}:{})});
+  if(saved){modal='';cardioType='';typesOpen=false;drafts['cardio-min']='';drafts['cardio-hr']='';drafts['cardio-device-kcal']='';drafts['cardio-activity']='';drafts['cardio-intensity']='';if(date){dayRows=null;await loadDay()}draw()}
+  else{const minutes=document.getElementById('cardio-min'),heartrate=document.getElementById('cardio-hr'),calories=document.getElementById('cardio-device-kcal');if(minutes)minutes.value=m;if(heartrate)heartrate.value=p;if(calories)calories.value=k}
   return;
  }
  if(cmd==='week'){
