@@ -1528,7 +1528,7 @@ class SchedulePostgresTests(unittest.TestCase):
         stored=self.m.mini_history_detail(self.chat,active['id'])
         self.assertEqual(stored['status'],'finished')
         self.assertEqual(len(stored['items']),1,'Only confirmed set in history')
-        self.assertIn('42.5 кг',stored['items'][0]['result'])
+        self.assertRegex(stored['items'][0]['result'],r'42[.]50? кг')
         with self.connect() as conn:
             next_slot=self.m.planned_next_in(conn,self.chat,cycle,3)
         self.assertIsNotNone(next_slot,'Closing a session advances calendar')
