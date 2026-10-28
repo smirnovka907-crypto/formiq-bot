@@ -2006,7 +2006,7 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual(len({r[3] for r in rows}),2)
         self.assertTrue(all(r[:3]==(240,None,None) for r in rows))
         # Identical payload is still independent between owners.
-        self.save(chat=self.chat+1)
+        self.m.save_onboarding(self.chat+1,self.body())
         other=request_import(self.chat+1)
         self.assertEqual(other.status_code,200,other.get_json())
         self.assertEqual(other.get_json()['imported'],2)
