@@ -478,7 +478,7 @@ function workout(){
    esc(c.rest_seconds||0)+' сек</span><div id="rest-count" class="rest-number" role="timer" aria-live="off">'+
    String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0')+
    '</div><p class="subtitle">Следующий подход: '+esc(c.name)+'</p>'+
-   button('Пропустить отдых','rest-skip')+button('Техника упражнения','exercise-live')+'</section>';
+   '<div class="fq-live-actions">'+button('Пропустить отдых','rest-skip')+button('Техника упражнения','exercise-live')+'</div></section>';
  }else{
   const target=c.low===c.high?String(c.low):String(c.low)+'–'+String(c.high);
   const unit=c.unit==='reps'?'повторений':c.unit==='sec'?'секунд':'минут';
