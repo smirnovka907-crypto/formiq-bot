@@ -144,7 +144,7 @@ async function run(){
  try{
   browser=await chromium.launch({headless:true,executablePath:chrome,args:['--no-sandbox','--disable-dev-shm-usage']});
   for(const size of [{width:393,height:852},{width:360,height:740}]){
-   profileComplete=true;profileState=exampleState(true);posts=[];
+   profileComplete=true;profileState=exampleState(true);posts=[];csvPreviews=0;csvImports=0;
    const context=await browser.newContext({viewport:size,isMobile:true,hasTouch:true,
      deviceScaleFactor:1});
    const page=await context.newPage();
