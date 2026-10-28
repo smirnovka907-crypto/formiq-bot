@@ -4,6 +4,9 @@ Each test owns an isolated schema in an explicitly named local test database.
 GitHub Actions supplies a disposable PostgreSQL service for these tests.
 """
 import importlib
+import hashlib
+import json
+from io import BytesIO
 import os
 import unittest
 import uuid
@@ -1920,6 +1923,57 @@ class SchedulePostgresTests(unittest.TestCase):
         self.assertEqual([x['name'] for x in products['meals'][0]['items']],
                          ['Рис сухой','Творог'],
                          'Reject stale AI, not the real nutrition history')
+
+    def test_csv_preview_confirmation_dedup_and_owner_isolation(self):
+        self.save()
+        raw=('date,activity,minutes,kcal\\n2025-10-25,Эллипс,25,240\\n'
+             '2025-10-26,Ходьба,30,110\\n').replace('\\n','\n').encode('utf-8')
+        digest=hashlib.sha256(raw).hexdigest()
+        def post(mode,*,file_hash=None,edits=None,chat=None):
+            with patch.object(self.m,'mini_auth',return_value=chat or self.chat):
+                payload={'mode':mode,'report':(BytesIO(raw),'activity.csv')}
+                if mode=='import':
+                    payload.update(confirmed='yes',file_hash=file_hash or digest,
+                                   edited_rows=json.dumps(edits,ensure_ascii=False))
+                return self.m.APP.test_client().post('/mini/activity/report',
+                    data=payload,headers={'X-Formiq-Init':'fake'},content_type='multipart/form-data')
+        preview=post('preview')
+        self.assertEqual(preview.status_code,200,preview.get_json())
+        result=preview.get_json()
+        self.assertEqual(result['count'],2)
+        self.assertEqual(result['rows'][0]['kcal'],240)
+        with self.connect() as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM cardio_sessions').fetchone()[0],0,
+                             'Preview is read-only')
+        self.assertEqual(post('import',file_hash='0'*64,
+            edits=result['rows']).status_code,400)
+        edited=[{**row} for row in result['rows']]
+        edited[1]['kcal']=115
+        imported=post('import',edits=edited)
+        self.assertEqual(imported.status_code,200,imported.get_json())
+        self.assertEqual(imported.get_json()['imported'],2)
+        same=post('import',edits=edited)
+        self.assertEqual(same.get_json()['imported'],0)
+        self.assertEqual(same.get_json()['duplicates'],2)
+        with self.connect() as conn:
+            rows=conn.execute("""SELECT chat_id,performed_at,activity_label,minutes,
+                   reported_kcal,estimated_kcal,import_fingerprint
+                   FROM cardio_sessions ORDER BY performed_at""").fetchall()
+        self.assertEqual(len(rows),2)
+        self.assertEqual([r[4] for r in rows],[240,115])
+        self.assertTrue(all(r[5] is None and len(r[6])==64 for r in rows))
+        self.assertEqual(rows[0][0],self.chat)
+        page=self.m.mini_history_page(self.chat,{'limit':30})
+        self.assertTrue(any('CSV' in item['title'] for item in page['history']))
+        with patch.object(self.m,'mini_auth',return_value=None):
+            denied=self.m.APP.test_client().post('/mini/activity/report',
+                data={'report':(BytesIO(raw),'activity.csv')},
+                headers={'X-Formiq-Init':'invalid'})
+        self.assertEqual(denied.status_code,401)
+        self.m.init_db()
+        with self.connect() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT COUNT(*) FROM cardio_sessions').fetchone()[0],2)
 
     def test_device_calories_are_user_reported_without_met_double_counting(self):
         self.save()
