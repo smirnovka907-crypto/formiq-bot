@@ -65,6 +65,22 @@ class ActivityImportTests(unittest.TestCase):
                     '2025-10-25,Эллипс,25,240\n')
         self.assertEqual(first[0]['fingerprint'],single[0]['fingerprint'])
 
+    def test_local_noon_preserves_date_across_dst(self):
+        # CSV has no time: local noon anchors its date without implying an
+        # actual workout start time or using a fixed Moscow offset.
+        a=parse_activity_csv(
+            'date,activity,minutes,kcal\n2026-03-29,Ходьба,30,100\n'.encode(),
+            'health.csv','text/csv','Europe/Helsinki')
+        b=parse_activity_csv(
+            'date,activity,minutes,kcal\n2026-10-25,Ходьба,30,100\n'.encode(),
+            'health.csv','text/csv','Europe/Helsinki')
+        self.assertEqual(a[0]['performed_at'].isoformat(),
+                         '2026-03-29T09:00:00+00:00')
+        self.assertEqual(b[0]['performed_at'].isoformat(),
+                         '2026-10-25T10:00:00+00:00')
+        self.assertEqual([a[0]['date'],b[0]['date']],
+                         ['2026-03-29','2026-10-25'])
+
     def test_reject_unsafe_or_ambiguous_files(self):
         good='date,activity,minutes,kcal\n2025-10-25,Ходьба,20,80\n'
         for text in (
