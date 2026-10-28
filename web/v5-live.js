@@ -531,9 +531,10 @@ async function uploadActivityCsv(mode){
  if(!activityCsvFile){activityCsvError='Выбери CSV-отчёт активности.';draw();return}
  if(activityCsvFile.size>65536){activityCsvError='CSV не должен превышать 64 КБ.';draw();return}
  const old=activityCsvPreview;
+ const selectedFile=activityCsvFile;
  if(mode==='import'&&!old){activityCsvError='Сначала проверь CSV.';draw();return}
  activityCsvBusy=true;activityCsvError='';draw();
- const form=new FormData();form.append('report',activityCsvFile);form.append('mode',mode);
+ const form=new FormData();form.append('report',selectedFile);form.append('mode',mode);
  if(mode==='import'){
   form.append('confirmed','yes');form.append('file_hash',old.file_hash);
   form.append('edited_rows',JSON.stringify(old.rows));
@@ -544,6 +545,8 @@ async function uploadActivityCsv(mode){
     headers:{'X-Formiq-Init':token},body:form,credentials:'same-origin',
     cache:'no-store',signal:abort.signal});
   const data=await response.json();
+  // Ignore late results for a report the owner has since replaced.
+  if(selectedFile!==activityCsvFile)return;
   if(!response.ok||!data.ok)throw Error(data.error||'Не удалось обработать отчёт');
   if(mode==='preview'){
    activityCsvPreview=data;
@@ -551,13 +554,21 @@ async function uploadActivityCsv(mode){
   }else{
    activityCsvNotice='Добавлено занятий: '+data.imported+'. Уже сохранено: '+data.duplicates+'.';
    activityCsvPreview=null;activityCsvFile=null;
-   const snapshot=(await request('state')).data;state=snapshot;
-   dayRows=null;monthMarks=new Set();if(date)await loadDay();
+   // Import was already committed: a failed refresh must not imply failure
+   // of the save and must not prompt a misleading duplicate re-import.
+   try{
+    const snapshot=(await request('state')).data;state=snapshot;
+    dayRows=null;monthMarks=new Set();if(date)await loadDay();
+   }catch(_refreshError){
+    activityCsvNotice+=' История обновится после повторного открытия приложения.';
+   }
   }
  }catch(ex){
-  activityCsvError=ex.name==='AbortError'?
-    'Ответ сервера не получен. Проверь историю перед повтором импорта.':
-    ex.message||'Ошибка CSV';
+  if(selectedFile===activityCsvFile){
+   activityCsvError=ex.name==='AbortError'?
+     'Ответ сервера не получен. Проверь историю перед повтором импорта.':
+     ex.message||'Ошибка CSV';
+  }
  }finally{clearTimeout(timer);activityCsvBusy=false;draw()}
 }
 function training(){
