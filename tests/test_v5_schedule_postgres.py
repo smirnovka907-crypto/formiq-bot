@@ -1978,9 +1978,9 @@ class SchedulePostgresTests(unittest.TestCase):
     def test_csv_identical_rows_are_separate_sessions_but_retry_is_idempotent(self):
         # A duplicate row inside one CSV can represent another genuine workout.
         self.save()
-        raw=('date,activity,minutes,kcal\\n'
-             '2025-10-25,Эллипс,25,240\\n'
-             '2025-10-25,Эллипс,25,240\\n').encode('utf-8')
+        raw=('date,activity,minutes,kcal\n'
+             '2025-10-25,Эллипс,25,240\n'
+             '2025-10-25,Эллипс,25,240\n').encode('utf-8')
         digest=hashlib.sha256(raw).hexdigest()
         def request_import(chat):
             with patch.object(self.m,'mini_auth',return_value=chat):
