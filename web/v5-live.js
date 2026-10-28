@@ -1325,7 +1325,9 @@ function modalHTML(){
    (nextOffset!==null?button('Загрузить ещё','history-more'):'');
  }
  if(modal==='detail')content=actualWorkoutPanel(detail)+button(detailOrigin==='history'?'К истории':'Закрыть',detailOrigin==='history'?'detail-back':'close',true);
- return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
+ const historyExercisePhoto=modal==='exercise-card'&&
+  (exerciseOrigin==='history'||exerciseOrigin==='finished-preview');
+ return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':historyExercisePhoto?'fq-history-exercise-card':''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
  document.body?.classList?.toggle('theme-female',((onboardOpen||view==='profile')&&onboard?onboard.sex:state?.metrics?.sex)==='female');

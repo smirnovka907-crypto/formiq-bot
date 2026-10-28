@@ -88,7 +88,13 @@ async function run(){
     response={ok:true,periods:periodHistory,next_period:null};
    }else if(data.action==='detail'){
     const item=profileState.history.find(x=>x.id===data.id);
-    response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[{name:'Записано в тестовом дневнике',result:'60 мин'}]}};
+    response={ok:true,detail:{title:item?.title||'Силовая',date:'23.10.2026',items:[
+      {name:'Записано в тестовом дневнике',result:'60 мин'},
+      {name:'Жим ногами',key:'leg_press',result:'12 повт. · 60 кг',
+       image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
+       image_credit:'Everkinetic · Free Exercise DB',
+       image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/',
+       steps:Array.from({length:12},(_,i)=>'Шаг техники '+(i+1)+': контролируй амплитуду движения')} ]}};
    }else if(data.action==='start'){
     assert.equal(data.mood,'normal');
     profileState.workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',
@@ -518,6 +524,40 @@ async function run(){
    await page.screenshot({path:path.join(OUT,'progress-real-weights-'+size.width+'.png')});
    await matchedShot('progress-recorded',async ref=>ref.locator('.bottom-nav [data-nav="progress"]').click(),
     {note:'Live chart uses actual isolated completed sets; approved example values are illustrative'});
+   // A real history -> exercise card flow, on a short Android-like viewport.
+   // The portrait photo is a local test fixture; no production workout or remote media.
+   await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
+    route=>route.fulfill({status:200,contentType:'image/svg+xml',
+     body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200"><rect width="600" height="1200" fill="#ddd"/></svg>'}));
+   await page.setViewportSize({width:360,height:640});
+   await page.locator('[data-cmd="detail"][data-id="9"]').first().click();
+   await page.locator('[data-cmd="exercise-history"]').first().click();
+   const historyPhoto=page.locator('.fq-history-exercise-card .fq-exercise-photo img');
+   await historyPhoto.waitFor();
+   await historyPhoto.evaluate(img=>img.decode());
+   const photoFit=await page.evaluate(()=>{
+    const panel=document.querySelector('.fq-history-exercise-card'),
+     photo=panel.querySelector('.fq-exercise-photo img'),caption=panel.querySelector('figcaption'),
+     image=photo.getBoundingClientRect(),dialog=panel.getBoundingClientRect();
+    return {imageWidth:image.width,imageHeight:image.height,dialogWidth:dialog.width,
+     dialogTop:dialog.top,dialogBottom:dialog.bottom,clientWidth:panel.clientWidth,
+     caption:caption.textContent,scrollable:panel.scrollHeight>panel.clientHeight};
+   });
+   assert.ok(photoFit.imageWidth<=photoFit.clientWidth+1 &&
+    photoFit.imageHeight<=Math.min(640*.34,220)+2,'Whole portrait photo fits mobile area: '+JSON.stringify(photoFit));
+   assert.ok(photoFit.dialogTop>=0&&photoFit.dialogBottom<=641&&photoFit.dialogWidth<=361,
+    'Photo dialog fits safe mobile viewport: '+JSON.stringify(photoFit));
+   assert.match(photoFit.caption,/CC BY-SA 4.0/);
+   assert.ok(photoFit.scrollable,'Long exercise instructions scroll in short Android viewport');
+   await page.locator('.fq-history-exercise-card').evaluate(el=>{el.scrollTop=el.scrollHeight});
+   const back=await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').boundingBox();
+   const dialog=await page.locator('.fq-history-exercise-card').boundingBox();
+   assert.ok(back&&dialog&&back.y>=dialog.y-1&&back.y+back.height<=dialog.y+dialog.height+1&&back.height>=44,
+    'Back button is reachable by scrolling: '+JSON.stringify({back,dialog}));
+   await page.screenshot({path:path.join(OUT,'history-exercise-photo-360x640.png')});
+   await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').click();
+   await page.locator('.fq-live-dialog [data-cmd="close"]').last().click();
+   await page.setViewportSize(size);
    const monthReply=page.waitForResponse(resp=>{
     if(!resp.url().endsWith('/mini/api'))return false;
     try{return JSON.parse(resp.request().postData()||'{}').action==='history_month'}
