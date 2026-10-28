@@ -5510,7 +5510,8 @@ def mini_state(chat, just_finished=False):
                     'low':low,'high':high,'unit':unit,
                     'name':visible_exercise_name(name),'tip':info[1],'caution':info[2],
                     'help_url':'https://musclewiki.com/ru-ru',
-                    'image':None
+                    'image':None,
+                    **exercise_card_details(key)
                 }
             result['workout'] = workout
     # A single progress screen: dates and drill-down, without duplicate reports.
