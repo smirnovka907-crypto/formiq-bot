@@ -598,6 +598,51 @@ async function run(){
     'Photo dialog fits safe mobile viewport: '+JSON.stringify(photoFit));
    assert.match(photoFit.caption,/CC BY-SA 4.0/);
    assert.ok(photoFit.scrollable,'Long exercise instructions scroll in short Android viewport');
+   // Unlike earlier regressions, verify the actual native touch-scrolling
+   // gesture in Chromium (not just scrollHeight or JS scrollTop assignment).
+   // Telegram's content safe areas can be much larger than env() alone.
+   await page.evaluate(()=>{
+    Telegram.WebApp.contentSafeAreaInset.top=104;
+    Telegram.WebApp.contentSafeAreaInset.bottom=60;
+    window.__fqTelegramEvents.contentSafeAreaChanged();
+   });
+   const historyGeometry=await page.locator('.fq-history-exercise-card').evaluate(el=>{
+    const overlay=el.parentElement, image=el.querySelector('.fq-exercise-photo img');
+    const panel=el.getBoundingClientRect(),photo=image.getBoundingClientRect();
+    return {overlayOverflow:getComputedStyle(overlay).overflowY,
+      sheetOverflow:getComputedStyle(el).overflowY, touchAction:getComputedStyle(el).touchAction,
+      panelTop:panel.top,panelBottom:panel.bottom,photoTop:photo.top,photoBottom:photo.bottom,
+      availableScroll:el.scrollHeight-el.clientHeight,screenHeight:innerHeight,
+      overlayScrollHeight:overlay.scrollHeight,overlayClientHeight:overlay.clientHeight};
+   });
+   assert.equal(historyGeometry.overlayOverflow,'hidden','Outer overlay must not steal history photo swipes');
+   assert.equal(historyGeometry.sheetOverflow,'auto','History sheet must own native scrolling');
+   assert.equal(historyGeometry.touchAction,'pan-y','Allow touch swipe inside sheet');
+   assert.ok(historyGeometry.panelTop>=0&&historyGeometry.panelBottom<=641&&
+    historyGeometry.photoTop>=0&&historyGeometry.photoBottom<=historyGeometry.panelBottom+1,
+    'History image and header must fit Telegram content safe area: '+JSON.stringify(historyGeometry));
+   assert.ok(historyGeometry.availableScroll>80,'Long history instructions need a real scroll range');
+   const startY=Math.min(historyGeometry.panelBottom-45,historyGeometry.photoBottom+65);
+   const fingerX=180;
+   const cdptouch=await context.newCDPSession(page);
+   await cdptouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:fingerX,y:startY}]});
+   for(let step=1;step<=9;step++){
+    await cdptouch.send('Input.dispatchTouchEvent',{type:'touchMove',
+      touchPoints:[{x:fingerX,y:startY-step*25}]});
+    await page.waitForTimeout(20);
+   }
+   await cdptouch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+   await page.waitForTimeout(140);
+   const touchScroll=await page.locator('.fq-history-exercise-card').evaluate(el=>el.scrollTop);
+   assert.ok(touchScroll>20,'Native finger swipe must scroll history technique: '+
+    JSON.stringify({touchScroll,historyGeometry}));
+   await cdptouch.detach();
+   await page.evaluate(()=>{
+    Telegram.WebApp.contentSafeAreaInset.top=52;
+    Telegram.WebApp.contentSafeAreaInset.bottom=0;
+    window.__fqTelegramEvents.contentSafeAreaChanged();
+   });
+
    assert.equal(await page.locator('.fq-history-exercise-card .fq-exercise-detail-head [data-cmd="exercise-back"]').count(),1,
     'History card has a readily accessible close control before its long instructions');
    await page.locator('.fq-history-exercise-card').evaluate(el=>{el.scrollTop=el.scrollHeight});
