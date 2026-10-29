@@ -1010,10 +1010,25 @@ async function requestFoodDaily(){
 async function enrichFoodDayAfterSave(day){
  try{
   const result=await request('food_auto_enrich',{date:day});
-  // A slow catalogue call must never overwrite edits or another day's view.
-  if(day===foodDate&&(result.catalog_matches>0||result.ai_recognized>0))void loadFoodHistory();
+  // A slow source read cannot overwrite another day's notice or any user edit.
+  if(day!==foodDate)return;
+  if(result.catalog_matches>0||result.ai_recognized>0)void loadFoodHistory();
+  if(result.catalog_matches>0){
+   foodNotice='Подтверждённый справочник нашёл КБЖУ для '+result.catalog_matches+' позиций.';
+  }else if(result.catalog_status==='not_configured'){
+   foodNotice='Еда сохранена. Проверенный справочник КБЖУ пока не подключён.';
+  }else if(result.catalog_status==='source_unavailable'){
+   foodNotice='Еда сохранена. Справочник КБЖУ сейчас недоступен. Попробуй позже.';
+  }else if(result.catalog_status==='no_verified_match'){
+   foodNotice='Еда сохранена. Нет однозначного совпадения с проверенной порцией. Можно выбрать продукт из справочника без ручного ввода КБЖУ.';
+  }
+  draw();
  }catch(_ex){
-  // Original food was already saved. Missing catalogue is not a save failure.
+  // No save rollback and no raw food or upstream error text in the UI.
+  if(day===foodDate){
+   foodNotice='Еда сохранена. Не удалось проверить КБЖУ в справочнике; запись не потеряна.';
+   draw();
+  }
  }
 }
 function syncFoodDraft(){
@@ -1069,7 +1084,9 @@ function food(){
     button(foodDailyBusy?'Обновляем КБЖУ…':'Обновить КБЖУ','food-nutrition-day',false,foodDailyBusy?'disabled':''):'';
  const summary='<section class="surface"><span class="eyebrow">ПИТАНИЕ · '+esc(prettyDate(foodDate))+'</span>'+
   '<h2 style="margin:10px 0">Ручной дневник</h2><p class="input-note">'+
-  'КБЖУ — из выбранного FatSecret или указанные тобой вручную. Без источника значения не подставляем.</p>'+
+  (state?.food_catalog_available?
+   'После сохранения проверяем КБЖУ по справочнику. Если совпадения нет, выбери подходящий продукт и порцию. Ручной ввод необязателен.':
+   'Справочник КБЖУ не подключён. Сохраняем продукты и вес без выдуманных значений; ручной ввод необязателен.')+'</p>'+
   (foodLoading?'<p role="status">Загружаем записи…</p>':'')+
   dateField+(foodNotice?'<p role="status" class="input-note">'+esc(foodNotice)+'</p>':'')+
   nutritionButton+(foodDailyError?'<p role="alert" class="input-note">'+esc(foodDailyError)+'</p>':'')+totalContent+'</section>';
@@ -1079,7 +1096,9 @@ function food(){
     '<p class="input-note">'+
     (totals.meals.find(x=>x.type===meal.type).complete?'КБЖУ: ':'Учтённые продукты: ')+
     nutritionLine(totals.meals.find(x=>x.type===meal.type).known_subtotal)+'</p>':'')+
-  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small></div>'+
+  meal.items.map(row=>'<div class="fq-food-product"><div><strong>'+esc(row.name)+'</strong><small>'+esc(row.grams)+' г · '+nutritionLabel(row)+'</small>'+
+  (state?.food_catalog_available&&!row.nutrition_source?
+   '<button type="button" class="button-subtle fq-food-source-select" data-cmd="food-catalog-for-item" data-id="'+esc(row.id)+'">Найти подтверждённое КБЖУ</button>':'')+'</div>'+
   '<button type="button" class="button-subtle fq-food-pencil" data-cmd="food-edit" data-id="'+row.id+'" aria-label="Редактировать '+esc(row.name)+'">✎</button></div>').join('')+'</section>').join('');
  const rawNotes=(foodHistory?.unparsed_texts||[]).filter(x=>x.text).map(x=>{
   const pending=Array.isArray(x.unresolved_fragments)?x.unresolved_fragments:[];
@@ -1798,6 +1817,14 @@ app.addEventListener('click',async e=>{
   if(!state?.food_catalog_available||foodDailyBusy)return;
   await requestFoodDaily();
   return;
+ }
+ if(cmd==='food-catalog-for-item'){
+  if(!state?.food_catalog_available)return;
+  const id=Number(element.dataset.id);
+  const item=(foodHistory?.meals||[]).flatMap(m=>m.items||[]).find(i=>i.id===id);
+  if(!item||item.nutrition_source)return;
+  foodEdit={...item};
+  catalogCandidates=[];catalogMessage='';catalogQuery=item.name;modal='food-catalog';draw();return;
  }
  if(cmd==='food-catalog-open'){
   if(!foodEdit||!state?.food_catalog_available)return;
