@@ -208,9 +208,11 @@ function createClient(auth=true,shared={}){
     response={ok:true,date:p.date,meals:shared.foodMeals,unparsed:[],
       notice:'Запись сохранена.'};
    }else if(p.action==='food_auto_enrich'){
-    for(const meal of shared.foodMeals||[])for(const item of meal.items)
+    const status=shared.foodAutoStatus||'linked';
+    if(status==='linked')for(const meal of shared.foodMeals||[])for(const item of meal.items)
       item.nutrition_source='fatsecret';
-    response={ok:true,date:p.date,catalog_matches:2};
+    response={ok:true,date:p.date,catalog_matches:status==='linked'?2:0,
+      catalog_status:status};
    }
    else if(p.action==='food_add'){
     shared.foodMeals=[...(shared.foodMeals||[]),{id:83,type:p.meal_type,items:p.items.map((v,i)=>({id:100+i,...v}))}];
@@ -634,6 +636,24 @@ async function run(){
  assert.ok(quick.requests.some(x=>x.action==='food_nutrition_day'),
   'Daily macro check runs after verified catalogue enrichment');
 
+ const missingSource=createClient(true,{foodCatalogAvailable:false,foodAutoStatus:'not_configured'});
+ await settle();await missingSource.click({nav:'food'});await settle();
+ missingSource.input('food-text','рис сухой 80 г и курица 150 г');
+ await missingSource.click({cmd:'food-save-text'});await settle();
+ assert.match(missingSource.root.innerHTML,/справочник КБЖУ пока не подключён/i,
+  'Saved weighed foods show a clear status, not mandatory manual KБЖУ');
+ assert.ok(missingSource.requests.some(x=>x.action==='food_add_text'));
+ const unmatched=createClient(true,{foodCatalogAvailable:true,foodAutoStatus:'no_verified_match'});
+ await settle();await unmatched.click({nav:'food'});await settle();
+ unmatched.input('food-text','рис сухой 80 г и курица 150 г');
+ await unmatched.click({cmd:'food-save-text'});await settle();
+ assert.match(unmatched.root.innerHTML,/Нет однозначного совпадения/,
+  'Exact name mismatch cannot silently imply zero nutrients');
+ assert.match(unmatched.root.innerHTML,/Найти подтверждённое КБЖУ/,
+  'Unlinked products can be matched to an official serving without manual entry');
+ await unmatched.click({cmd:'food-catalog-for-item',id:'301'});
+ assert.match(unmatched.root.innerHTML,/Найти продукт в FatSecret/,
+  'Direct source lookup opens the existing verified-serving selection');
  const catalogClient=createClient(true,{foodCatalogAvailable:true,
   foodMeals:[{id:81,type:'breakfast',items:[{id:202,name:'овсянка сухая',grams:70}]}]});
  await settle();await catalogClient.click({nav:'food'});await settle();

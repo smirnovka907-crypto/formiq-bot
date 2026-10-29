@@ -4416,16 +4416,29 @@ def food_auto_match_candidates(name, options):
     return (fid,sid) if isinstance(fid,str) and fid.isdecimal() and isinstance(sid,str) and sid.isdecimal() else None
 
 
-def food_auto_link_recent(chat, item_ids):
-    """Optional provider reads happen after durable save; failures never roll back food."""
-    if not (FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET) or not item_ids:
+def food_auto_link_recent(chat, item_ids, diagnostics=None):
+    """Owner-scoped lookup; report a safe reason without logging credentials or food text.
+
+    Never treat an exact name as nutrition evidence without a valid serving,
+    and never let a third-party outage roll back the original diary.
+    """
+    def status(value):
+        if diagnostics is not None:
+            diagnostics['status']=value
+    if not item_ids:
+        status('no_items')
+        return 0
+    if not (FATSECRET_CLIENT_ID and FATSECRET_CLIENT_SECRET):
+        status('not_configured')
         return 0
     try:
         client=FatSecretCatalogClient(FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET)
         token=client.get_token()
     except Exception:
+        status('source_unavailable')
         return 0
     updated=0
+    failed_lookups=0
     # Each lookup can outlive a user's edits. Tie the provider result to
     # the exact pre-lookup row version, not merely to its immutable item ID.
     for item_id,name,observed_at in item_ids[:6]:
@@ -4452,7 +4465,9 @@ def food_auto_link_recent(chat, item_ids):
                     RETURNING id""",(*match,item_id,chat,name,observed_at)).fetchone()
             updated+=bool(changed)
         except Exception:
+            failed_lookups+=1
             continue
+    status('linked' if updated else 'source_unavailable' if failed_lookups else 'no_verified_match')
     return updated
 
 
@@ -4520,8 +4535,10 @@ def food_auto_enrich(chat, body):
                 AND i.manual_fat_g_100g IS NULL
                 AND i.manual_carbs_g_100g IS NULL
             ORDER BY i.id DESC LIMIT 6""",(chat,day)).fetchall()
-    linked=food_auto_link_recent(chat,rows)
-    return {'date':day.isoformat(),'catalog_matches':linked,'ai_recognized':recognized}
+    catalogue={}
+    linked=food_auto_link_recent(chat,rows,catalogue)
+    return {'date':day.isoformat(),'catalog_matches':linked,'ai_recognized':recognized,
+        'catalog_status':catalogue.get('status','no_verified_match')}
 
 
 def food_change(chat,body,delete=False):
