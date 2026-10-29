@@ -1327,7 +1327,7 @@ function modalHTML(){
  if(modal==='detail')content=actualWorkoutPanel(detail)+button(detailOrigin==='history'?'К истории':'Закрыть',detailOrigin==='history'?'detail-back':'close',true);
  const historyExercisePhoto=modal==='exercise-card'&&
   (exerciseOrigin==='history'||exerciseOrigin==='finished-preview');
- return `<div class="fq-live-overlay"><div class="fq-live-dialog ${modal==='history'?'history-modal':modal==='exercise-card'?'fq-exercise-detail'+(historyExercisePhoto?' fq-history-exercise-card':''):''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
+ return `<div class="fq-live-overlay${historyExercisePhoto?' fq-history-exercise-overlay':''}"><div class="fq-live-dialog ${modal==='history'?'history-modal':modal==='exercise-card'?'fq-exercise-detail'+(historyExercisePhoto?' fq-history-exercise-card':''):''}" role="dialog" aria-modal="true" aria-label="${modal==='history'?'История тренировок':'Окно FORMIQ'}">${content}</div></div>`;
 }
 function draw(){
  document.body?.classList?.toggle('theme-female',((onboardOpen||view==='profile')&&onboard?onboard.sex:state?.metrics?.sex)==='female');
