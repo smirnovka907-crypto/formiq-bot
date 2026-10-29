@@ -412,6 +412,16 @@ async function run(){
  assert.ok(app.requests.some(x=>x.action==='record'&&x.reps===12&&x.weight===60&&x.expected_workout===9&&x.expected_position===0&&x.expected_set===1));
  assert.match(app.root.innerHTML,/rest-count/);
  assert.equal((app.root.innerHTML.match(/class="nav-item /g)||[]).length,3,'Rest screen keeps approved nav');
+ assert.match(app.root.innerHTML,/data-cmd="exercise-live"/,
+   'Technique is available during server-backed rest');
+ const initialRecords=app.requests.filter(x=>x.action==='record').length;
+ await app.click({cmd:'exercise-live'});
+ assert.match(app.root.innerHTML,/fq-exercise-detail/);
+ assert.match(app.root.innerHTML,/Настрой сиденье/);
+ await app.click({cmd:'exercise-back'});
+ assert.match(app.root.innerHTML,/rest-count/,'Closing technique does not stop rest');
+ assert.equal(app.requests.filter(x=>x.action==='record').length,initialRecords,
+   'Technique open and return never submit another approach');
  assert.ok(shared.storage.has('formiq_v5_rest_countdown'),'rest countdown stored temporarily');
  const resumed=createClient(true,shared);
  await settle();

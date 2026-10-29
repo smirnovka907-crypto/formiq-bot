@@ -41,7 +41,7 @@ async function run(){
   if(req.method==='GET'&&(req.url==='/'||req.url==='/mini/v5-live')){
    res.setHeader('Content-Type','text/html; charset=utf-8');res.end(APP_HTML);return;
   }
-  if(req.method==='GET'&&req.url==='/mini/v5-live.js'){
+  if(req.method==='GET'&&(req.url==='/mini/v5-live.js'||req.url.startsWith('/mini/v5-live.js?v='))){
    res.setHeader('Content-Type','text/javascript; charset=utf-8');res.end(APP_JS);return;
   }
   if(req.method==='POST'&&req.url==='/mini/api'){
@@ -98,7 +98,13 @@ async function run(){
    }else if(data.action==='start'){
     assert.equal(data.mood,'normal');
     profileState.workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',
-     exercises:[{position:0,name:'Жим ногами',done:0,skipped:0,total:2}],current:{name:'Жим ногами',position:0,set_no:1,set_count:2,low:10,high:12,unit:'reps',rest_seconds:90}};
+     exercises:[{position:0,name:'Жим ногами',done:0,skipped:0,total:2}],current:{name:'Жим ногами',key:'leg_press',position:0,set_no:1,set_count:2,
+       low:10,high:12,unit:'reps',rest_seconds:90,tip:'Двигай плавно',
+       muscles:'Ноги',start_position:'Сядь в тренажёр',steps:['Настрой сиденье','Двигай платформу плавно'],
+       mistakes:'Не блокируй колени',
+       image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
+       image_credit:'Everkinetic · Free Exercise DB',
+       image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/'}};
     response={ok:true,patch:{workout:profileState.workout}};
    }else if(data.action==='record'){
     assert.equal(data.expected_workout,9);assert.equal(data.expected_set,1);
@@ -459,6 +465,13 @@ async function run(){
    await matchedShot('questionnaire-weekdays',async ref=>ref.locator('[data-act="profile"]').first().click(),
     {referenceAnchor:'.weekdays',liveAnchor:'.fq-weekday-options',note:'Weekday selector aligned to viewport top; real questionnaire requires explicit weekdays'});
    await page.locator('.bottom-nav [data-nav="home"]').click();
+   // The same approved photo is requested from both active and historical cards.
+   // Serve a tall local test image; never rely on external network or production.
+   await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
+    route=>route.fulfill({status:200,contentType:'image/svg+xml',
+     body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200"><rect width="600" height="1200" fill="#ddd"/></svg>'}));
+   assert.ok(APP_HTML.includes('/mini/v5-live.js?v=exercise-cards-20261029'),
+    'Telegram must fetch a revisioned JS URL instead of reusing the previous release');
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
    await page.getByRole('button',{name:'Хорошо',exact:true}).click();
    await page.locator('#reps').waitFor({state:'visible'});
@@ -487,6 +500,32 @@ async function run(){
    await checkLayout('active workout');
    await page.screenshot({path:path.join(OUT,'workout-entry-'+size.width+'.png')});
    await matchedShot('workout-entry',async ref=>{await ref.locator('[data-act="home-start"]').click();await ref.locator('#workout-entry').waitFor();});
+   // A real Telegram WebView reload must not lose the current set or exercise cues.
+   await page.reload({waitUntil:'load'});
+   await page.locator('#reps').waitFor({state:'visible'});
+   assert.equal(posts.filter(p=>p.action==='record').length,0,
+    'Refreshing the active screen must never submit a set');
+   // An active workout card must open on a real small viewport, render vetted
+   // instructions and the entire photo, and preserve unsubmitted working values.
+   await page.setViewportSize({width:360,height:640});
+   await page.locator('#reps').fill('11');await page.locator('#weight').fill('57.5');
+   await page.locator('[data-cmd="exercise-live"]').click();
+   await page.locator('.fq-exercise-detail .fq-exercise-photo img').waitFor();
+   await page.locator('.fq-exercise-detail .fq-exercise-photo img').evaluate(img=>img.decode());
+   assert.ok(await page.getByText('Настрой сиденье').count(),'Live card must show server-provided exercise technique');
+   let cardSize=await page.locator('.fq-exercise-detail').evaluate(el=>{
+    const img=el.querySelector('.fq-exercise-photo img').getBoundingClientRect();
+    const rect=el.getBoundingClientRect();
+    return {photoWidth:img.width,photoHeight:img.height,panelWidth:el.clientWidth,
+      top:rect.top,bottom:rect.bottom,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight};
+   });
+   assert.ok(cardSize.photoWidth<=cardSize.panelWidth+1&&cardSize.photoHeight<=152&&
+     cardSize.top>=0&&cardSize.bottom<=641,'Live exercise photo must fit safe viewport: '+JSON.stringify(cardSize));
+   await page.locator('.fq-exercise-detail .fq-exercise-detail-head [data-cmd="exercise-back"]').click();
+   assert.equal(await page.locator('#reps').inputValue(),'11');
+   assert.equal(await page.locator('#weight').inputValue(),'57.5');
+   assert.equal(posts.filter(p=>p.action==='record').length,0,'Opening technique never records a set');
+   await page.setViewportSize(size);
    // The server-backed workout and unsaved input drafts survive temporary tab navigation.
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.locator('.bottom-nav [data-nav="food"]').click();
@@ -497,6 +536,19 @@ async function run(){
    await page.locator('#reps').fill('12');await page.locator('#weight').fill('60');
    await page.getByRole('button',{name:'Подход выполнен',exact:true}).click();
    await page.locator('#rest-count').waitFor();
+   const beforeRest=await page.locator('#rest-count').textContent();
+   const recordCount=posts.filter(p=>p.action==='record').length;
+   assert.equal(await page.locator('.rest-panel [data-cmd="exercise-live"]').count(),1,
+     'Exercise technique remains accessible while resting');
+   await page.locator('.rest-panel [data-cmd="exercise-live"]').click();
+   await page.locator('.fq-exercise-detail .fq-exercise-photo img').waitFor();
+   assert.ok(await page.getByText('Настрой сиденье').count(),'Rest card retains complete instructions');
+   await page.locator('.fq-exercise-detail .fq-exercise-detail-head [data-cmd="exercise-back"]').click();
+   assert.equal(await page.locator('#rest-count').count(),1,'Rest must resume after closing the card');
+   assert.ok(await page.locator('#rest-count').textContent()<=beforeRest,
+      'Opening the card cannot reset the countdown');
+   assert.equal(posts.filter(p=>p.action==='record').length,recordCount,
+      'Opening/closing technique during rest cannot record another set');
    assert.equal(await page.locator('.bottom-nav .nav-item').count(),3,'Three tabs during rest');
    await checkFooterReachable(['rest-skip','skip-confirm','finish-confirm']);
    await page.evaluate(()=>window.scrollTo(0,0));
@@ -526,9 +578,6 @@ async function run(){
     {note:'Live chart uses actual isolated completed sets; approved example values are illustrative'});
    // A real history -> exercise card flow, on a short Android-like viewport.
    // The portrait photo is a local test fixture; no production workout or remote media.
-   await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
-    route=>route.fulfill({status:200,contentType:'image/svg+xml',
-     body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200"><rect width="600" height="1200" fill="#ddd"/></svg>'}));
    await page.setViewportSize({width:360,height:640});
    await page.locator('[data-cmd="detail"][data-id="9"]').first().click();
    await page.locator('[data-cmd="exercise-history"]').first().click();
@@ -544,18 +593,20 @@ async function run(){
      caption:caption.textContent,scrollable:panel.scrollHeight>panel.clientHeight};
    });
    assert.ok(photoFit.imageWidth<=photoFit.clientWidth+1 &&
-    photoFit.imageHeight<=Math.min(640*.34,220)+2,'Whole portrait photo fits mobile area: '+JSON.stringify(photoFit));
+    photoFit.imageHeight<=Math.min(640*.24,150)+2,'Whole portrait photo fits mobile area: '+JSON.stringify(photoFit));
    assert.ok(photoFit.dialogTop>=0&&photoFit.dialogBottom<=641&&photoFit.dialogWidth<=361,
     'Photo dialog fits safe mobile viewport: '+JSON.stringify(photoFit));
    assert.match(photoFit.caption,/CC BY-SA 4.0/);
    assert.ok(photoFit.scrollable,'Long exercise instructions scroll in short Android viewport');
+   assert.equal(await page.locator('.fq-history-exercise-card .fq-exercise-detail-head [data-cmd="exercise-back"]').count(),1,
+    'History card has a readily accessible close control before its long instructions');
    await page.locator('.fq-history-exercise-card').evaluate(el=>{el.scrollTop=el.scrollHeight});
-   const back=await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').boundingBox();
+   const back=await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').last().boundingBox();
    const dialog=await page.locator('.fq-history-exercise-card').boundingBox();
    assert.ok(back&&dialog&&back.y>=dialog.y-1&&back.y+back.height<=dialog.y+dialog.height+1&&back.height>=44,
     'Back button is reachable by scrolling: '+JSON.stringify({back,dialog}));
    await page.screenshot({path:path.join(OUT,'history-exercise-photo-360x640.png')});
-   await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').click();
+   await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').last().click();
    await page.locator('.fq-live-dialog [data-cmd="close"]').last().click();
    await page.setViewportSize(size);
    const monthReply=page.waitForResponse(resp=>{
