@@ -640,7 +640,7 @@ async function run(){
  await settle();await missingSource.click({nav:'food'});await settle();
  missingSource.input('food-text','рис сухой 80 г и курица 150 г');
  await missingSource.click({cmd:'food-save-text'});await settle();
- assert.match(missingSource.root.innerHTML,/Справочник КБЖУ пока не подключён/,
+ assert.match(missingSource.root.innerHTML,/справочник КБЖУ пока не подключён/i,
   'Saved weighed foods show a clear status, not mandatory manual KБЖУ');
  assert.ok(missingSource.requests.some(x=>x.action==='food_add_text'));
  const unmatched=createClient(true,{foodCatalogAvailable:true,foodAutoStatus:'no_verified_match'});
