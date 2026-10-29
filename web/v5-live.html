@@ -545,8 +545,11 @@ body.theme-female .history-cal-inline .history-cal-grid button.is-today{border-c
 /* Four-week plan and compact exercise preview share Aluminium tokens. */
 .fq-plan-preview{display:flex;width:100%;align-items:center;justify-content:space-between;text-align:left;cursor:pointer;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink);padding:12px 8px;border-radius:12px;font:inherit;gap:9px}
 .fq-plan-preview:focus-visible,.fq-preview-exercise:focus-visible{outline:3px solid var(--pistachio);outline-offset:2px}
-.fq-preview-exercise{width:100%;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.65);color:var(--ink);padding:12px;display:flex;align-items:center;gap:12px;text-align:left;margin:8px 0;font:inherit}
-.fq-preview-exercise span:nth-child(2){flex:1;min-width:0}
+.fq-preview-exercise{width:100%;max-width:100%;min-width:0;box-sizing:border-box;border:1px solid var(--line);border-radius:15px;background:rgba(255,255,255,.65);color:var(--ink);padding:12px;display:flex;align-items:center;gap:12px;text-align:left;margin:8px 0;font:inherit}
+/* List thumbnail is distinct from the full-size photo in the exercise detail sheet. */
+.fq-preview-exercise .fq-exercise-thumb{display:block;box-sizing:border-box;width:60px;height:60px;max-width:60px;max-height:60px;flex:0 0 60px;flex-shrink:0;object-fit:contain;border-radius:12px;background:var(--ivory)}
+.fq-preview-exercise span:nth-child(2){flex:1 1 0;min-width:0;overflow-wrap:anywhere}
+.fq-preview-exercise > span:last-child{flex-shrink:0}
 .fq-preview-exercise strong,.fq-preview-exercise small{display:block}
 .fq-preview-exercise strong{font-size:15px}
 .fq-preview-exercise small{font-size:12px;color:var(--secondary);margin-top:4px;line-height:1.45}
