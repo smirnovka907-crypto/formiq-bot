@@ -171,6 +171,33 @@ class SchedulePostgresTests(unittest.TestCase):
             'per_serving':{'kcal':800,'protein_g':3,'fat_g':1,'carbs_g':20}}]}
         self.assertIsNone(match('Овсянка сухая',[impossible]))
 
+    def test_food_auto_source_diagnostics_are_bounded_and_secret_free(self):
+        """Tell the user why verified macros are absent, not raw API details."""
+        from unittest.mock import Mock
+        item=(1,'курица',None)
+        info={}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID',''):
+            self.assertEqual(self.m.food_auto_link_recent(self.chat,[item],info),0)
+        self.assertEqual(info,{'status':'not_configured'})
+        info={}
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','configured'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','configured'), \
+             patch.object(self.m,'FatSecretCatalogClient') as client:
+            client.return_value.get_token.side_effect=RuntimeError('secret upstream detail')
+            self.assertEqual(self.m.food_auto_link_recent(self.chat,[item],info),0)
+        self.assertEqual(info,{'status':'source_unavailable'})
+        self.assertNotIn('secret',str(info))
+        info={}
+        fake=Mock()
+        fake.get_token.return_value='offline-token'
+        fake.search.return_value=[]
+        with patch.object(self.m,'FATSECRET_CLIENT_ID','configured'), \
+             patch.object(self.m,'FATSECRET_CLIENT_SECRET','configured'), \
+             patch.object(self.m,'FatSecretCatalogClient',return_value=fake):
+            self.assertEqual(self.m.food_auto_link_recent(self.chat,[item],info),0)
+        self.assertEqual(info,{'status':'no_verified_match'})
+        fake.food_by_id.assert_not_called()
+
     def test_tz5_ai_food_requires_permission_and_never_invents_grams(self):
         self.m.save_onboarding(self.chat,self.body())
         self.assertIsNone(self.m.food_parse_ai(self.chat,'овсянка 80 г'))
