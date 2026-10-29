@@ -1,3 +1,17 @@
+## FORMIQ | Android history exercise list thumbnail — Draft (29.10.2026)
+
+**Source:** main/Render Live `a7548cc89b97818209ec59fc9838a984c79a55da`, Render deploy `dep-dbh9cui9lscs739f5f5g` live, main Google instruction 2.30 (updated after owner-mentioned 2.29). Actual Telegram Android after PR #42: history scroll and close PASS, list image scale FAIL. Existing PR #39/#43 and other Draft PRs are untouched.
+
+**Root cause:** `exerciseThumb()` emits `img.fq-exercise-thumb` for `actualWorkoutPanel()`, without sizing rule in `web/v5-live.html`. The previous `.fq-exercise-photo` constraints apply only to the detail sheet.
+
+**Change:** CSS only for list rows: thumbnail 60×60px with `object-fit:contain` and `flex-shrink:0`, bounded flex row and wrapping text `min-width:0; overflow-wrap:anywhere`. No server code, training-state logic, approved theme, tabs, database, data or migration changes.
+
+**Regression:** Existing Playwright mobile Chromium 360 and 393px scenarios now open a recorded history workout with three exercise rows: distinct `leg_press`/`barbell_squat` images, repeated `leg_press` key/photo as another approach; verify index/name/alt/URL/opened technique card, 60px image geometry, readable text, no horizontal overflow, native touch scroll and close, and no additional `record` calls. Existing active set, working weight, rest timer and three-tab scenarios remain in the same suite. Check exact-HEAD CI separately; real Telegram Android **NOT VERIFIED**.
+
+**Gate:** Draft / NO MERGE / NO DEPLOY. Fresh backup exception granted for PR #42 cannot be reused; release requires a separate owner authorization after CI, backup readiness review and Android acceptance. Other open PRs remain NO-GO.
+
+---
+
 ## FORMIQ | Android карточки упражнения после PR #40 — Draft (29.10.2026)
 
 **Инструкция:** редакция 2.21. Реальная Android-приёмка PR #40 = FAIL: (1) во время подхода недоступны инструкция/фото упражнения; (2) фото из истории слишком велико. Подтверждённый main/Render Live до новой работы: `6740d4e298d64dc190c1fc1a20a22cf679b47c45`. PR #39 отдельно OPEN/DRAFT/NO-GO, не трогать.

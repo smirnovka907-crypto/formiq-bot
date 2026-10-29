@@ -94,7 +94,15 @@ async function run(){
        image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
        image_credit:'Everkinetic · Free Exercise DB',
        image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/',
-       steps:Array.from({length:12},(_,i)=>'Шаг техники '+(i+1)+': контролируй амплитуду движения')} ]}};
+       steps:Array.from({length:12},(_,i)=>'Шаг техники '+(i+1)+': контролируй амплитуду движения')},
+      {name:'Приседания со штангой с очень длинным названием для мобильного экрана',key:'barbell_squat',result:'10 повт. · 40 кг',
+       image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Squat/0.jpg',
+       image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/',
+       steps:['Поставь стопы устойчиво','Сохраняй нейтральное положение спины']},
+      {name:'Жим ногами · второй подтверждённый подход',key:'leg_press',result:'10 повт. · 60 кг',
+       image_url:'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
+       image_credit:'Everkinetic · Free Exercise DB',image_license_url:'https://creativecommons.org/licenses/by-sa/4.0/',
+       steps:['Повтори подход с контролем техники']} ]}};
    }else if(data.action==='start'){
     assert.equal(data.mood,'normal');
     profileState.workout={id:9,done:0,total:2,finished:false,title:'Ноги и пресс',
@@ -470,6 +478,9 @@ async function run(){
    await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Leg_Press/0.jpg',
     route=>route.fulfill({status:200,contentType:'image/svg+xml',
      body:'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="1200"><rect width="600" height="1200" fill="#ddd"/></svg>'}));
+   await page.route('https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/Barbell_Squat/0.jpg',
+    route=>route.fulfill({status:200,contentType:'image/svg+xml',
+     body:'<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="#ccc"/></svg>'}));
    assert.ok(APP_HTML.includes('/mini/v5-live.js?v=exercise-cards-20261029'),
     'Telegram must fetch a revisioned JS URL instead of reusing the previous release');
    await page.getByRole('button',{name:'Начать тренировку',exact:true}).click();
@@ -578,9 +589,59 @@ async function run(){
     {note:'Live chart uses actual isolated completed sets; approved example values are illustrative'});
    // A real history -> exercise card flow, on a short Android-like viewport.
    // The portrait photo is a local test fixture; no production workout or remote media.
-   await page.setViewportSize({width:360,height:640});
+   await page.setViewportSize({width:size.width,height:640});
    await page.locator('[data-cmd="detail"][data-id="9"]').first().click();
-   await page.locator('[data-cmd="exercise-history"]').first().click();
+   const thumbs=page.locator('.fq-preview-exercise[data-cmd="exercise-history"]');
+   await thumbs.first().waitFor();
+   assert.equal(await thumbs.count(),3,'Three recorded exercise rows are not three workouts');
+   const expectedThumbs=[
+    {name:'Жим ногами',image:'Leg_Press/0.jpg'},
+    {name:'Приседания со штангой',image:'Barbell_Squat/0.jpg'},
+    {name:'Жим ногами',image:'Leg_Press/0.jpg'}
+   ];
+   const metrics=await thumbs.evaluateAll(rows=>rows.map(row=>{
+    const img=row.querySelector('.fq-exercise-thumb'),label=row.querySelector('span:nth-child(2)'),
+     sheet=row.closest('.fq-live-dialog'),rowBox=row.getBoundingClientRect(),
+     imageBox=img.getBoundingClientRect(),textBox=label.getBoundingClientRect(),css=getComputedStyle(img);
+    return {index:Number(row.dataset.index),name:row.querySelector('strong').textContent,
+     alt:img.alt,url:img.getAttribute('src'),width:imageBox.width,height:imageBox.height,
+     shrink:css.flexShrink,fit:css.objectFit,textWidth:textBox.width,
+     right:rowBox.right,dialogWidth:sheet.clientWidth,dialogScroll:sheet.scrollWidth,
+     documentScroll:document.documentElement.scrollWidth,viewport:innerWidth};
+   }));
+   for(let i=0;i<metrics.length;i++){
+    const got=metrics[i],want=expectedThumbs[i];
+    assert.equal(got.index,i+1,'List index preserves original exercise item');
+    assert.ok(got.name.startsWith(want.name),'Exercise name matches its thumbnail');
+    assert.equal(got.alt,'Фото упражнения: '+got.name);
+    assert.ok(got.url.endsWith('/'+want.image),'Image path matches exercise key: '+JSON.stringify(got));
+    assert.ok(got.width>0&&got.width<=61&&got.height>0&&got.height<=61,
+     'Bounded history thumbnails: '+JSON.stringify(got));
+    assert.equal(got.shrink,'0','Image flex-shrink disabled');
+    assert.equal(got.fit,'contain','Image must fit without crop');
+    assert.ok(got.textWidth>=90,'Exercise name retains readable width: '+JSON.stringify(got));
+    assert.ok(got.right<=size.width+1&&got.dialogScroll<=got.dialogWidth+1&&
+     got.documentScroll<=size.width+1,
+     'History must not overflow horizontally: '+JSON.stringify(got));
+   }
+   assert.equal(metrics[0].url,metrics[2].url,'Same exercise key can use the same photo for another set');
+   assert.notEqual(metrics[0].url,metrics[1].url,'Different exercise uses a different photo');
+   const recordedBefore=posts.filter(p=>p.action==='record').length;
+   for(let i=0;i<expectedThumbs.length;i++){
+    await thumbs.nth(i).click();
+    const detail=page.locator('.fq-history-exercise-card');
+    await detail.waitFor();
+    assert.ok((await detail.locator('h2').first().textContent()).startsWith(expectedThumbs[i].name),
+     'Exercise detail name matches selected row');
+    assert.ok((await detail.locator('.fq-exercise-photo img').getAttribute('src')).endsWith('/'+expectedThumbs[i].image),
+     'Exercise detail photo matches selected row');
+    await detail.locator('[data-cmd="exercise-back"]').first().click();
+    await thumbs.first().waitFor();
+   }
+   assert.equal(posts.filter(p=>p.action==='record').length,recordedBefore,
+    'Opening history cards never adds sets');
+   await page.screenshot({path:path.join(OUT,'history-exercise-thumbs-'+size.width+'x640.png')});
+   await thumbs.first().click();
    const historyPhoto=page.locator('.fq-history-exercise-card .fq-exercise-photo img');
    await historyPhoto.waitFor();
    await historyPhoto.evaluate(img=>img.decode());
@@ -594,7 +655,7 @@ async function run(){
    });
    assert.ok(photoFit.imageWidth<=photoFit.clientWidth+1 &&
     photoFit.imageHeight<=Math.min(640*.24,150)+2,'Whole portrait photo fits mobile area: '+JSON.stringify(photoFit));
-   assert.ok(photoFit.dialogTop>=0&&photoFit.dialogBottom<=641&&photoFit.dialogWidth<=361,
+   assert.ok(photoFit.dialogTop>=0&&photoFit.dialogBottom<=641&&photoFit.dialogWidth<=size.width+1,
     'Photo dialog fits safe mobile viewport: '+JSON.stringify(photoFit));
    assert.match(photoFit.caption,/CC BY-SA 4.0/);
    assert.ok(photoFit.scrollable,'Long exercise instructions scroll in short Android viewport');
@@ -623,7 +684,7 @@ async function run(){
     'History image and header must fit Telegram content safe area: '+JSON.stringify(historyGeometry));
    assert.ok(historyGeometry.availableScroll>80,'Long history instructions need a real scroll range');
    const startY=Math.min(historyGeometry.panelBottom-45,historyGeometry.photoBottom+65);
-   const fingerX=180;
+   const fingerX=Math.floor(size.width/2);
    const cdptouch=await context.newCDPSession(page);
    await cdptouch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:fingerX,y:startY}]});
    for(let step=1;step<=9;step++){
@@ -650,7 +711,7 @@ async function run(){
    const dialog=await page.locator('.fq-history-exercise-card').boundingBox();
    assert.ok(back&&dialog&&back.y>=dialog.y-1&&back.y+back.height<=dialog.y+dialog.height+1&&back.height>=44,
     'Back button is reachable by scrolling: '+JSON.stringify({back,dialog}));
-   await page.screenshot({path:path.join(OUT,'history-exercise-photo-360x640.png')});
+   await page.screenshot({path:path.join(OUT,'history-exercise-photo-'+size.width+'x640.png')});
    await page.locator('.fq-history-exercise-card [data-cmd="exercise-back"]').last().click();
    await page.locator('.fq-live-dialog [data-cmd="close"]').last().click();
    await page.setViewportSize(size);
